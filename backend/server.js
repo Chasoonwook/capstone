@@ -27,6 +27,9 @@ app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 app.get('/test-users', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM users ORDER BY created_at DESC');
+    if (result.rows.length === 0) {
+      return res.send('<h1>No users found</h1>');
+    }
     let html = '<h1>Users Table</h1><ul>';
     result.rows.forEach(user => {
       html += `<li>${user.user_id} - ${user.name} (${user.email})</li>`;
@@ -34,6 +37,7 @@ app.get('/test-users', async (req, res) => {
     html += '</ul>';
     res.send(html);
   } catch (err) {
-    res.status(500).send('Error: ' + err.message);
+    console.error('Error details:', err); // Render 로그 확인용
+    res.status(500).send('Error: ' + (err.message || JSON.stringify(err)));
   }
 });
