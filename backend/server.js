@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const pool = require('./db');
 require('dotenv').config();
 
 const app = express();
@@ -26,7 +27,6 @@ app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 app.get('/test-users', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM users ORDER BY created_at DESC');
-    // 간단한 HTML로 출력
     let html = '<h1>Users Table</h1><ul>';
     result.rows.forEach(user => {
       html += `<li>${user.user_id} - ${user.name} (${user.email})</li>`;
@@ -34,6 +34,6 @@ app.get('/test-users', async (req, res) => {
     html += '</ul>';
     res.send(html);
   } catch (err) {
-    res.status(500).send(err.message);
+    res.status(500).send('Error: ' + err.message);
   }
 });
