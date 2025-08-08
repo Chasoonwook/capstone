@@ -1,0 +1,9 @@
+torch
+torchvision
+Pillow
+deepface
+opencv-python
+tensorflow
+numpy
+Flask
+flask-cors
