@@ -42,6 +42,17 @@ app.get('/users', async (req, res) => {
   }
 });
 
+// 4. 음악 리스트 조회 (JSON 반환)
+app.get('/musics', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM music ORDER BY music_id ASC');
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching music list:', err);
+    res.status(500).json({ error: 'Error fetching music list' });
+  }
+});
+
 // 라우트 연결
 const userRoutes = require('./routes/users');
 const photoRoutes = require('./routes/photos');
