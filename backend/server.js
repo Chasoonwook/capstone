@@ -9,7 +9,7 @@ app.use(express.json({ limit: '20mb' })); // 여유
 
 // 1. 루트
 app.get('/', (req, res) => {
-  res.send('Backend API Server is running');
+  res.send('정상작동');
 });
 
 // 2. 헬스체크

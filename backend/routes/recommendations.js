@@ -13,15 +13,22 @@ router.get('/by-photo/:photoId', async (req, res) => {
   try {
     const { photoId } = req.params;
 
+    // 1. 분석된 분위기 정보 조회
     const { rows: aRows } = await pool.query(
       'SELECT main_mood, sub_mood FROM photo_analysis WHERE photo_id=$1',
       [photoId]
     );
+
     if (aRows.length === 0) {
       return res.status(404).json({ error: 'No analysis found for this photo_id' });
     }
 
-    const { main_mood, sub_mood } = aRows[0];
+    // 2. 분위기 값에서 ' 분위기' 문자열 제거
+    let { main_mood, sub_mood } = aRows[0];
+    main_mood = main_mood?.replace(' 분위기', '');
+    sub_mood = sub_mood?.replace(' 분위기', '');
+
+    // 분위기 매핑이 모두 비어있는 경우 예외 처리
     if (!main_mood && !sub_mood) {
       return res.status(409).json({ error: 'Mood mapping is missing for this photo' });
     }
@@ -33,6 +40,7 @@ router.get('/by-photo/:photoId', async (req, res) => {
       sub_songs: []
     };
 
+    // 3. 메인 분위기에 해당하는 노래 최대 7곡 조회
     if (main_mood) {
       const { rows: mainSongs } = await pool.query(
         `SELECT music_id, title, artist, label, genre, created_at
@@ -45,6 +53,7 @@ router.get('/by-photo/:photoId', async (req, res) => {
       result.main_songs = mainSongs;
     }
 
+    // 4. 서브 분위기에 해당하는 노래 최대 3곡 조회
     if (sub_mood) {
       const { rows: subSongs } = await pool.query(
         `SELECT music_id, title, artist, label, genre, created_at

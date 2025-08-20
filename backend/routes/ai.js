@@ -7,7 +7,10 @@ const router = express.Router();
  * AI가 분석 결과를 업로드
  * body: { photo_id, time: "night", background: "natural", emotion: "angry" }
  * → mood_mapping 으로 main_mood/sub_mood 자동 매핑
+ * 
+ * AI 에서 POST 요청으로 /api/ai/results 로 보낼 수 있도록
  */
+
 router.post('/results', async (req, res) => {
   try {
     const { photo_id, time, background, emotion } = req.body || {};
