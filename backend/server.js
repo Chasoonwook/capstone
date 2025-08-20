@@ -5,14 +5,14 @@ const pool = require('./db'); // PostgreSQL 연결
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '20mb' })); // 여유
 
-// 1. 루트 페이지 - 서버 상태 메시지
+// 1. 루트
 app.get('/', (req, res) => {
   res.send('Backend API Server is running');
 });
 
-// 2. 헬스체크 (서버 + DB 연결 확인)
+// 2. 헬스체크
 app.get('/health', async (req, res) => {
   try {
     await pool.query('SELECT 1');
@@ -23,46 +23,22 @@ app.get('/health', async (req, res) => {
   }
 });
 
-// 3. 유저 테이블 데이터 확인 (간단 HTML로 출력)
-app.get('/users', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM users ORDER BY created_at DESC');
-    if (result.rows.length === 0) {
-      return res.send('<h1>No users found</h1>');
-    }
-    let html = '<h1>Users Table</h1><ul>';
-    result.rows.forEach(user => {
-      html += `<li>${user.user_id} - ${user.name} (${user.email})</li>`;
-    });
-    html += '</ul>';
-    res.send(html);
-  } catch (err) {
-    console.error('Error fetching users:', err);
-    res.status(500).send('Error fetching users');
-  }
-});
+// 3. users 미리 있던 엔드포인트(생략)
 
-// 4. 음악 리스트 조회 (JSON 반환)
-app.get('/musics', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM music ORDER BY music_id ASC');
-    res.json(result.rows);
-  } catch (err) {
-    console.error('Error fetching music list:', err);
-    res.status(500).json({ error: 'Error fetching music list' });
-  }
-});
+// 4. musics 미리 있던 엔드포인트(생략)
 
-// 라우트 연결
+// 라우트 연결 (기존 + 추가)
 const userRoutes = require('./routes/users');
 const photoRoutes = require('./routes/photos');
 const musicRoutes = require('./routes/musics');
 const recommendationRoutes = require('./routes/recommendations');
+const aiRoutes = require('./routes/ai'); // 추가
 
 app.use('/api/users', userRoutes);
-app.use('/api/photos', photoRoutes);
+app.use('/api/photos', photoRoutes);              // 업로드/바이너리/대기목록
 app.use('/api/musics', musicRoutes);
 app.use('/api/recommendations', recommendationRoutes);
+app.use('/api/ai', aiRoutes);                     // AI 결과 수신
 
 // 서버 실행
 const PORT = process.env.PORT || 5000;
