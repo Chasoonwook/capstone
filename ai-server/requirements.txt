@@ -14,3 +14,4 @@ torchvision
 tensorflow==2.20.0
 deepface
 tf-keras==2.20.0
+gdown
