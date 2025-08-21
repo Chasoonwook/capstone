@@ -11,6 +11,6 @@ opencv-python-headless     # ← 서버에서는 headless 권장
 numpy
 torch
 torchvision
-tensorflow-cpu==2.15.0.post1
+tensorflow==2.20.0
 deepface
-keras==2.15.0
+tf-keras==2.20.0
