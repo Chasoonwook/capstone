@@ -1,9 +1,15 @@
+# --- 서버 러untime ---
+fastapi
+uvicorn
+gunicorn
+httpx
+python-multipart
+
+# --- CV/딥러닝 ---
+Pillow
+opencv-python-headless     # ← 서버에서는 headless 권장
+numpy
 torch
 torchvision
-Pillow
-deepface
-opencv-python
 tensorflow
-numpy
-Flask
-flask-cors
+deepface
