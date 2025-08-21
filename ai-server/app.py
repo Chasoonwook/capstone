@@ -1,19 +1,13 @@
-# backend/app.py
+# app.py
 import os, uuid, shutil
 from io import BytesIO
+from pathlib import Path
 from PIL import Image
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from starlette.middleware.cors import CORSMiddleware
 import httpx
-
-# === 너희 서비스 로직 ===
-from services.rulebase_service import analyze_photo
-from services.emotion_service import predict_emotion_combined  # CNN + DeepFace
-from services.yolo_service import analyze_yolo
-from services.recommend_service import recommend_music
-from utils.preprocess import preprocess_image
 
 APP_NAME = "ai-photo"
 MAX_IMAGE_MB = int(os.getenv("MAX_IMAGE_MB", "15"))
@@ -32,12 +26,67 @@ if allowed_origin:
         allow_headers=["*"],
     )
 
+# =========================
+# 모델 파일 확보 + 지연 로드
+# =========================
+MODEL_DIR = Path("models/emotion")
+MODEL_PATH = MODEL_DIR / "emotion_cnn.h5"   # 너희 서비스가 읽는 경로
+
+def ensure_models():
+    """
+    서버에 모델 파일이 없으면 내려받아 채워 넣는다.
+    EMOTION_MODEL_URL 또는 EMOTION_MODEL_GDRIVE_ID 중 하나가 필요.
+    """
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    if MODEL_PATH.exists():
+        return
+
+    url = os.getenv("EMOTION_MODEL_URL")
+    gdrive_id = os.getenv("EMOTION_MODEL_GDRIVE_ID")
+    if not url and not gdrive_id:
+        raise RuntimeError(
+            "Missing model file and no EMOTION_MODEL_URL/EMOTION_MODEL_GDRIVE_ID set."
+        )
+
+    try:
+        if gdrive_id:
+            # Google Drive 다운로드 (gdown 필요)
+            import gdown
+            gdown.download(id=gdrive_id, output=str(MODEL_PATH), quiet=False)
+        else:
+            # 일반 HTTP(S) URL 다운로드
+            with httpx.stream("GET", url, follow_redirects=True, timeout=600) as r:
+                r.raise_for_status()
+                with open(MODEL_PATH, "wb") as f:
+                    for chunk in r.iter_bytes():
+                        f.write(chunk)
+
+        # 최소 크기 체크(깨진 파일 방지)
+        if not MODEL_PATH.exists() or MODEL_PATH.stat().st_size < 10 * 1024:
+            raise RuntimeError("Downloaded model looks invalid or too small.")
+    except Exception as e:
+        raise RuntimeError(f"Model download failed: {e}")
+
+def _lazy_imports():
+    """
+    무거운 라이브러리 import와 모델 로드는 엔드포인트 호출 시점에!
+    (헬스체크는 가볍게 통과)
+    """
+    ensure_models()  # h5가 반드시 존재하도록 보장
+
+    # === 너희 서비스 로직 (지연 import) ===
+    global analyze_photo, predict_emotion_combined, analyze_yolo, recommend_music, preprocess_image
+    from services.rulebase_service import analyze_photo
+    from services.emotion_service import predict_emotion_combined  # CNN + DeepFace
+    from services.yolo_service import analyze_yolo
+    from services.recommend_service import recommend_music
+    from utils.preprocess import preprocess_image
+
 # ---------- 공용 유틸 ----------
 def _normalize_emotion(e: str | None) -> str | None:
     if not e:
         return None
     e = e.strip().lower()
-    # DeepFace/CNN 결과들 표준 7클래스로 정규화
     mapping = {
         "angry": "angry", "anger": "angry",
         "disgust": "disgust", "disgusted": "disgust",
@@ -50,7 +99,6 @@ def _normalize_emotion(e: str | None) -> str | None:
     return mapping.get(e, e)
 
 def _background_from(yolo_result: dict, fallback=None):
-    # yolo_service.analyze_yolo()가 category를 주고 있음
     bg = (yolo_result or {}).get("category") or fallback
     return (bg or "unknown").strip().lower()
 
@@ -61,7 +109,7 @@ def _build_response(rule_result, emotion_result, yolo_result, rec):
     deepface_conf = emotion_result["deepface_conf"]
 
     rule_emotion = rule_result["emotion_label"]
-    time_label = rule_result.get("time_label")   # 'day' / 'night' 등
+    time_label = rule_result.get("time_label")
     color_label = rule_result.get("color_label")
     brightness = rule_result.get("brightness")
     avg_rgb = rule_result.get("avg_rgb")
@@ -71,12 +119,12 @@ def _build_response(rule_result, emotion_result, yolo_result, rec):
     normalized_emotion = _normalize_emotion(final_emotion)
 
     return {
-        # 백엔드 매핑용 핵심 3개 ↓↓↓
+        # 백엔드 매핑 핵심 3개
         "time_label": time_label,
-        "background": background,       # 예: cafe/city/gym/park...
-        "emotion": normalized_emotion,  # angry/disgust/fear/happy/neutral/sad/surprise
+        "background": background,
+        "emotion": normalized_emotion,
 
-        # 참고/디버그용 세부 값
+        # 참고값
         "cnn_emotion": cnn_emotion,
         "cnn_confidence": cnn_conf,
         "deepface_emotion": deepface_emotion,
@@ -94,6 +142,8 @@ def _build_response(rule_result, emotion_result, yolo_result, rec):
     }
 
 def _run_pipeline(saved_path: str) -> dict:
+    _lazy_imports()  # ← 무거운 것들 호출 시에만 로드
+
     # 1) 전처리
     preprocessed_path = preprocess_image(saved_path)
 
@@ -108,7 +158,7 @@ def _run_pipeline(saved_path: str) -> dict:
     # 4) YOLO
     yolo_result = analyze_yolo(preprocessed_path)
 
-    # 5) 최종 감정/가중치 -> recommend_service (내부 가중치 계산)
+    # 5) 가중치/최종 감정
     rec = recommend_music(
         cnn_emotion=emotion_result["cnn"],
         cnn_conf=emotion_result["cnn_conf"],
@@ -124,7 +174,7 @@ def _run_pipeline(saved_path: str) -> dict:
 def healthz():
     return {"ok": True, "name": APP_NAME}
 
-# ---------- 업로드 파일로 분석(기존 유지) ----------
+# ---------- 업로드 파일로 분석 ----------
 @app.post("/analyze/")
 async def analyze(file: UploadFile = File(...)):
     tmp_name = f"/tmp/{uuid.uuid4().hex}_{file.filename}"
@@ -141,7 +191,7 @@ async def analyze(file: UploadFile = File(...)):
         except Exception:
             pass
 
-# ---------- image_url로 분석(백엔드 동기 Push용) ----------
+# ---------- image_url로 분석(동기 Push) ----------
 class PredictReq(BaseModel):
     image_url: str
     photo_id: str | None = None
@@ -152,7 +202,7 @@ class PredictReq(BaseModel):
 async def predict(req: PredictReq):
     tmp_name = f"/tmp/{uuid.uuid4().hex}.jpg"
     try:
-        # 서버→서버로 이미지 다운로드 (리다이렉트 허용)
+        # 서버→서버 이미지 다운로드
         async with httpx.AsyncClient(
             timeout=FETCH_TIMEOUT,
             follow_redirects=True,
@@ -166,18 +216,15 @@ async def predict(req: PredictReq):
             if "image" not in ctype:
                 raise HTTPException(415, f"unsupported content-type: {ctype}")
 
-            # 크기 제한
             if len(r.content) > MAX_IMAGE_MB * 1024 * 1024:
                 raise HTTPException(413, f"image too large (> {MAX_IMAGE_MB}MB)")
 
-            # 고장난 이미지 방지
             Image.open(BytesIO(r.content)).verify()
 
             with open(tmp_name, "wb") as f:
                 f.write(r.content)
 
         out = _run_pipeline(tmp_name)
-        # 백엔드가 그대로 쓰기 좋게 핵심 3개 필드 + 참고값 반환
         return {
             "photo_id": req.photo_id,
             "user_id": req.user_id,
