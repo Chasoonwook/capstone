@@ -15,4 +15,5 @@ ENV OMP_NUM_THREADS=1
 ENV OPENBLAS_NUM_THREADS=1
 
 EXPOSE 7860
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860", "--workers", "1", "--limit-concurrency", "1"]
+CMD ["python", "-m", "uvicorn", "app:app","--host", "0.0.0.0", "--port", "7860","--workers", "1","--timeout-keep-alive", "5"]
+
