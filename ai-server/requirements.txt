@@ -1,18 +1,17 @@
-# --- 서버 러untime ---
 fastapi
 uvicorn
-gunicorn
+pydantic==2.*
 httpx
 python-multipart
-
-# --- CV/딥러닝 ---
-Pillow
-opencv-python-headless     # ← 서버에서는 headless 권장
+pillow
+opencv-python-headless
 numpy
-torch
-torchvision
-tensorflow==2.20.0
-deepface
-tf-keras==2.20.0
+
+# deepface와 yolo 관련
+deepface==0.0.93
+tensorflow==2.15.0
+ultralytics==8.3.168
+torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# gdown (선택, GDrive 모델 다운로드용)
 gdown
-ultralytics
