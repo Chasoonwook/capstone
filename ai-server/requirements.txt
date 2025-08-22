@@ -5,13 +5,18 @@ httpx
 python-multipart
 pillow
 opencv-python-headless
-numpy
+numpy<2.0
 
-# deepface와 yolo 관련
+# deepface / yolo
 deepface==0.0.93
 tensorflow==2.15.0
 ultralytics==8.3.168
-torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 
-# gdown (선택, GDrive 모델 다운로드용)
+# PyTorch (CPU wheels)
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.1.2
+torchvision==0.16.2
+torchaudio==2.1.2
+
+# (선택) GDrive 모델 다운로드용
 gdown
