@@ -6,6 +6,8 @@ python-multipart
 pillow
 opencv-python-headless
 numpy<2.0
+h5py
+
 
 # deepface / yolo
 deepface==0.0.93
