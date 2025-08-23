@@ -58,26 +58,29 @@ def ensure_models():
 
 def _patched_model_path() -> Path:
     """
-    원본 h5는 읽기 전용일 수 있으므로, 'batch_shape' → 'batch_input_shape' 패치가
-    필요하면 /tmp 로 복사본을 만든 뒤 그 복사본을 수정해 사용한다.
-    필요 없으면 원본 경로를 그대로 반환.
+    원본 h5는 읽기 전용일 수 있으므로, 패치가 필요하면 /tmp 로 복사본을 만든 뒤
+    model_config 문자열 내 문제 키들을 치환한다.
+    - "batch_shape"         -> "batch_input_shape"
+    - "class_name":"DTypePolicy" -> "class_name":"Policy"
     """
     ensure_models()
     src = MODEL_PATH
     try:
-        import h5py
-        # 1) 읽기 전용으로 검사
+        import h5py, numpy as np
+
+        # 1) 원본을 읽기 전용으로 검사해 패치 필요 여부 판단
         needs_patch = False
         with h5py.File(str(src), "r") as f:
             mc = f.attrs.get("model_config")
             if mc is not None:
                 s = mc.decode("utf-8") if isinstance(mc, (bytes, bytearray)) else str(mc)
-                needs_patch = '"batch_shape":' in s and '"batch_input_shape":' not in s
+                if ('"batch_shape":' in s and '"batch_input_shape":' not in s) or ('"DTypePolicy"' in s):
+                    needs_patch = True
 
         if not needs_patch:
             return src
 
-        # 2) /tmp에 복사해서 그 복사본을 패치
+        # 2) /tmp에 복사해서 복사본을 패치
         dst = Path("/tmp/emotion_cnn.patched.h5")
         shutil.copyfile(src, dst)
         try:
@@ -85,14 +88,23 @@ def _patched_model_path() -> Path:
         except Exception:
             pass
 
-        import numpy as np
         with h5py.File(str(dst), "r+") as f:
             mc = f.attrs.get("model_config")
             s = mc.decode("utf-8") if isinstance(mc, (bytes, bytearray)) else str(mc)
+
+            # ---- 문자열 치환들 ----
             s2 = s.replace('"batch_shape":', '"batch_input_shape":')
-            f.attrs.modify("model_config", np.string_(s2))
-        print(f"[compat] patched model_config -> {dst}")
+            # DTypePolicy → Policy (모듈 필드는 크게 중요치 않음)
+            s2 = s2.replace('"class_name": "DTypePolicy"', '"class_name": "Policy"')
+            # 혹시 소문자/대소혼용 대비
+            s2 = s2.replace('"class_name":"DTypePolicy"', '"class_name":"Policy"')
+
+            if s2 != s:
+                f.attrs.modify("model_config", np.string_(s2))
+                print(f"[compat] patched model_config -> {dst}")
+
         return dst
+
     except Exception as e:
         print(f"[compat] h5 patch failed (non-fatal): {e}")
         return src
