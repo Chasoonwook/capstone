@@ -19,14 +19,32 @@ DEEPFACE_BACKEND = os.getenv("DEEPFACE_BACKEND", "opencv")
 
 def _get_cnn_model():
     """
-    최초 1회만 tf.keras 모델을 로드한다.
-    (top-level에서 load_model을 호출하지 말 것!)
+    최초 1회만 tf.keras 모델 로드.
+    - 오래된 저장본의 dtype policy 직렬화 이름 'DTypePolicy'를
+      tf.keras의 Policy에 매핑해 커스텀 객체로 등록.
     """
     global _cnn_model
     if _cnn_model is None:
         import tensorflow as tf
-        # app.py에서 h5 레거시 패치를 수행하므로 바로 로드 가능
-        _cnn_model = tf.keras.models.load_model(str(MODEL_PATH), compile=False)
+
+        # tf.keras 2.15의 dtype policy 클래스
+        Policy = getattr(tf.keras.mixed_precision, "Policy", None)
+
+        # 커스텀 오브젝트 스코프: 'DTypePolicy' → Policy
+        custom = {}
+        if Policy is not None:
+            custom["DTypePolicy"] = Policy  # config: {'name': 'float32'} 등
+
+        # 이 스코프 안에서 load_model을 호출하면 직렬화명이 매핑됨
+        cm = tf.keras.utils.custom_object_scope(custom) if custom else None
+        try:
+            if cm:
+                cm.__enter__()
+            _cnn_model = tf.keras.models.load_model(str(MODEL_PATH), compile=False)
+        finally:
+            if cm:
+                cm.__exit__(None, None, None)
+
     return _cnn_model
 
 
