@@ -119,15 +119,26 @@ def _lazy_imports():
     if _lazy_loaded:
         return
 
-    # ★ DeepFace/YOLO의 쓰기 위치를 /tmp로 강제
-    df_home = os.getenv("DEEPFACE_HOME", "/tmp/.deepface")
+     # ★ DeepFace/YOLO 경로 보장 (home은 /tmp, 실제 폴더는 /tmp/.deepface)
+    df_home = os.getenv("DEEPFACE_HOME", "/tmp")
+    os.environ["DEEPFACE_HOME"] = df_home
+    from pathlib import Path as _P
+    df_dir = _P(df_home) / ".deepface"
+    try:
+        if df_dir.exists() and df_dir.is_file():
+            df_dir.unlink()                 # 파일로 잘못 생겼으면 제거
+        df_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(df_dir, 0o777)
+    except Exception:
+        pass
+
     yolo_home = os.getenv("YOLO_CONFIG_DIR", "/tmp/Ultralytics")
-    for d in (df_home, yolo_home):
-        Path(d).mkdir(parents=True, exist_ok=True)
-        try:
-            os.chmod(d, 0o777)
-        except Exception:
-            pass
+    os.environ["YOLO_CONFIG_DIR"] = yolo_home
+    _P(yolo_home).mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(yolo_home, 0o777)
+    except Exception:
+        pass
     
     # 패치된 실제 로드 경로 계산 후 환경변수로 전달
     load_path = _patched_model_path()
