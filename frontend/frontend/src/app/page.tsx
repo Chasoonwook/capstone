@@ -1,11 +1,11 @@
-"use client"
+"use client";
 
-import type React from "react"
-import { useEffect, useState } from "react"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Badge } from "@/components/ui/badge"
-import { Card, CardContent } from "@/components/ui/card"
+import type React from "react";
+import { useEffect, useState, useMemo } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Upload,
   Search,
@@ -17,202 +17,228 @@ import {
   SkipForward,
   ChevronLeft,
   ChevronRight,
-} from "lucide-react"
-import Image from "next/image"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+} from "lucide-react";
+import Image from "next/image";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import { Settings, LogOut, UserCircle } from "lucide-react"
-import { useRouter } from "next/navigation"
-import { API_BASE, authHeaders } from "@/lib/api"
+} from "@/components/ui/dropdown-menu";
+import { Settings, LogOut, UserCircle } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { API_BASE, authHeaders } from "@/lib/api";
+
+/* ---------- Headers 유틸(타입 안전) ---------- */
+type AuthHeaders = HeadersInit | (() => HeadersInit);
 
 const getAuthHeaders = (): HeadersInit => {
-  const anyVal: any = authHeaders;
-  return typeof anyVal === "function" ? anyVal() : (anyVal ?? {});
+  const v = authHeaders as unknown as AuthHeaders;
+  return typeof v === "function" ? (v as () => HeadersInit)() : (v ?? {});
 };
-
-// ✅ HeadersInit 유틸
 
 const toObject = (h?: HeadersInit): Record<string, string> => {
   if (!h) return {};
-  if (h instanceof Headers) {
+  if (typeof Headers !== "undefined" && h instanceof Headers) {
     const obj: Record<string, string> = {};
     h.forEach((v, k) => (obj[k] = v));
     return obj;
   }
+  if (Array.isArray(h)) return Object.fromEntries(h) as Record<string, string>;
   return h as Record<string, string>;
 };
 
-const makeHeaders = (extra?: Record<string, string>): HeadersInit => ({
+const makeHeaders = (extra?: Record<string, string>): Record<string, string> => ({
   ...toObject(getAuthHeaders()),
   ...(extra ?? {}),
 });
 
-// ---------- 타입/더미 ----------
+/* ---------- 타입 ---------- */
 type Song = {
-  id: number | string
-  title: string
-  artist: string
-  genre: string
-  duration: string
-  image?: string
-}
+  id: number | string;
+  title: string;
+  artist: string;
+  genre: string;
+  duration: string;
+  image?: string;
+};
+
+type RecommendationItem = {
+  id?: number | string;
+  music_id?: number | string;
+  title?: string;
+  artist?: string;
+  singer?: string;
+  genre?: string;
+  genre_code?: string;
+  duration?: number | string;
+};
 
 const sampleRecommendations: Song[] = [
   { id: 1, title: "Sunset Dreams", artist: "Chill Vibes", genre: "팝/재즈", duration: "3:24", image: "/placeholder.svg?height=60&width=60" },
   { id: 2, title: "Morning Coffee", artist: "Acoustic Soul", genre: "휴식", duration: "4:12", image: "/placeholder.svg?height=60&width=60" },
   { id: 3, title: "City Lights", artist: "Urban Beats", genre: "에너지 충전", duration: "3:45", image: "/placeholder.svg?height=60&width=60" },
   { id: 4, title: "Peaceful Mind", artist: "Meditation Music", genre: "평온한 기분", duration: "5:30", image: "/placeholder.svg?height=60&width=60" },
-]
+];
 
 export default function MusicRecommendationApp() {
-  const [uploadedImage, setUploadedImage] = useState<string | null>(null)
-  const [searchQuery, setSearchQuery] = useState("")
-  const [selectedGenres, setSelectedGenres] = useState<string[]>([])
-  const [showRecommendations, setShowRecommendations] = useState(false)
+  const [uploadedImage, setUploadedImage] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
+  const [showRecommendations, setShowRecommendations] = useState(false);
 
-  const [isLoggedIn, setIsLoggedIn] = useState(false)
-  const [user, setUser] = useState({ name: "사용자", email: "user@example.com", avatar: "/placeholder.svg?height=32&width=32" })
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [user, setUser] = useState({ name: "사용자", email: "user@example.com", avatar: "/placeholder.svg?height=32&width=32" });
 
-  const [showImmersiveView, setShowImmersiveView] = useState(false)
-  const [recommendations, setRecommendations] = useState<Song[]>(sampleRecommendations)
-  const [currentSong, setCurrentSong] = useState<Song>(sampleRecommendations[0])
-  const [isPlaying, setIsPlaying] = useState(false)
-  const [currentTime, setCurrentTime] = useState(0)
-  const [duration, setDuration] = useState(180)
-  const [currentViewIndex, setCurrentViewIndex] = useState(0)
+  const [showImmersiveView, setShowImmersiveView] = useState(false);
+  const [recommendations, setRecommendations] = useState<Song[]>(sampleRecommendations);
+  const [currentSong, setCurrentSong] = useState<Song>(sampleRecommendations[0]);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(180);
+  const [currentViewIndex, setCurrentViewIndex] = useState(0);
 
-  const router = useRouter()
+  const router = useRouter();
 
-  // ---------- 로그인/온보딩 가드 ----------
-useEffect(() => {
-  const uid = typeof window !== "undefined" ? localStorage.getItem("uid") : null;
-  if (!uid) {
-    router.replace("/login");
-    return;
-  }
-
-  // ✅ 로그인 상태 반영
-  const storedName = localStorage.getItem("name");
-  const storedEmail = localStorage.getItem("email");
-  setUser({
-    name: storedName || "사용자",
-    email: storedEmail || "user@example.com",
-    avatar: "/placeholder.svg?height=32&width=32"
-  });
-  setIsLoggedIn(true);
-
-  (async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/users/me/onboarding?user_id=${uid}`, {
-        cache: "no-store",
-      });
-      if (!res.ok) throw new Error("onboarding check failed");
-      const data = await res.json();
-      if (!data?.genre_setup_complete) {
-        router.replace("/onboarding/genres");
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  })();
-}, [router]);
-
-  // ---------- 플레이 타이머 ----------
+  /* ---------- 로그인/온보딩 가드 ---------- */
   useEffect(() => {
-    if (!isPlaying) return
-    const id = setInterval(() => {
-      setCurrentTime((t) => (t + 1 > duration ? duration : t + 1))
-    }, 1000)
-    return () => clearInterval(id)
-  }, [isPlaying, duration])
-
-  // ---------- 이미지 업로드 ----------
-  const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (file) {
-      const reader = new FileReader()
-      reader.onload = (e) => setUploadedImage(e.target?.result as string)
-      reader.readAsDataURL(file)
+    const uid = typeof window !== "undefined" ? localStorage.getItem("uid") : null;
+    if (!uid) {
+      router.replace("/login");
+      return;
     }
-  }
 
-  // ---------- 장르 토글(UX용 – 실제 추천은 DB의 선호장르 기반) ----------
+    const storedName = localStorage.getItem("name");
+    const storedEmail = localStorage.getItem("email");
+    setUser({
+      name: storedName || "사용자",
+      email: storedEmail || "user@example.com",
+      avatar: "/placeholder.svg?height=32&width=32",
+    });
+    setIsLoggedIn(true);
+
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/users/me/onboarding?user_id=${uid}`, { cache: "no-store" });
+        if (!res.ok) throw new Error("onboarding check failed");
+        const data = (await res.json()) as { genre_setup_complete?: boolean };
+        if (!data?.genre_setup_complete) router.replace("/onboarding/genres");
+      } catch (e) {
+        console.error(e);
+      }
+    })();
+  }, [router]);
+
+  /* ---------- 플레이 타이머 ---------- */
+  useEffect(() => {
+    if (!isPlaying) return;
+    const id = setInterval(() => {
+      setCurrentTime((t) => (t + 1 > duration ? duration : t + 1));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [isPlaying, duration]);
+
+  /* ---------- 이미지 업로드 ---------- */
+  const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => setUploadedImage((e.target?.result as string) ?? null);
+    reader.readAsDataURL(file);
+  };
+
+  /* ---------- 장르 토글 ---------- */
   const toggleGenre = (genre: string) => {
-    setSelectedGenres((prev) => (prev.includes(genre) ? prev.filter((g) => g !== genre) : [...prev, genre]))
-  }
+    setSelectedGenres((prev) => (prev.includes(genre) ? prev.filter((g) => g !== genre) : [...prev, genre]));
+  };
 
-  // ---------- 추천 호출 ----------
+  /* ---------- 추천 호출 ---------- */
   const generateRecommendations = async () => {
-    setShowRecommendations(true)
+    setShowRecommendations(true);
 
     try {
       const res = await fetch(
         `${API_BASE}/api/recommendations?limit=20&boost=0.15&min_pref=2&max_pref=3`,
         { headers: makeHeaders() }
-      )
+      );
+
       if (res.ok) {
-        const json = await res.json()
-        const items = (json.items ?? json ?? []).map((it: any, idx: number): Song => ({
-          id: it.id ?? it.music_id ?? idx,
-          title: it.title ?? "Unknown Title",
-          artist: it.artist ?? it.singer ?? "Unknown Artist",
-          genre: it.genre ?? it.genre_code ?? "UNKNOWN",
-          duration: it.duration
-            ? String(it.duration)
-            : `${Math.floor(150 + Math.random() * 90) / 60}`.slice(0, 4).replace(".", ":") || "3:20",
-          image: "/placeholder.svg?height=60&width=60",
-        }))
+        const json = (await res.json()) as { items?: RecommendationItem[] } | RecommendationItem[];
+        const raw = Array.isArray(json) ? json : json.items ?? [];
+        const items: Song[] = raw.map((it: RecommendationItem, idx: number) => {
+          const id = it.id ?? it.music_id ?? idx;
+          const title = it.title ?? "Unknown Title";
+          const artist = it.artist ?? it.singer ?? "Unknown Artist";
+          const genre = it.genre ?? it.genre_code ?? "UNKNOWN";
+
+          // duration 문자열 포맷 (예: "3:20")
+          let durationStr = "3:20";
+          const d = it.duration;
+          if (typeof d === "number") {
+            const mins = Math.floor(d / 60);
+            const secs = Math.floor(d % 60).toString().padStart(2, "0");
+            durationStr = `${mins}:${secs}`;
+          } else if (typeof d === "string" && d.includes(":")) {
+            durationStr = d;
+          }
+
+          return {
+            id,
+            title,
+            artist,
+            genre,
+            duration: durationStr,
+            image: "/placeholder.svg?height=60&width=60",
+          };
+        });
+
         if (items.length > 0) {
-          setRecommendations(items)
-          setCurrentSong(items[0])
-          setDuration(180)
+          setRecommendations(items);
+          setCurrentSong(items[0]);
+          setDuration(180);
         }
       }
     } catch (e) {
-      console.warn("recommendations fallback to sample:", e)
+      console.warn("recommendations fallback to sample:", e);
     }
 
     if (uploadedImage) {
       setTimeout(() => {
-        setShowImmersiveView(true)
-        setIsPlaying(true)
-      }, 300)
+        setShowImmersiveView(true);
+        setIsPlaying(true);
+      }, 300);
     }
-  }
+  };
 
-  // ---------- 플레이 컨트롤 ----------
-  const togglePlay = () => setIsPlaying((p) => !p)
+  /* ---------- 플레이 컨트롤 ---------- */
+  const togglePlay = () => setIsPlaying((p) => !p);
   const playNextSong = () => {
-    const currentIndex = recommendations.findIndex((song) => song.id === currentSong.id)
-    const nextIndex = (currentIndex + 1) % recommendations.length
-    setCurrentSong(recommendations[nextIndex])
-    setCurrentTime(0)
-  }
+    const currentIndex = recommendations.findIndex((song) => song.id === currentSong.id);
+    const nextIndex = (currentIndex + 1) % recommendations.length;
+    setCurrentSong(recommendations[nextIndex]);
+    setCurrentTime(0);
+  };
   const playPreviousSong = () => {
-    const currentIndex = recommendations.findIndex((song) => song.id === currentSong.id)
-    const prevIndex = currentIndex === 0 ? recommendations.length - 1 : currentIndex - 1
-    setCurrentSong(recommendations[prevIndex])
-    setCurrentTime(0)
-  }
+    const currentIndex = recommendations.findIndex((song) => song.id === currentSong.id);
+    const prevIndex = currentIndex === 0 ? recommendations.length - 1 : currentIndex - 1;
+    setCurrentSong(recommendations[prevIndex]);
+    setCurrentTime(0);
+  };
   const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60)
-    const secs = Math.floor(seconds % 60)
-    return `${mins}:${secs.toString().padStart(2, "0")}`
-  }
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
+  };
   const closeImmersiveView = () => {
-    setShowImmersiveView(false)
-    setIsPlaying(false)
-  }
-  const nextView = () => setCurrentViewIndex((prev) => (prev + 1) % 3)
-  const prevView = () => setCurrentViewIndex((prev) => (prev - 1 + 3) % 3)
+    setShowImmersiveView(false);
+    setIsPlaying(false);
+  };
+  const nextView = () => setCurrentViewIndex((prev) => (prev + 1) % 3);
+  const prevView = () => setCurrentViewIndex((prev) => (prev - 1 + 3) % 3);
 
-  // ---------- 뷰들 ----------
+  /* ---------- 뷰들 ---------- */
   const CDPlayerView = () => (
     <div className="flex-1 flex justify-center items-center">
       <div className="relative">
@@ -225,7 +251,7 @@ useEffect(() => {
         </div>
       </div>
     </div>
-  )
+  );
 
   const InstagramView = () => (
     <div className="flex-1 flex justify-center items-center">
@@ -262,7 +288,7 @@ useEffect(() => {
         </div>
       </div>
     </div>
-  )
+  );
 
   const DefaultView = () => (
     <div className="flex-1 flex justify-center">
@@ -270,7 +296,7 @@ useEffect(() => {
         <Image src={uploadedImage || "/placeholder.svg"} alt="Current mood" width={400} height={400} className="rounded-2xl shadow-2xl object-cover" />
       </div>
     </div>
-  )
+  );
 
   const renderPlayerAndPlaylist = () => (
     <>
@@ -323,29 +349,7 @@ useEffect(() => {
         </div>
       </div>
     </>
-  )
-
-  const renderCurrentView = () => {
-    const views = ["cd", "instagram", "default"] as const
-    switch (views[currentViewIndex]) {
-      case "cd":
-        return (
-          <>
-            <CDPlayerView />
-            <div className="flex-1 ml-12 h-full flex flex-col justify-center">{renderPlayerAndPlaylist()}</div>
-          </>
-        )
-      case "instagram":
-        return <InstagramView />
-      default:
-        return (
-          <>
-            <DefaultView />
-            <div className="flex-1 ml-12 h-full flex flex-col justify-center">{renderPlayerAndPlaylist()}</div>
-          </>
-        )
-    }
-  }
+  );
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-50">
@@ -377,9 +381,9 @@ useEffect(() => {
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onClick={() => {
-                    localStorage.removeItem("uid")
-                    setIsLoggedIn(false)
-                    router.replace("/login")
+                    localStorage.removeItem("uid");
+                    setIsLoggedIn(false);
+                    router.replace("/login");
                   }}
                 >
                   <LogOut className="mr-2 h-4 w-4" />로그아웃
@@ -490,9 +494,9 @@ useEffect(() => {
           <div className="absolute top-6 right-6 z-10 flex space-x-3">
             <button
               onClick={() => {
-                const idx = Math.floor(Math.random() * recommendations.length)
-                setCurrentSong(recommendations[idx])
-                setIsPlaying(true)
+                const idx = Math.floor(Math.random() * recommendations.length);
+                setCurrentSong(recommendations[idx]);
+                setIsPlaying(true);
               }}
               className="bg-white/20 hover:bg-white/30 rounded-full p-3 shadow-lg transition-all"
               title="음악 다시 추천받기"
@@ -516,8 +520,8 @@ useEffect(() => {
           <div className="relative z-10 w-full max-w-6xl mx-auto px-6 flex items-center justify-between h-full">
             <>
               {(() => {
-                const views = ["cd", "instagram", "default"] as const
-                const idx = currentViewIndex % views.length
+                const views = ["cd", "instagram", "default"] as const;
+                const idx = currentViewIndex % views.length;
                 switch (views[idx]) {
                   case "cd":
                     return (
@@ -525,16 +529,16 @@ useEffect(() => {
                         <CDPlayerView />
                         <div className="flex-1 ml-12 h-full flex flex-col justify-center">{renderPlayerAndPlaylist()}</div>
                       </>
-                    )
+                    );
                   case "instagram":
-                    return <InstagramView />
+                    return <InstagramView />;
                   default:
                     return (
                       <>
                         <DefaultView />
                         <div className="flex-1 ml-12 h-full flex flex-col justify-center">{renderPlayerAndPlaylist()}</div>
                       </>
-                    )
+                    );
                 }
               })()}
             </>
@@ -542,5 +546,5 @@ useEffect(() => {
         </div>
       )}
     </div>
-  )
+  );
 }
