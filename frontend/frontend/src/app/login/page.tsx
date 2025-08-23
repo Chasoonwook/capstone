@@ -10,6 +10,7 @@ import { Separator } from "@/components/ui/separator"
 import { Music, Eye, EyeOff, Mail, Lock } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
+import { API_BASE } from "@/lib/api" // ✅ 백엔드 베이스 URL (NEXT_PUBLIC_API_BASE)
 
 export default function LoginPage() {
   const [formData, setFormData] = useState({
@@ -18,6 +19,7 @@ export default function LoginPage() {
   })
   const [showPassword, setShowPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null) // ✅ 에러 표시
   const router = useRouter()
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -25,16 +27,45 @@ export default function LoginPage() {
     setFormData((prev) => ({ ...prev, [name]: value }))
   }
 
+  // ✅ DB 인증 추가: /api/auth/login 호출
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsLoading(true)
+    setError(null)
 
-    // 실제 로그인 로직 구현
-    setTimeout(() => {
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: formData.email,
+          password: formData.password,
+        }),
+      })
+
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}))
+        throw new Error(j?.error || "이메일 또는 비밀번호가 올바르지 않습니다.")
+      }
+
+      const data = await res.json()
+      const { token, user, onboarding_done } = data
+
+      // 토큰/사용자 정보 저장 (프로젝트 규약에 맞춰 localStorage 사용)
+      localStorage.setItem("token", token)
+      localStorage.setItem("uid", String(user.id))
+      localStorage.setItem("email", user.email)
+      localStorage.setItem("name", user.name)
+
+      // 미들웨어/가드용 쿠키(선택)
+      document.cookie = `onboardingDone=${onboarding_done ? "1" : "0"}; path=/; max-age=31536000`
+
+      // 이동: 온보딩 미완이면 온보딩, 완료면 홈
+      router.replace(onboarding_done ? "/" : "/onboarding/genres")
+    } catch (err: any) {
+      setError(err.message || "로그인 중 오류가 발생했습니다.")
       setIsLoading(false)
-      alert("로그인 성공!")
-      router.push("/")
-    }, 1000)
+    }
   }
 
   const handleSocialLogin = (provider: string) => {
@@ -100,6 +131,9 @@ export default function LoginPage() {
                   </button>
                 </div>
               </div>
+
+              {/* ✅ 에러 메시지 */}
+              {error && <p className="text-sm text-red-600">{error}</p>}
 
               <Button type="submit" className="w-full bg-purple-600 hover:bg-purple-700" disabled={isLoading}>
                 {isLoading ? "로그인 중..." : "로그인"}
