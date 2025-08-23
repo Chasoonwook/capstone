@@ -1,5 +1,6 @@
 # services/emotion_service.py
 
+import os
 from pathlib import Path
 import numpy as np
 
@@ -12,30 +13,51 @@ CLASS_NAMES = ["angry", "disgust", "fear", "happy", "sad", "surprise", "neutral"
 # 지연 로드용 싱글톤
 _cnn_model = None
 
+# DeepFace detector 백엔드 (무거운 mtcnn 대신 기본 opencv 권장)
+DEEPFACE_BACKEND = os.getenv("DEEPFACE_BACKEND", "opencv")
+
+
 def _get_cnn_model():
     """
-    최초 1회만 Keras 모델을 로드한다.
+    최초 1회만 tf.keras 모델을 로드한다.
     (top-level에서 load_model을 호출하지 말 것!)
     """
     global _cnn_model
     if _cnn_model is None:
-        import keras  # tf-keras 사용
-        _cnn_model = keras.models.load_model(str(MODEL_PATH), compile=False)
+        import tensorflow as tf
+        # app.py에서 h5 레거시 패치를 수행하므로 바로 로드 가능
+        _cnn_model = tf.keras.models.load_model(str(MODEL_PATH), compile=False)
     return _cnn_model
 
+
 def _preprocess_for_cnn(img_path: str):
-    import keras  # tf-keras
-    img = keras.utils.load_img(img_path, target_size=(224, 224), color_mode="rgb")
-    arr = keras.utils.img_to_array(img) / 255.0
-    arr = np.expand_dims(arr, axis=0)
+    import tensorflow as tf
+    img = tf.keras.utils.load_img(img_path, target_size=(224, 224), color_mode="rgb")
+    arr = tf.keras.utils.img_to_array(img).astype("float32") / 255.0
+    arr = np.expand_dims(arr, axis=0)  # (1, 224, 224, 3)
     return arr
+
+
+def _safe_softmax(x: np.ndarray) -> np.ndarray:
+    x = np.asarray(x, dtype="float32")
+    x = x - np.max(x)
+    e = np.exp(x)
+    s = e.sum()
+    return e / s if s > 0 else np.zeros_like(x)
+
 
 def _predict_with_deepface(img_path: str):
     """
     DeepFace의 반환형이 dict 또는 [dict] 일 수 있어 안전하게 처리.
     """
     from deepface import DeepFace
-    df = DeepFace.analyze(img_path=img_path, actions=["emotion"], enforce_detection=False)
+
+    df = DeepFace.analyze(
+        img_path=img_path,
+        actions=["emotion"],
+        enforce_detection=False,
+        detector_backend=DEEPFACE_BACKEND,
+    )
 
     if isinstance(df, list) and len(df) > 0:
         df = df[0]
@@ -51,12 +73,17 @@ def _predict_with_deepface(img_path: str):
     conf = float(np.max(pred)) if pred.size else 0.0
     return label, conf
 
+
 def predict_emotion_combined(img_path: str):
     try:
         # (1) CNN 예측
         model = _get_cnn_model()
         arr = _preprocess_for_cnn(img_path)
         cnn_pred = model.predict(arr, verbose=0)[0]
+
+        # 확률 분포가 아닐 수 있으니 정규화 (logits 대비)
+        if not (0.98 <= float(cnn_pred.sum()) <= 1.02):
+            cnn_pred = _safe_softmax(cnn_pred)
 
         # CNN이 6개 감정만 학습한 경우 → 'disgust' 자리에 0 삽입
         if len(cnn_pred) == 6:

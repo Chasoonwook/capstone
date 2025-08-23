@@ -6,19 +6,21 @@ python-multipart
 pillow
 opencv-python-headless
 numpy<2.0
-h5py
 
+# tf/keras를 같은 세대로 고정
+tensorflow==2.15.0
+keras==2.15.0
 
 # deepface / yolo
 deepface==0.0.93
-tensorflow==2.15.0
 ultralytics==8.3.168
 
-# PyTorch (CPU wheels)
+# PyTorch (CPU)
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.1.2
 torchvision==0.16.2
 torchaudio==2.1.2
 
-# (선택) GDrive 모델 다운로드용
+# H5 패치용
+h5py
 gdown
