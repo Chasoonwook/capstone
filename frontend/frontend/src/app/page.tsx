@@ -97,9 +97,18 @@ useEffect(() => {
     return;
   }
 
+  // ✅ 로그인 상태 반영
+  const storedName = localStorage.getItem("name");
+  const storedEmail = localStorage.getItem("email");
+  setUser({
+    name: storedName || "사용자",
+    email: storedEmail || "user@example.com",
+    avatar: "/placeholder.svg?height=32&width=32"
+  });
+  setIsLoggedIn(true);
+
   (async () => {
     try {
-      // ✅ 헤더 대신 쿼리로 전달 → 프리플라이트 없음
       const res = await fetch(`${API_BASE}/api/users/me/onboarding?user_id=${uid}`, {
         cache: "no-store",
       });
