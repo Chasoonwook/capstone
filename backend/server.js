@@ -33,12 +33,15 @@ const photoRoutes = require('./routes/photos');
 const musicRoutes = require('./routes/musics');
 const recommendationRoutes = require('./routes/recommendations');
 const aiRoutes = require('./routes/ai'); // 추가
+const authRoutes = require('./routes/auth');
 
 app.use('/api/users', userRoutes);
 app.use('/api/photos', photoRoutes);              // 업로드/바이너리/대기목록
 app.use('/api/musics', musicRoutes);
 app.use('/api/recommendations', recommendationRoutes);
 app.use('/api/ai', aiRoutes);                     // AI 결과 수신
+app.use('/api/auth', authRoutes);
+
 
 // 서버 실행
 const PORT = process.env.PORT || 5000;
