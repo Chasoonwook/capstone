@@ -4,8 +4,8 @@ import os
 from pathlib import Path
 import numpy as np
 
-# 모델 경로 (app.ensure_models()가 먼저 파일을 내려받아 둠)
-MODEL_PATH = Path("models/emotion/emotion_cnn.h5")
+# ★ 환경변수로 주입된 경로(패치된 /tmp 파일 포함)를 우선 사용
+MODEL_PATH = Path(os.getenv("EMOTION_MODEL_PATH", "models/emotion/emotion_cnn.h5"))
 
 # DeepFace 기준 7개 클래스
 CLASS_NAMES = ["angry", "disgust", "fear", "happy", "sad", "surprise", "neutral"]

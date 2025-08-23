@@ -15,7 +15,6 @@ FETCH_TIMEOUT = float(os.getenv("FETCH_TIMEOUT", "30"))
 
 app = FastAPI(title=APP_NAME)
 
-# (서버-서버 호출이면 불필요하지만, 프론트 직접 호출 시를 대비해 옵션으로 둠)
 allowed_origin = os.getenv("ALLOWED_ORIGIN")
 if allowed_origin:
     app.add_middleware(
@@ -27,16 +26,12 @@ if allowed_origin:
     )
 
 # =========================
-# 모델 파일 확보 + 레거시 호환 패치
+# 모델 파일 확보 경로
 # =========================
 MODEL_DIR = Path("models/emotion")
 MODEL_PATH = MODEL_DIR / "emotion_cnn.h5"
 
 def ensure_models():
-    """
-    서버에 모델 파일이 없으면 내려받아 채워 넣는다.
-    EMOTION_MODEL_URL 또는 EMOTION_MODEL_GDRIVE_ID 중 하나가 필요.
-    """
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     if MODEL_PATH.exists():
         return
@@ -61,32 +56,49 @@ def ensure_models():
     except Exception as e:
         raise RuntimeError(f"Model download failed: {e}")
 
-def _patch_legacy_h5_batch_shape(path: Path):
+def _patched_model_path() -> Path:
     """
-    일부 구형 Keras 저장본(h5)이 'batch_shape' 키를 써서 tf.keras 로딩 시
-    'Unrecognized keyword arguments: [batch_shape]' 에러가 발생한다.
-    H5의 model_config를 in-place로 'batch_input_shape'로 치환한다.
-    (없으면 조용히 스킵)
+    원본 h5는 읽기 전용일 수 있으므로, 'batch_shape' → 'batch_input_shape' 패치가
+    필요하면 /tmp 로 복사본을 만든 뒤 그 복사본을 수정해 사용한다.
+    필요 없으면 원본 경로를 그대로 반환.
     """
+    ensure_models()
+    src = MODEL_PATH
     try:
-        import h5py, numpy as np  # requirements.txt에 h5py 포함 필수
-        if not path.exists():
-            return
-        with h5py.File(str(path), "r+") as f:
+        import h5py
+        # 1) 읽기 전용으로 검사
+        needs_patch = False
+        with h5py.File(str(src), "r") as f:
             mc = f.attrs.get("model_config")
-            if mc is None:
-                return
+            if mc is not None:
+                s = mc.decode("utf-8") if isinstance(mc, (bytes, bytearray)) else str(mc)
+                needs_patch = '"batch_shape":' in s and '"batch_input_shape":' not in s
+
+        if not needs_patch:
+            return src
+
+        # 2) /tmp에 복사해서 그 복사본을 패치
+        dst = Path("/tmp/emotion_cnn.patched.h5")
+        shutil.copyfile(src, dst)
+        try:
+            os.chmod(dst, 0o644)
+        except Exception:
+            pass
+
+        import numpy as np
+        with h5py.File(str(dst), "r+") as f:
+            mc = f.attrs.get("model_config")
             s = mc.decode("utf-8") if isinstance(mc, (bytes, bytearray)) else str(mc)
-            if '"batch_shape":' in s and '"batch_input_shape":' not in s:
-                s2 = s.replace('"batch_shape":', '"batch_input_shape":')
-                f.attrs.modify("model_config", np.string_(s2))
-                print("[compat] patched model_config: batch_shape -> batch_input_shape")
+            s2 = s.replace('"batch_shape":', '"batch_input_shape":')
+            f.attrs.modify("model_config", np.string_(s2))
+        print(f"[compat] patched model_config -> {dst}")
+        return dst
     except Exception as e:
-        # 패치 실패는 치명적이지 않게 로그만 남김
-        print(f"[compat] h5 patch skipped: {e}")
+        print(f"[compat] h5 patch failed (non-fatal): {e}")
+        return src
 
 # =========================
-# 지연 import/로드 (콜드 스타트 최적화)
+# 지연 import/로드
 # =========================
 _lazy_loaded = False
 
@@ -95,20 +107,20 @@ def _lazy_imports():
     if _lazy_loaded:
         return
 
-    ensure_models()
-    _patch_legacy_h5_batch_shape(MODEL_PATH)  # ← 레거시 h5 호환 패치
+    # 패치된 실제 로드 경로 계산 후 환경변수로 전달
+    load_path = _patched_model_path()
+    os.environ["EMOTION_MODEL_PATH"] = str(load_path)
 
-    # 무거운 의존성/모델은 엔드포인트 호출 시점에 import
     global analyze_photo, predict_emotion_combined, analyze_yolo, recommend_music, preprocess_image
     from services.rulebase_service import analyze_photo
-    from services.emotion_service import predict_emotion_combined  # CNN + DeepFace 조합
+    from services.emotion_service import predict_emotion_combined  # CNN + DeepFace
     from services.yolo_service import analyze_yolo
     from services.recommend_service import recommend_music
     from utils.preprocess import preprocess_image
 
     _lazy_loaded = True
 
-# ---------- 공용 유틸 ----------
+# ---------- 유틸 ----------
 def _normalize_emotion(e: str | None) -> str | None:
     if not e:
         return None
@@ -145,11 +157,9 @@ def _build_response(rule_result, emotion_result, yolo_result, rec):
     normalized_emotion = _normalize_emotion(final_emotion)
 
     return {
-        # 프론트 매핑 핵심
         "time_label": time_label,
         "background": background,
         "emotion": normalized_emotion,
-        # 참고값
         "cnn_emotion": cnn_emotion,
         "cnn_confidence": cnn_conf,
         "deepface_emotion": deepface_emotion,
@@ -167,23 +177,16 @@ def _build_response(rule_result, emotion_result, yolo_result, rec):
     }
 
 def _run_pipeline(saved_path: str) -> dict:
-    _lazy_imports()  # ← 첫 호출 시에만 무거운 것들 로드
-
-    # 1) 전처리
+    _lazy_imports()
     preprocessed_path = preprocess_image(saved_path)
 
-    # 2) 감정 예측(CNN + DeepFace)
     emotion_result = predict_emotion_combined(preprocessed_path)
     if "error" in emotion_result:
         raise ValueError(emotion_result["error"])
 
-    # 3) Rule-based
     rule_result = analyze_photo(preprocessed_path)
-
-    # 4) YOLO
     yolo_result = analyze_yolo(preprocessed_path)
 
-    # 5) 가중치/최종 감정
     rec = recommend_music(
         cnn_emotion=emotion_result["cnn"],
         cnn_conf=emotion_result["cnn_conf"],
@@ -194,7 +197,7 @@ def _run_pipeline(saved_path: str) -> dict:
 
     return _build_response(rule_result, emotion_result, yolo_result, rec)
 
-# ---------- 헬스/루트 ----------
+# ---------- 라우트 ----------
 @app.get("/")
 def root():
     return {"ok": True, "name": APP_NAME}
@@ -203,7 +206,6 @@ def root():
 def healthz():
     return {"ok": True, "name": APP_NAME}
 
-# ---------- 업로드 파일로 분석 ----------
 @app.post("/analyze/")
 async def analyze(file: UploadFile = File(...)):
     tmp_name = f"/tmp/{uuid.uuid4().hex}_{file.filename}"
@@ -215,7 +217,6 @@ async def analyze(file: UploadFile = File(...)):
     except HTTPException:
         raise
     except Exception as e:
-        # 내부 에러 메시지를 그대로 노출 (운영 시에는 마스킹 고려)
         raise HTTPException(400, str(e))
     finally:
         try:
@@ -223,18 +224,16 @@ async def analyze(file: UploadFile = File(...)):
         except Exception:
             pass
 
-# ---------- image_url로 분석 ----------
 class PredictReq(BaseModel):
     image_url: str
     photo_id: str | None = None
     user_id: str | None = None
-    fetch_headers: dict | None = None  # 필요 시 Authorization 등
+    fetch_headers: dict | None = None
 
 @app.post("/predict")
 async def predict(req: PredictReq):
     tmp_name = f"/tmp/{uuid.uuid4().hex}.jpg"
     try:
-        # 서버→서버 이미지 다운로드
         async with httpx.AsyncClient(
             timeout=FETCH_TIMEOUT,
             follow_redirects=True,
@@ -251,18 +250,12 @@ async def predict(req: PredictReq):
             if len(r.content) > MAX_IMAGE_MB * 1024 * 1024:
                 raise HTTPException(413, f"image too large (> {MAX_IMAGE_MB}MB)")
 
-            # 파일 유효성 간단 검증
             Image.open(BytesIO(r.content)).verify()
-
             with open(tmp_name, "wb") as f:
                 f.write(r.content)
 
         out = _run_pipeline(tmp_name)
-        return {
-            "photo_id": req.photo_id,
-            "user_id": req.user_id,
-            **out,
-        }
+        return {"photo_id": req.photo_id, "user_id": req.user_id, **out}
     except HTTPException:
         raise
     except Exception as e:
