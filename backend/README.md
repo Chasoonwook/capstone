@@ -44,3 +44,5 @@ POST /api/ai/results → 분석 결과를 업로드 >> results로 DB형식에 �
 
  사용자: GET /api/recommendations/by-photo/:photoId
 
+### 설치해야 할 패키지
+npm i express cors dotenv pg multer jsonwebtoken axios bcrypt

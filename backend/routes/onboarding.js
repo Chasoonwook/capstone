@@ -39,8 +39,6 @@ router.get('/users/me/onboarding', async (req, res) => {
   }
 });
 
-module.exports = router;
-
 router.put('/users/me/genres', async (req, res) => {
   const userId = (req.user && req.user.id) || req.body?.user_id || req.headers['x-user-id'];
   if (!userId) return res.status(400).json({ error: 'user_id required' });

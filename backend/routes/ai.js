@@ -25,8 +25,13 @@ router.post('/results', async (req, res) => {
       await client.query('BEGIN');
 
       // 매핑 조회
-      const mapSql = 'SELECT main_mood, sub_mood FROM mood_mapping WHERE key_triplet=$1';
-      const mapRes = await client.query(mapSql, [key]);
+      const mapSql = `
+        SELECT main_mood, sub_mood
+        FROM mood_mapping
+        WHERE time_label = $1 AND background = $2 AND emotion = $3
+        LIMIT 1
+      `;
+      const mapRes = await client.query(mapSql, [time, background, emotion]);
 
       const main_mood = mapRes.rows[0]?.main_mood || null;
       const sub_mood  = mapRes.rows[0]?.sub_mood  || null;
