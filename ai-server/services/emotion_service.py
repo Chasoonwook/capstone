@@ -14,7 +14,9 @@ CLASS_NAMES = ["angry", "disgust", "fear", "happy", "sad", "surprise", "neutral"
 _cnn_model = None
 
 # DeepFace detector 백엔드 (무거운 mtcnn 대신 기본 opencv 권장)
-DEEPFACE_BACKEND = os.getenv("DEEPFACE_BACKEND", "opencv")
+DEEPFACE_HOME = os.getenv("DEEPFACE_HOME", "/tmp/.deepface")
+os.environ["DEEPFACE_HOME"] = DEEPFACE_HOME
+Path(DEEPFACE_HOME).mkdir(parents=True, exist_ok=True)
 
 
 def _get_cnn_model():

@@ -119,6 +119,14 @@ def _lazy_imports():
     if _lazy_loaded:
         return
 
+    # ★ DeepFace/YOLO의 쓰기 위치를 /tmp로 강제
+    df_home = os.getenv("DEEPFACE_HOME", "/tmp/.deepface")
+    os.environ["DEEPFACE_HOME"] = df_home
+    Path(df_home).mkdir(parents=True, exist_ok=True)
+    yolo_home = os.getenv("YOLO_CONFIG_DIR", "/tmp/Ultralytics")
+    os.environ["YOLO_CONFIG_DIR"] = yolo_home
+    Path(yolo_home).mkdir(parents=True, exist_ok=True)
+    
     # 패치된 실제 로드 경로 계산 후 환경변수로 전달
     load_path = _patched_model_path()
     os.environ["EMOTION_MODEL_PATH"] = str(load_path)
