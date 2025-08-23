@@ -18,6 +18,9 @@ DEEPFACE_HOME = os.getenv("DEEPFACE_HOME", "/tmp/.deepface")
 os.environ["DEEPFACE_HOME"] = DEEPFACE_HOME
 Path(DEEPFACE_HOME).mkdir(parents=True, exist_ok=True)
 
+# ✅ 누락되었던 백엔드 변수 정의 (기본: 가벼운 opencv)
+DEEPFACE_BACKEND = os.getenv("DEEPFACE_BACKEND", "opencv").strip()
+
 
 def _get_cnn_model():
     """
