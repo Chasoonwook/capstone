@@ -1,0 +1,5 @@
+<!-- /public/placeholder.svg -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" fill="none">
+  <rect width="64" height="64" rx="12" fill="#E5E7EB"></rect>
+  <path d="M32 32a10 10 0 1 0 0-20 10 10 0 0 0 0 20Zm0 4c-9.941 0-18 6.059-18 13.533V52h36v-2.467C50 42.059 41.941 36 32 36Z" fill="#9CA3AF"></path>
+</svg>
