@@ -31,29 +31,34 @@ import { Settings, LogOut, UserCircle } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { API_BASE, authHeaders } from "@/lib/api"
 
-const getAuthHeaders = (): HeadersInit => {
-  const anyVal: any = authHeaders;
-  return typeof anyVal === "function" ? anyVal() : (anyVal ?? {});
-};
+/* =========================
+ * Headers 유틸 (no any)
+ * ========================= */
+type MaybeAuthHeaders = HeadersInit | (() => HeadersInit)
 
-// ✅ HeadersInit 유틸
+const getAuthHeaders = (): HeadersInit => {
+  const h = authHeaders as unknown as MaybeAuthHeaders
+  return typeof h === "function" ? (h as () => HeadersInit)() : (h ?? {})
+}
 
 const toObject = (h?: HeadersInit): Record<string, string> => {
-  if (!h) return {};
+  if (!h) return {}
   if (h instanceof Headers) {
-    const obj: Record<string, string> = {};
-    h.forEach((v, k) => (obj[k] = v));
-    return obj;
+    const obj: Record<string, string> = {}
+    h.forEach((v, k) => (obj[k] = v))
+    return obj
   }
-  return h as Record<string, string>;
-};
+  return h as Record<string, string>
+}
 
 const makeHeaders = (extra?: Record<string, string>): HeadersInit => ({
   ...toObject(getAuthHeaders()),
   ...(extra ?? {}),
-});
+})
 
-// ---------- 타입/더미 ----------
+/* =========================
+ * 타입들
+ * ========================= */
 type Song = {
   id: number | string
   title: string
@@ -63,6 +68,23 @@ type Song = {
   image?: string
 }
 
+type BackendSong = {
+  id?: number | string
+  music_id?: number | string
+  title?: string
+  artist?: string
+  singer?: string
+  genre?: string
+  genre_code?: string
+  duration?: number | string
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  !!v && typeof v === "object" && !Array.isArray(v)
+
+/* =========================
+ * 더미 추천
+ * ========================= */
 const sampleRecommendations: Song[] = [
   { id: 1, title: "Sunset Dreams", artist: "Chill Vibes", genre: "팝/재즈", duration: "3:24", image: "/placeholder.svg?height=60&width=60" },
   { id: 2, title: "Morning Coffee", artist: "Acoustic Soul", genre: "휴식", duration: "4:12", image: "/placeholder.svg?height=60&width=60" },
@@ -89,41 +111,42 @@ export default function MusicRecommendationApp() {
 
   const router = useRouter()
 
-  // ---------- 로그인/온보딩 가드 ----------
-useEffect(() => {
-  const uid = typeof window !== "undefined" ? localStorage.getItem("uid") : null;
-  if (!uid) {
-    router.replace("/login");
-    return;
-  }
-
-  // ✅ 로그인 상태 반영
-  const storedName = localStorage.getItem("name");
-  const storedEmail = localStorage.getItem("email");
-  setUser({
-    name: storedName || "사용자",
-    email: storedEmail || "user@example.com",
-    avatar: "/placeholder.svg?height=32&width=32"
-  });
-  setIsLoggedIn(true);
-
-  (async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/users/me/onboarding?user_id=${uid}`, {
-        cache: "no-store",
-      });
-      if (!res.ok) throw new Error("onboarding check failed");
-      const data = await res.json();
-      if (!data?.genre_setup_complete) {
-        router.replace("/onboarding/genres");
-      }
-    } catch (e) {
-      console.error(e);
+  /* -------------------------
+   * 로그인/온보딩 가드
+   * ------------------------- */
+  useEffect(() => {
+    const uid = typeof window !== "undefined" ? localStorage.getItem("uid") : null
+    if (!uid) {
+      router.replace("/login")
+      return
     }
-  })();
-}, [router]);
 
-  // ---------- 플레이 타이머 ----------
+    const storedName = localStorage.getItem("name")
+    const storedEmail = localStorage.getItem("email")
+    setUser({
+      name: storedName || "사용자",
+      email: storedEmail || "user@example.com",
+      avatar: "/placeholder.svg?height=32&width=32",
+    })
+    setIsLoggedIn(true)
+
+    ;(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/users/me/onboarding?user_id=${uid}`, { cache: "no-store" })
+        if (!res.ok) throw new Error("onboarding check failed")
+        const data: unknown = await res.json()
+        if (isRecord(data) && !data.genre_setup_complete) {
+          router.replace("/onboarding/genres")
+        }
+      } catch (e) {
+        console.error(e)
+      }
+    })()
+  }, [router])
+
+  /* -------------------------
+   * 플레이 타이머
+   * ------------------------- */
   useEffect(() => {
     if (!isPlaying) return
     const id = setInterval(() => {
@@ -132,7 +155,9 @@ useEffect(() => {
     return () => clearInterval(id)
   }, [isPlaying, duration])
 
-  // ---------- 이미지 업로드 ----------
+  /* -------------------------
+   * 이미지 업로드(프론트 미리보기)
+   * ------------------------- */
   const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (file) {
@@ -142,12 +167,16 @@ useEffect(() => {
     }
   }
 
-  // ---------- 장르 토글(UX용 – 실제 추천은 DB의 선호장르 기반) ----------
+  /* -------------------------
+   * 장르 토글(UX용)
+   * ------------------------- */
   const toggleGenre = (genre: string) => {
     setSelectedGenres((prev) => (prev.includes(genre) ? prev.filter((g) => g !== genre) : [...prev, genre]))
   }
 
-  // ---------- 추천 호출 ----------
+  /* -------------------------
+   * 추천 호출
+   * ------------------------- */
   const generateRecommendations = async () => {
     setShowRecommendations(true)
 
@@ -157,17 +186,30 @@ useEffect(() => {
         { headers: makeHeaders() }
       )
       if (res.ok) {
-        const json = await res.json()
-        const items = (json.items ?? json ?? []).map((it: any, idx: number): Song => ({
-          id: it.id ?? it.music_id ?? idx,
-          title: it.title ?? "Unknown Title",
-          artist: it.artist ?? it.singer ?? "Unknown Artist",
-          genre: it.genre ?? it.genre_code ?? "UNKNOWN",
-          duration: it.duration
-            ? String(it.duration)
-            : `${Math.floor(150 + Math.random() * 90) / 60}`.slice(0, 4).replace(".", ":") || "3:20",
-          image: "/placeholder.svg?height=60&width=60",
-        }))
+        const json: unknown = await res.json()
+        const rawList: unknown = (isRecord(json) && Array.isArray(json.items)) ? json.items : Array.isArray(json) ? json : []
+        const list = Array.isArray(rawList) ? rawList : []
+
+        const items: Song[] = list.map((raw, idx) => {
+          const it: BackendSong = isRecord(raw) ? (raw as BackendSong) : {}
+
+          const dur =
+            typeof it.duration === "number"
+              ? `${Math.floor(it.duration / 60)}:${String(Math.floor(it.duration % 60)).padStart(2, "0")}`
+              : typeof it.duration === "string"
+              ? it.duration
+              : `${2 + Math.floor(Math.random() * 2)}:${String(30 + Math.floor(Math.random() * 30)).padStart(2, "0")}`
+
+          return {
+            id: it.id ?? it.music_id ?? idx,
+            title: it.title ?? "Unknown Title",
+            artist: it.artist ?? it.singer ?? "Unknown Artist",
+            genre: it.genre ?? it.genre_code ?? "UNKNOWN",
+            duration: dur,
+            image: "/placeholder.svg?height=60&width=60",
+          }
+        })
+
         if (items.length > 0) {
           setRecommendations(items)
           setCurrentSong(items[0])
@@ -186,33 +228,42 @@ useEffect(() => {
     }
   }
 
-  // ---------- 플레이 컨트롤 ----------
+  /* -------------------------
+   * 플레이 컨트롤
+   * ------------------------- */
   const togglePlay = () => setIsPlaying((p) => !p)
+
   const playNextSong = () => {
     const currentIndex = recommendations.findIndex((song) => song.id === currentSong.id)
     const nextIndex = (currentIndex + 1) % recommendations.length
     setCurrentSong(recommendations[nextIndex])
     setCurrentTime(0)
   }
+
   const playPreviousSong = () => {
     const currentIndex = recommendations.findIndex((song) => song.id === currentSong.id)
     const prevIndex = currentIndex === 0 ? recommendations.length - 1 : currentIndex - 1
     setCurrentSong(recommendations[prevIndex])
     setCurrentTime(0)
   }
+
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
     const secs = Math.floor(seconds % 60)
     return `${mins}:${secs.toString().padStart(2, "0")}`
   }
+
   const closeImmersiveView = () => {
     setShowImmersiveView(false)
     setIsPlaying(false)
   }
+
   const nextView = () => setCurrentViewIndex((prev) => (prev + 1) % 3)
   const prevView = () => setCurrentViewIndex((prev) => (prev - 1 + 3) % 3)
 
-  // ---------- 뷰들 ----------
+  /* -------------------------
+   * 뷰
+   * ------------------------- */
   const CDPlayerView = () => (
     <div className="flex-1 flex justify-center items-center">
       <div className="relative">
@@ -347,6 +398,9 @@ useEffect(() => {
     }
   }
 
+  /* -------------------------
+   * JSX 반환
+   * ------------------------- */
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-50">
       {/* Header */}

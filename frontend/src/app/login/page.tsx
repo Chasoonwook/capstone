@@ -1,3 +1,4 @@
+// src/app/login/page.tsx
 "use client"
 
 import type React from "react"
@@ -10,16 +11,32 @@ import { Separator } from "@/components/ui/separator"
 import { Music, Eye, EyeOff, Mail, Lock } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { API_BASE } from "@/lib/api" // ✅ 백엔드 베이스 URL (NEXT_PUBLIC_API_BASE)
+import { API_BASE } from "@/lib/api" // ✅ 백엔드 베이스 URL
+
+type LoginForm = {
+  email: string
+  password: string
+}
+
+type LoginUser = {
+  id: number | string
+  email: string
+  name: string
+}
+
+type LoginResponse = {
+  token: string
+  user: LoginUser
+  onboarding_done: boolean
+  // 백엔드가 추가 정보 주더라도 에러 안 나게 여유 필드 허용
+  [key: string]: unknown
+}
 
 export default function LoginPage() {
-  const [formData, setFormData] = useState({
-    email: "",
-    password: "",
-  })
+  const [formData, setFormData] = useState<LoginForm>({ email: "", password: "" })
   const [showPassword, setShowPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null) // ✅ 에러 표시
+  const [error, setError] = useState<string | null>(null)
   const router = useRouter()
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -28,7 +45,7 @@ export default function LoginPage() {
   }
 
   // ✅ DB 인증 추가: /api/auth/login 호출
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setIsLoading(true)
     setError(null)
@@ -37,21 +54,33 @@ export default function LoginPage() {
       const res = await fetch(`${API_BASE}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: formData.email,
-          password: formData.password,
-        }),
+        body: JSON.stringify({ email: formData.email, password: formData.password }),
       })
 
       if (!res.ok) {
-        const j = await res.json().catch(() => ({}))
-        throw new Error(j?.error || "이메일 또는 비밀번호가 올바르지 않습니다.")
+        // 응답이 JSON이 아닐 수도 있으니 안전 파싱
+        let msg = "이메일 또는 비밀번호가 올바르지 않습니다."
+        try {
+          const j: unknown = await res.json()
+          if (j && typeof j === "object" && "error" in j && typeof (j as any).error === "string") {
+            msg = (j as any).error as string
+          }
+        } catch {
+          /* ignore json parse error */
+        }
+        throw new Error(msg)
       }
 
-      const data = await res.json()
+      const data = (await res.json()) as LoginResponse
+
+      // 필수 필드 최소 검증
+      if (!data?.token || !data?.user) {
+        throw new Error("로그인 응답 형식이 올바르지 않습니다.")
+      }
+
       const { token, user, onboarding_done } = data
 
-      // 토큰/사용자 정보 저장 (프로젝트 규약에 맞춰 localStorage 사용)
+      // 토큰/사용자 정보 저장
       localStorage.setItem("token", token)
       localStorage.setItem("uid", String(user.id))
       localStorage.setItem("email", user.email)
@@ -62,15 +91,23 @@ export default function LoginPage() {
 
       // 이동: 온보딩 미완이면 온보딩, 완료면 홈
       router.replace(onboarding_done ? "/" : "/onboarding/genres")
-    } catch (err: any) {
-      setError(err.message || "로그인 중 오류가 발생했습니다.")
+    } catch (err: unknown) {
+      // catch는 unknown으로 받고 메시지 안전 추출
+      const msg =
+        err instanceof Error
+          ? err.message
+          : typeof err === "string"
+          ? err
+          : "로그인 중 오류가 발생했습니다."
+      setError(msg)
+    } finally {
       setIsLoading(false)
     }
   }
 
-  const handleSocialLogin = (provider: string) => {
+  const handleSocialLogin = (provider: "Google" | "Kakao") => {
     console.log(`${provider} 로그인`)
-    // 소셜 로그인 로직
+    // TODO: 소셜 로그인 로직
   }
 
   return (
@@ -94,7 +131,7 @@ export default function LoginPage() {
               <div className="space-y-2">
                 <Label htmlFor="email">이메일</Label>
                 <div className="relative">
-                  <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 h-4 w-4" />
                   <Input
                     id="email"
                     name="email"
@@ -104,6 +141,7 @@ export default function LoginPage() {
                     onChange={handleInputChange}
                     className="pl-10"
                     required
+                    autoComplete="email"
                   />
                 </div>
               </div>
@@ -111,7 +149,7 @@ export default function LoginPage() {
               <div className="space-y-2">
                 <Label htmlFor="password">비밀번호</Label>
                 <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 h-4 w-4" />
                   <Input
                     id="password"
                     name="password"
@@ -121,11 +159,13 @@ export default function LoginPage() {
                     onChange={handleInputChange}
                     className="pl-10 pr-10"
                     required
+                    autoComplete="current-password"
                   />
                   <button
                     type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    aria-label={showPassword ? "비밀번호 숨기기" : "비밀번호 보이기"}
                   >
                     {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
@@ -151,6 +191,7 @@ export default function LoginPage() {
 
             <div className="grid grid-cols-2 gap-4">
               <Button variant="outline" onClick={() => handleSocialLogin("Google")} className="w-full">
+                {/* Google 아이콘 */}
                 <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24">
                   <path
                     fill="currentColor"
@@ -176,6 +217,7 @@ export default function LoginPage() {
                 onClick={() => handleSocialLogin("Kakao")}
                 className="w-full bg-yellow-400 hover:bg-yellow-500 text-black border-yellow-400"
               >
+                {/* Kakao 아이콘 */}
                 <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M12 3c5.799 0 10.5 3.664 10.5 8.185 0 4.52-4.701 8.184-10.5 8.184a13.5 13.5 0 0 1-1.727-.11l-4.408 2.883c-.501.265-.678.236-.472-.413l.892-3.678c-2.88-1.46-4.785-3.99-4.785-6.866C1.5 6.665 6.201 3 12 3z" />
                 </svg>

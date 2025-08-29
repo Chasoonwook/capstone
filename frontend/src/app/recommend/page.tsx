@@ -18,7 +18,21 @@ type Song = {
   image?: string
 }
 
-// 안전 텍스트
+type BackendSong = {
+  id?: number | string
+  music_id?: number | string
+  title?: string
+  artist?: string
+  label?: string
+  genre?: string
+  genre_code?: string
+  duration?: number | string
+}
+
+// ---------- 유틸 ----------
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  !!v && typeof v === "object" && !Array.isArray(v)
+
 async function safeText(res: Response) {
   try {
     return await res.text()
@@ -34,58 +48,11 @@ async function resolveImageUrl(photoId: string): Promise<string | null> {
     try {
       const r = await fetch(url, { method: "GET" })
       if (r.ok) return url
-    } catch {}
+    } catch {
+      /* ignore */
+    }
   }
   return null
-}
-
-// 추천 API 탐색: /api/recommend/by-photo/:id -> /api/recommendations?limit=20
-async function fetchRecommendations(photoId: string): Promise<Song[]> {
-  // 1) by-photo 시도
-  try {
-    const r1 = await fetch(`${API_BASE}/api/recommend/by-photo/${photoId}`)
-    if (r1.ok) {
-      const data = await r1.json()
-      // 백엔드 형태 가변: { main_mood, sub_mood, main_songs:[], sub_songs:[] } or { recommendations:[] }
-      const songs: any[] = data.recommendations
-        ? data.recommendations
-        : [...(data.main_songs ?? []), ...(data.sub_songs ?? [])]
-      return (songs ?? []).map((it, idx) => ({
-        id: it.id ?? it.music_id ?? idx,
-        title: it.title ?? "Unknown Title",
-        artist: it.artist ?? "Unknown Artist",
-        genre: it.genre ?? it.label ?? "UNKNOWN",
-        duration: it.duration ?? undefined,
-        image: "/placeholder.svg",
-      }))
-    } else if (r1.status !== 404) {
-      console.warn("[by-photo] 실패:", r1.status, await safeText(r1))
-    }
-  } catch (e) {
-    console.warn("[by-photo] 오류:", e)
-  }
-
-  // 2) 일반 추천 폴백
-  try {
-    const r2 = await fetch(`${API_BASE}/api/recommendations?limit=20`)
-    if (r2.ok) {
-      const json = await r2.json()
-      const items = json.items ?? json.results ?? []
-      return items.map((it: any, idx: number) => ({
-        id: it.id ?? idx,
-        title: it.title ?? "Unknown Title",
-        artist: it.artist ?? "Unknown Artist",
-        genre: it.genre ?? "UNKNOWN",
-        duration: it.duration ?? undefined,
-        image: "/placeholder.svg",
-      }))
-    } else {
-      console.error("추천 API 실패:", r2.status, await safeText(r2))
-    }
-  } catch (e) {
-    console.error("추천 불러오기 오류:", e)
-  }
-  return []
 }
 
 export default function RecommendPage() {
@@ -121,7 +88,7 @@ export default function RecommendPage() {
   // === 2) 추천 가져오기 ===
   useEffect(() => {
     let mounted = true
-    let timer: any = null
+    let timer: ReturnType<typeof setTimeout> | null = null
 
     const fetchByPhoto = async () => {
       if (!photoId) return
@@ -131,28 +98,47 @@ export default function RecommendPage() {
         if (r.status === 202) {
           // 분석 대기중 → 2.5s 후 재시도
           if (mounted) {
-            // 여기서 "분석 대기중…" 같은 UI를 보여주고 싶으면 상태를 세팅
             timer = setTimeout(fetchByPhoto, 2500)
           }
           return
         }
         if (!r.ok) {
-          console.error("추천 API 실패:", r.status, await r.text())
+          console.error("추천 API 실패:", r.status, await safeText(r))
           return
         }
 
-        const data = await r.json()
-        const songs = [...(data.main_songs ?? []), ...(data.sub_songs ?? [])].map((it: any, idx: number) => ({
-          id: it.music_id ?? it.id ?? idx,
-          title: it.title ?? "Unknown Title",
-          artist: it.artist ?? "Unknown Artist",
-          genre: it.genre ?? it.label ?? "UNKNOWN",
-          image: "/placeholder.svg",
-        }))
+        const data: unknown = await r.json()
+        const main = isRecord(data) && Array.isArray((data as { [k: string]: unknown }).main_songs)
+          ? ((data as { main_songs: unknown[] }).main_songs)
+          : []
+        const sub = isRecord(data) && Array.isArray((data as { [k: string]: unknown }).sub_songs)
+          ? ((data as { sub_songs: unknown[] }).sub_songs)
+          : []
+        const combined: unknown[] = [...main, ...sub]
+
+        const songs: Song[] = combined.map((raw, idx) => {
+          const it: BackendSong = isRecord(raw) ? (raw as BackendSong) : {}
+          const dur =
+            typeof it.duration === "number"
+              ? `${Math.floor(it.duration / 60)}:${String(Math.floor(it.duration % 60)).padStart(2, "0")}`
+              : typeof it.duration === "string"
+              ? it.duration
+              : undefined
+
+          return {
+            id: it.music_id ?? it.id ?? idx,
+            title: it.title ?? "Unknown Title",
+            artist: it.artist ?? "Unknown Artist",
+            genre: it.genre ?? it.genre_code ?? it.label ?? "UNKNOWN",
+            duration: dur,
+            image: "/placeholder.svg",
+          }
+        })
 
         if (mounted) {
           setRecommendations(songs)
           setCurrentSong(songs[0] ?? null)
+          setDuration(180) // 기본 3분
         }
       } catch (e) {
         console.error("추천 불러오기 오류:", e)
@@ -214,7 +200,7 @@ export default function RecommendPage() {
             <div className="absolute -inset-4 bg-gradient-to-r from-purple-400 via-pink-400 to-indigo-400 rounded-full opacity-20 blur-xl"></div>
             <div className="w-full h-full rounded-full overflow-hidden border-8 border-slate-800 relative z-10">
               <Image
-                src={safeImageSrc || "/placeholder.svg"}
+                src={safeImageSrc}
                 alt="Current mood"
                 width={320}
                 height={320}
@@ -239,7 +225,7 @@ export default function RecommendPage() {
           <div className="relative">
             <div className="w-80 h-80 rounded-full overflow-hidden border-4 border-white/30 shadow-2xl">
               <Image
-                src={safeImageSrc || "/placeholder.svg"}
+                src={safeImageSrc}
                 alt="Uploaded photo"
                 width={320}
                 height={320}
@@ -314,7 +300,7 @@ export default function RecommendPage() {
             <div className="bg-black/30 backdrop-blur-md rounded-2xl p-6 border border-white/10 shadow-2xl">
               <h3 className="text-xl font-semibold text-white mb-4 text-center">추천 플레이리스트</h3>
               <div className="max-h-96 overflow-y-auto space-y-3">
-                {recommendations.slice(0, 6).map((song, index) => (
+                {recommendations.slice(0, 6).map((song) => (
                   <div
                     key={song.id}
                     onClick={() => {
@@ -357,7 +343,7 @@ export default function RecommendPage() {
       <div className="relative">
         <div className="absolute -inset-4 bg-gradient-to-r from-purple-400 via-pink-400 to-indigo-400 rounded-2xl opacity-30 blur-xl"></div>
         <Image
-          src={safeImageSrc || "/placeholder.svg"}
+          src={safeImageSrc}
           alt="Current mood"
           width={400}
           height={400}
@@ -428,7 +414,7 @@ export default function RecommendPage() {
           <h3 className="text-xl font-semibold text-white mb-4 text-center">추천 음악</h3>
           <div className="bg-white/5 backdrop-blur-sm rounded-2xl p-4 max-h-80 overflow-y-auto border border-white/10">
             <div className="space-y-2">
-              {recommendations.map((song, index) => (
+              {recommendations.map((song) => (
                 <div
                   key={song.id}
                   onClick={() => {
