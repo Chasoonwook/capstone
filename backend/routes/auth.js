@@ -11,13 +11,13 @@ const JWT_EXPIRES_IN = '7d';
 // ---------- helpers ----------
 const trim = (s) => (s ?? '').toString().trim();
 
-const mapGender = (g) => {
+// DB 제약(users_gender_check)이 '남성' / '여성'을 허용하므로 여기에 맞춰 통일
+const toKoreanGender = (g) => {
   if (!g) return null;
-  if (g === '남성' || g === '남') return 'M';
-  if (g === '여성' || g === '여') return 'F';
-  const up = String(g).toUpperCase();
-  if (['M', 'F', 'MALE', 'FEMALE'].includes(up)) return up[0];
-  return null; // 알 수 없는 값이면 NULL 저장
+  const t = String(g).trim().toLowerCase();
+  if (['m', 'male', '남', '남성'].includes(t)) return '남성';
+  if (['f', 'female', '여', '여성'].includes(t)) return '여성';
+  return null; // 허용 밖 값은 NULL 저장
 };
 
 const digitsOnly = (s) => (s ? String(s).replace(/\D/g, '') : null);
@@ -32,8 +32,8 @@ router.post('/register', async (req, res) => {
     const name = trim(req.body?.name);
     const email = trim(req.body?.email);
     const password = req.body?.password || '';
-    const gender = mapGender(req.body?.gender);   // ✅ 한글/영문 → M/F
-    const phone  = digitsOnly(req.body?.phone);   // ✅ 숫자만
+    const gender = toKoreanGender(req.body?.gender); // ✅ 제약에 맞게 '남성'/'여성'으로 정규화
+    const phone  = digitsOnly(req.body?.phone);      // ✅ 숫자만 저장
 
     if (!name || !email || !password) {
       return res.status(400).json({ error: 'name, email, password are required' });
@@ -67,9 +67,15 @@ router.post('/register', async (req, res) => {
       genre_setup_complete: user.genre_setup_complete,
     });
   } catch (err) {
-    console.error('[REGISTER ERROR]', err);
+    // 필요하면 아래 로그로 실제 제약명을 확인해 원인 확정 가능
+    console.error('[REGISTER ERROR]', {
+      code: err.code,
+      detail: err.detail,
+      constraint: err.constraint,
+      column: err.column,
+    });
     if (err.code === '23505') return res.status(409).json({ error: 'Email already exists' }); // unique
-    if (err.code && err.code.startsWith('23')) return res.status(400).json({ error: 'Invalid data for insert' }); // check/constraint/type
+    if (err.code && err.code.startsWith('23')) return res.status(400).json({ error: 'Invalid data for insert' }); // check/not null/type
     return res.status(500).json({ error: 'Register failed' });
   }
 });
