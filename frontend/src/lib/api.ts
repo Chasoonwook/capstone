@@ -1,5 +1,5 @@
 // Frontend/src/lib/api.ts (참고)
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:5000";
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "https://capstone-app-back.onrender.com";
 
 export const authHeaders = () => {
   if (typeof window === "undefined") return {};
