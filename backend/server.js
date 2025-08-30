@@ -8,6 +8,9 @@ const crypto = require("crypto"); // temp_name 해시용
 
 const app = express();
 
+//env route resot
+
+
 /* ── Proxy/HTTPS 환경 ── */
 app.set("trust proxy", 1);
 
