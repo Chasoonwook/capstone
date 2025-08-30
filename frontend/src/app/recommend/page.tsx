@@ -1,212 +1,216 @@
-"use client"
+// app/recommend/page.tsx
+"use client";
 
-import { useEffect, useMemo, useState } from "react"
-import { useSearchParams, useRouter } from "next/navigation"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { Play, Pause, SkipBack, SkipForward, X, ChevronLeft, ChevronRight, Music } from "lucide-react"
-import Image from "next/image"
-import { API_BASE } from "@/lib/api"
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Play, Pause, SkipBack, SkipForward, X, ChevronLeft, ChevronRight, Music } from "lucide-react";
+import Image from "next/image";
+import { API_BASE } from "@/lib/api";
 
-// ---------- 타입 ----------
+/** ─────────────────────────────────────────────────────────
+ * 정적 프리렌더 방지(선택이지만 권장): CSR/SSR로만 동작하게 함
+ * ───────────────────────────────────────────────────────── */
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+/** ---------- 타입 ---------- */
 type Song = {
-  id: number | string
-  title: string
-  artist: string
-  genre: string
-  duration?: string
-  image?: string
-}
+  id: number | string;
+  title: string;
+  artist: string;
+  genre: string;
+  duration?: string;
+  image?: string;
+};
 
 type BackendSong = {
-  id?: number | string
-  music_id?: number | string
-  title?: string
-  artist?: string
-  label?: string
-  genre?: string
-  genre_code?: string
-  duration?: number | string
-}
+  id?: number | string;
+  music_id?: number | string;
+  title?: string;
+  artist?: string;
+  label?: string;
+  genre?: string;
+  genre_code?: string;
+  duration?: number | string;
+};
 
-// ---------- 유틸 ----------
+/** ---------- 유틸 ---------- */
 const isRecord = (v: unknown): v is Record<string, unknown> =>
-  !!v && typeof v === "object" && !Array.isArray(v)
+  !!v && typeof v === "object" && !Array.isArray(v);
 
 async function safeText(res: Response) {
   try {
-    return await res.text()
+    return await res.text();
   } catch {
-    return ""
+    return "";
   }
 }
 
 // 이미지 바이너리 URL 탐색: /api/photos/... -> /photos/...
 async function resolveImageUrl(photoId: string): Promise<string | null> {
-  const candidates = [`${API_BASE}/api/photos/${photoId}/binary`, `${API_BASE}/photos/${photoId}/binary`]
+  const candidates = [`${API_BASE}/api/photos/${photoId}/binary`, `${API_BASE}/photos/${photoId}/binary`];
   for (const url of candidates) {
     try {
-      const r = await fetch(url, { method: "GET" })
-      if (r.ok) return url
+      const r = await fetch(url, { method: "GET" });
+      if (r.ok) return url;
     } catch {
       /* ignore */
     }
   }
-  return null
+  return null;
 }
 
-export default function RecommendPage() {
-  const searchParams = useSearchParams()
-  const router = useRouter()
-  const photoId = searchParams.get("photoId")
+/** ─────────────────────────────────────────────────────────
+ * 내부 컴포넌트: 여기서 useSearchParams() 사용
+ * ───────────────────────────────────────────────────────── */
+function RecommendInner() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const photoId = searchParams.get("photoId");
 
-  const [uploadedImage, setUploadedImage] = useState<string | null>(null)
-  const [recommendations, setRecommendations] = useState<Song[]>([])
-  const [currentSong, setCurrentSong] = useState<Song | null>(null)
-  const [isPlaying, setIsPlaying] = useState(false)
-  const [currentTime, setCurrentTime] = useState(0)
-  const [duration, setDuration] = useState(180)
-  const [currentViewIndex, setCurrentViewIndex] = useState(0)
+  const [uploadedImage, setUploadedImage] = useState<string | null>(null);
+  const [recommendations, setRecommendations] = useState<Song[]>([]);
+  const [currentSong, setCurrentSong] = useState<Song | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(180);
+  const [currentViewIndex, setCurrentViewIndex] = useState(0);
 
   // === 1) 업로드 이미지 URL 탐색 ===
   useEffect(() => {
-    let mounted = true
-    ;(async () => {
+    let mounted = true;
+    (async () => {
       if (!photoId) {
-        setUploadedImage(null)
-        return
+        setUploadedImage(null);
+        return;
       }
-      const url = await resolveImageUrl(photoId)
-      if (mounted) setUploadedImage(url ?? "/placeholder.svg")
-      if (!url) console.warn("[binary] 이미지 바이너리 404: photoId =", photoId)
-    })()
+      const url = await resolveImageUrl(photoId);
+      if (mounted) setUploadedImage(url ?? "/placeholder.svg");
+      if (!url) console.warn("[binary] 이미지 바이너리 404: photoId =", photoId);
+    })();
     return () => {
-      mounted = false
-    }
-  }, [photoId])
+      mounted = false;
+    };
+  }, [photoId]);
 
   // === 2) 추천 가져오기 ===
   useEffect(() => {
-    let mounted = true
-    let timer: ReturnType<typeof setTimeout> | null = null
+    let mounted = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
     const fetchByPhoto = async () => {
-      if (!photoId) return
+      if (!photoId) return;
 
       try {
-        const r = await fetch(`${API_BASE}/api/recommendations/by-photo/${photoId}`)
+        const r = await fetch(`${API_BASE}/api/recommendations/by-photo/${photoId}`);
         if (r.status === 202) {
           // 분석 대기중 → 2.5s 후 재시도
           if (mounted) {
-            timer = setTimeout(fetchByPhoto, 2500)
+            timer = setTimeout(fetchByPhoto, 2500);
           }
-          return
+          return;
         }
         if (!r.ok) {
-          console.error("추천 API 실패:", r.status, await safeText(r))
-          return
+          console.error("추천 API 실패:", r.status, await safeText(r));
+          return;
         }
 
-        const data: unknown = await r.json()
-        const main = isRecord(data) && Array.isArray((data as { [k: string]: unknown }).main_songs)
-          ? ((data as { main_songs: unknown[] }).main_songs)
-          : []
-        const sub = isRecord(data) && Array.isArray((data as { [k: string]: unknown }).sub_songs)
-          ? ((data as { sub_songs: unknown[] }).sub_songs)
-          : []
-        const combined: unknown[] = [...main, ...sub]
+        const data: unknown = await r.json();
+        const main =
+          isRecord(data) && Array.isArray((data as { [k: string]: unknown }).main_songs)
+            ? (data as { main_songs: unknown[] }).main_songs
+            : [];
+        const sub =
+          isRecord(data) && Array.isArray((data as { [k: string]: unknown }).sub_songs)
+            ? (data as { sub_songs: unknown[] }).sub_songs
+            : [];
+        const combined: unknown[] = [...main, ...sub];
 
         const songs: Song[] = combined.map((raw, idx) => {
-          const it: BackendSong = isRecord(raw) ? (raw as BackendSong) : {}
+          const it: BackendSong = isRecord(raw) ? (raw as BackendSong) : {};
           const dur =
             typeof it.duration === "number"
               ? `${Math.floor(it.duration / 60)}:${String(Math.floor(it.duration % 60)).padStart(2, "0")}`
               : typeof it.duration === "string"
               ? it.duration
-              : undefined
+              : undefined;
 
-          return {
+        return {
             id: it.music_id ?? it.id ?? idx,
             title: it.title ?? "Unknown Title",
             artist: it.artist ?? "Unknown Artist",
             genre: it.genre ?? it.genre_code ?? it.label ?? "UNKNOWN",
             duration: dur,
             image: "/placeholder.svg",
-          }
-        })
+          };
+        });
 
         if (mounted) {
-          setRecommendations(songs)
-          setCurrentSong(songs[0] ?? null)
-          setDuration(180) // 기본 3분
+          setRecommendations(songs);
+          setCurrentSong(songs[0] ?? null);
+          setDuration(180); // 기본 3분
         }
       } catch (e) {
-        console.error("추천 불러오기 오류:", e)
+        console.error("추천 불러오기 오류:", e);
       }
-    }
+    };
 
-    fetchByPhoto()
+    fetchByPhoto();
     return () => {
-      mounted = false
-      if (timer) clearTimeout(timer)
-    }
-  }, [photoId])
+      mounted = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [photoId]);
 
   // === 3) 플레이 타이머 ===
   useEffect(() => {
-    if (!isPlaying) return
+    if (!isPlaying) return;
     const id = setInterval(() => {
-      setCurrentTime((t) => (t + 1 > duration ? duration : t + 1))
-    }, 1000)
-    return () => clearInterval(id)
-  }, [isPlaying, duration])
+      setCurrentTime((t) => (t + 1 > duration ? duration : t + 1));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [isPlaying, duration]);
 
   // === 4) 플레이어 컨트롤 ===
-  const togglePlay = () => setIsPlaying((p) => !p)
+  const togglePlay = () => setIsPlaying((p) => !p);
   const playNextSong = () => {
-    if (!currentSong || recommendations.length === 0) return
-    const currentIndex = recommendations.findIndex((song) => song.id === currentSong.id)
-    const nextIndex = (currentIndex + 1) % recommendations.length
-    setCurrentSong(recommendations[nextIndex])
-    setCurrentTime(0)
-  }
+    if (!currentSong || recommendations.length === 0) return;
+    const currentIndex = recommendations.findIndex((song) => song.id === currentSong.id);
+    const nextIndex = (currentIndex + 1) % recommendations.length;
+    setCurrentSong(recommendations[nextIndex]);
+    setCurrentTime(0);
+  };
   const playPreviousSong = () => {
-    if (!currentSong || recommendations.length === 0) return
-    const currentIndex = recommendations.findIndex((song) => song.id === currentSong.id)
-    const prevIndex = currentIndex === 0 ? recommendations.length - 1 : currentIndex - 1
-    setCurrentSong(recommendations[prevIndex])
-    setCurrentTime(0)
-  }
+    if (!currentSong || recommendations.length === 0) return;
+    const currentIndex = recommendations.findIndex((song) => song.id === currentSong.id);
+    const prevIndex = currentIndex === 0 ? recommendations.length - 1 : currentIndex - 1;
+    setCurrentSong(recommendations[prevIndex]);
+    setCurrentTime(0);
+  };
   const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60)
-    const secs = Math.floor(seconds % 60)
-    return `${mins}:${secs.toString().padStart(2, "0")}`
-  }
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
+  };
 
-  const nextView = () => setCurrentViewIndex((prev) => (prev + 1) % 3)
-  const prevView = () => setCurrentViewIndex((prev) => (prev - 1 + 3) % 3)
+  const nextView = () => setCurrentViewIndex((prev) => (prev + 1) % 3);
+  const prevView = () => setCurrentViewIndex((prev) => (prev - 1 + 3) % 3);
 
   // === 5) 이미지 src 안전 처리 ===
-  const safeImageSrc = useMemo(() => uploadedImage || "/placeholder.svg", [uploadedImage])
-  const safeBgStyle = useMemo(() => ({ backgroundImage: `url(${safeImageSrc})` }), [safeImageSrc])
+  const safeImageSrc = useMemo(() => uploadedImage || "/placeholder.svg", [uploadedImage]);
+  const safeBgStyle = useMemo(() => ({ backgroundImage: `url(${safeImageSrc})` }), [safeImageSrc]);
 
-  // ---------- 뷰들 ----------
+  /** ---------- 뷰 컴포넌트들 ---------- */
   const CDPlayerView = () => (
     <div className="flex-1 flex justify-center items-center">
       <div className="relative">
         <div className={`relative w-80 h-80 ${isPlaying ? "animate-spin" : ""}`} style={{ animationDuration: "4s" }}>
           <div className="w-full h-full rounded-full bg-gradient-to-br from-slate-200 via-slate-300 to-slate-400 shadow-2xl border-4 border-slate-300 relative">
-            {/* Outer glow effect */}
             <div className="absolute -inset-4 bg-gradient-to-r from-purple-400 via-pink-400 to-indigo-400 rounded-full opacity-20 blur-xl"></div>
             <div className="w-full h-full rounded-full overflow-hidden border-8 border-slate-800 relative z-10">
-              <Image
-                src={safeImageSrc}
-                alt="Current mood"
-                width={320}
-                height={320}
-                className="w-full h-full object-cover"
-              />
-              {/* Center hole */}
+              <Image src={safeImageSrc} alt="Current mood" width={320} height={320} className="w-full h-full object-cover" />
               <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-16 h-16 bg-slate-800 rounded-full shadow-inner flex items-center justify-center">
                 <div className="w-8 h-8 bg-slate-900 rounded-full"></div>
               </div>
@@ -215,29 +219,20 @@ export default function RecommendPage() {
         </div>
       </div>
     </div>
-  )
+  );
 
   const InstagramView = () => (
     <div className="flex-1 flex items-center justify-center w-full h-full">
       <div className="flex items-center justify-between w-full max-w-6xl mx-auto px-8">
-        {/* Left: Circular cropped uploaded image */}
         <div className="flex-shrink-0">
           <div className="relative">
             <div className="w-80 h-80 rounded-full overflow-hidden border-4 border-white/30 shadow-2xl">
-              <Image
-                src={safeImageSrc}
-                alt="Uploaded photo"
-                width={320}
-                height={320}
-                className="w-full h-full object-cover"
-              />
+              <Image src={safeImageSrc} alt="Uploaded photo" width={320} height={320} className="w-full h-full object-cover" />
             </div>
-            {/* Glow effect */}
             <div className="absolute -inset-4 bg-gradient-to-r from-purple-400 via-pink-400 to-indigo-400 rounded-full opacity-20 blur-xl"></div>
           </div>
         </div>
 
-        {/* Center: Music player controls */}
         <div className="flex-1 flex flex-col items-center justify-center mx-12">
           {currentSong && (
             <>
@@ -263,12 +258,7 @@ export default function RecommendPage() {
               </div>
 
               <div className="flex items-center justify-center space-x-10">
-                <Button
-                  variant="ghost"
-                  size="lg"
-                  onClick={playPreviousSong}
-                  className="text-white hover:bg-white/10 rounded-full p-5 transition-all duration-200 hover:scale-110"
-                >
+                <Button variant="ghost" size="lg" onClick={playPreviousSong} className="text-white hover:bg-white/10 rounded-full p-5 transition-all duration-200 hover:scale-110">
                   <SkipBack className="h-8 w-8" />
                 </Button>
 
@@ -281,12 +271,7 @@ export default function RecommendPage() {
                   {isPlaying ? <Pause className="h-10 w-10" /> : <Play className="h-10 w-10 ml-1" />}
                 </Button>
 
-                <Button
-                  variant="ghost"
-                  size="lg"
-                  onClick={playNextSong}
-                  className="text-white hover:bg-white/10 rounded-full p-5 transition-all duration-200 hover:scale-110"
-                >
+                <Button variant="ghost" size="lg" onClick={playNextSong} className="text-white hover:bg-white/10 rounded-full p-5 transition-all duration-200 hover:scale-110">
                   <SkipForward className="h-8 w-8" />
                 </Button>
               </div>
@@ -294,7 +279,6 @@ export default function RecommendPage() {
           )}
         </div>
 
-        {/* Right: Recommended playlist */}
         {recommendations.length > 0 && (
           <div className="flex-shrink-0 w-80">
             <div className="bg-black/30 backdrop-blur-md rounded-2xl p-6 border border-white/10 shadow-2xl">
@@ -304,8 +288,8 @@ export default function RecommendPage() {
                   <div
                     key={song.id}
                     onClick={() => {
-                      setCurrentSong(song)
-                      setCurrentTime(0)
+                      setCurrentSong(song);
+                      setCurrentTime(0);
                     }}
                     className={`flex items-center p-3 rounded-xl cursor-pointer transition-all duration-200 ${
                       currentSong?.id === song.id
@@ -336,7 +320,7 @@ export default function RecommendPage() {
         )}
       </div>
     </div>
-  )
+  );
 
   const DefaultView = () => (
     <div className="flex-1 flex justify-center">
@@ -351,7 +335,7 @@ export default function RecommendPage() {
         />
       </div>
     </div>
-  )
+  );
 
   const renderPlayerAndPlaylist = () => (
     <>
@@ -381,12 +365,7 @@ export default function RecommendPage() {
       )}
 
       <div className="flex items-center justify-center space-x-8 mb-8">
-        <Button
-          variant="ghost"
-          size="lg"
-          onClick={playPreviousSong}
-          className="text-white hover:bg-white/10 rounded-full p-4 transition-all duration-200 hover:scale-110"
-        >
+        <Button variant="ghost" size="lg" onClick={playPreviousSong} className="text-white hover:bg-white/10 rounded-full p-4 transition-all duration-200 hover:scale-110">
           <SkipBack className="h-6 w-6" />
         </Button>
 
@@ -399,12 +378,7 @@ export default function RecommendPage() {
           {isPlaying ? <Pause className="h-8 w-8" /> : <Play className="h-8 w-8 ml-1" />}
         </Button>
 
-        <Button
-          variant="ghost"
-          size="lg"
-          onClick={playNextSong}
-          className="text-white hover:bg-white/10 rounded-full p-4 transition-all duration-200 hover:scale-110"
-        >
+        <Button variant="ghost" size="lg" onClick={playNextSong} className="text-white hover:bg-white/10 rounded-full p-4 transition-all duration-200 hover:scale-110">
           <SkipForward className="h-6 w-6" />
         </Button>
       </div>
@@ -418,8 +392,8 @@ export default function RecommendPage() {
                 <div
                   key={song.id}
                   onClick={() => {
-                    setCurrentSong(song)
-                    setCurrentTime(0)
+                    setCurrentSong(song);
+                    setCurrentTime(0);
                   }}
                   className={`flex items-center p-3 rounded-xl cursor-pointer transition-all duration-200 hover:bg-white/10 ${
                     currentSong?.id === song.id
@@ -451,10 +425,10 @@ export default function RecommendPage() {
         </div>
       )}
     </>
-  )
+  );
 
   const renderCurrentView = () => {
-    const views = ["cd", "instagram", "default"] as const
+    const views = ["cd", "instagram", "default"] as const;
     switch (views[currentViewIndex]) {
       case "cd":
         return (
@@ -462,18 +436,18 @@ export default function RecommendPage() {
             <CDPlayerView />
             <div className="flex-1 ml-12 h-full flex flex-col justify-center">{renderPlayerAndPlaylist()}</div>
           </>
-        )
+        );
       case "instagram":
-        return <InstagramView />
+        return <InstagramView />;
       default:
         return (
           <>
             <DefaultView />
             <div className="flex-1 ml-12 h-full flex flex-col justify-center">{renderPlayerAndPlaylist()}</div>
           </>
-        )
+        );
     }
-  }
+  };
 
   return (
     <div className="fixed inset-0 z-50 bg-black bg-opacity-95 flex items-center justify-center">
@@ -506,5 +480,16 @@ export default function RecommendPage() {
         {renderCurrentView()}
       </div>
     </div>
-  )
+  );
+}
+
+/** ─────────────────────────────────────────────────────────
+ * 기본 export: Suspense 경계에서 내부 컴포넌트 렌더
+ * ───────────────────────────────────────────────────────── */
+export default function RecommendPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-white">로딩중…</div>}>
+      <RecommendInner />
+    </Suspense>
+  );
 }
