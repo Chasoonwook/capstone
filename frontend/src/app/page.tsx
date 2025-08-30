@@ -44,23 +44,6 @@ type Song = {
   image?: string
 }
 
-type BackendSong = {
-  id?: number | string
-  music_id?: number | string
-  title?: string
-  artist?: string
-  singer?: string
-  genre?: string
-  genre_code?: string
-  duration?: number | string
-}
-
-const isRecord = (v: unknown): v is Record<string, unknown> =>
-  !!v && typeof v === "object" && !Array.isArray(v)
-
-/* =========================
- * 더미 추천 (폴백용)
- * ========================= */
 const sampleRecommendations: Song[] = [
   { id: 1, title: "Sunset Dreams", artist: "Chill Vibes", genre: "팝/재즈", duration: "3:24", image: "/placeholder.svg?height=60&width=60" },
   { id: 2, title: "Morning Coffee", artist: "Acoustic Soul", genre: "휴식", duration: "4:12", image: "/placeholder.svg?height=60&width=60" },
@@ -70,6 +53,8 @@ const sampleRecommendations: Song[] = [
 
 export default function MusicRecommendationApp() {
   const [uploadedImage, setUploadedImage] = useState<string | null>(null)
+  const [uploadedPhotoId, setUploadedPhotoId] = useState<string | null>(null)
+
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedGenres, setSelectedGenres] = useState<string[]>([])
   const [showRecommendations, setShowRecommendations] = useState(false)
@@ -105,19 +90,6 @@ export default function MusicRecommendationApp() {
       avatar: "/placeholder.svg?height=32&width=32",
     })
     setIsLoggedIn(true)
-
-    ;(async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/users/me/onboarding?user_id=${uid}`, { cache: "no-store" })
-        if (!res.ok) throw new Error("onboarding check failed")
-        const data: unknown = await res.json()
-        if (isRecord(data) && !data.genre_setup_complete) {
-          router.replace("/onboarding/genres")
-        }
-      } catch (e) {
-        console.error(e)
-      }
-    })()
   }, [router])
 
   /* -------------------------
@@ -132,14 +104,56 @@ export default function MusicRecommendationApp() {
   }, [isPlaying, duration])
 
   /* -------------------------
-   * 이미지 업로드(미리보기)
+   * 업로드 -> 백엔드 저장
    * ------------------------- */
-  const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+  async function uploadPhotoToBackend(file: File): Promise<{ photoId: string } | null> {
+    const form = new FormData()
+    // ⚠️ 백엔드 multer.single("photo") 이므로 키 이름은 "photo"
+    form.append("photo", file)
+    form.append("filename", file.name)
+
+    // 기본 업로드 엔드포인트
+    const url = `${API_BASE}/api/photos/upload`
+
+    try {
+      const res = await fetch(url, { method: "POST", body: form })
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "")
+        console.error("[upload] 실패:", res.status, txt)
+        return null
+      }
+      const json = (await res.json()) as { photo_id?: string | number }
+      const photoId = json?.photo_id != null ? String(json.photo_id) : null
+      if (!photoId) {
+        console.error("[upload] 응답에 photo_id 없음:", json)
+        return null
+      }
+      return { photoId }
+    } catch (e) {
+      console.error("[upload] 요청 오류:", e)
+      return null
+    }
+  }
+
+  /* -------------------------
+   * 이미지 업로드(미리보기 + DB 저장)
+   * ------------------------- */
+  const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
-    if (file) {
-      const reader = new FileReader()
-      reader.onload = (e) => setUploadedImage(e.target?.result as string)
-      reader.readAsDataURL(file)
+    if (!file) return
+
+    // 미리보기
+    const reader = new FileReader()
+    reader.onload = (e) => setUploadedImage(e.target?.result as string)
+    reader.readAsDataURL(file)
+
+    // DB 저장
+    const result = await uploadPhotoToBackend(file)
+    if (result?.photoId) {
+      setUploadedPhotoId(result.photoId)
+      console.log("[upload] 저장 성공 photo_id =", result.photoId)
+    } else {
+      console.warn("[upload] 저장 실패")
     }
   }
 
@@ -151,75 +165,15 @@ export default function MusicRecommendationApp() {
   }
 
   /* -------------------------
-   * 추천 호출 (여러 후보 엔드포인트 시도)
+   * 추천 호출 (현재는 더미만 사용)
    * ------------------------- */
   const generateRecommendations = async () => {
     setShowRecommendations(true)
+    setRecommendations(sampleRecommendations)
+    setCurrentSong(sampleRecommendations[0])
+    setDuration(180)
 
-    const candidates = [
-      `${API_BASE}/api/recommendations?limit=20&boost=0.15&min_pref=2&max_pref=3`,
-      `${API_BASE}/api/recommendations?limit=20`,
-      `${API_BASE}/api/recommendations`,
-      `${API_BASE}/api/recommend`,
-      `${API_BASE}/recommendations`,
-    ]
-
-    let loaded = false
-
-    for (const url of candidates) {
-      try {
-        const res = await fetch(url, { cache: "no-store" })
-        if (!res.ok) {
-          if (res.status !== 404) {
-            console.warn("[recommend] 실패", res.status, await res.text())
-          }
-          continue
-        }
-
-        const json: unknown = await res.json()
-        const rawList: unknown =
-          (isRecord(json) && Array.isArray(json.items)) ? json.items :
-          (Array.isArray(json) ? json : [])
-
-        if (!Array.isArray(rawList)) continue
-
-        const items: Song[] = rawList.map((raw, idx) => {
-          const it: BackendSong = isRecord(raw) ? (raw as BackendSong) : {}
-
-          const dur =
-            typeof it.duration === "number"
-              ? `${Math.floor(it.duration / 60)}:${String(Math.floor(it.duration % 60)).padStart(2, "0")}`
-              : typeof it.duration === "string"
-              ? it.duration
-              : `${2 + Math.floor(Math.random() * 2)}:${String(30 + Math.floor(Math.random() * 30)).padStart(2, "0")}`
-
-        return {
-            id: it.id ?? it.music_id ?? idx,
-            title: it.title ?? "Unknown Title",
-            artist: it.artist ?? it.singer ?? "Unknown Artist",
-            genre: it.genre ?? it.genre_code ?? "UNKNOWN",
-            duration: dur,
-            image: "/placeholder.svg?height=60&width=60",
-          }
-        })
-
-        if (items.length > 0) {
-          setRecommendations(items)
-          setCurrentSong(items[0])
-          setDuration(180)
-          loaded = true
-          break
-        }
-      } catch (e) {
-        console.warn("[recommend] 요청 오류", e)
-      }
-    }
-
-    if (!loaded) {
-      // 후보 전부 실패 → 더미 유지
-      console.warn("[recommend] 모든 후보 엔드포인트 실패. 더미 사용")
-    }
-
+    // 업로드 성공했으면 몰입 뷰로 진입
     if (uploadedImage) {
       setTimeout(() => {
         setShowImmersiveView(true)
@@ -468,9 +422,16 @@ export default function MusicRecommendationApp() {
               </div>
             </label>
           </div>
+
+          {/* 업로드 결과 알림 */}
+          {uploadedPhotoId && (
+            <p className="text-sm text-gray-600">
+              업로드 완료! photo_id: <span className="font-mono">{uploadedPhotoId}</span> (DB 저장됨)
+            </p>
+          )}
         </div>
 
-        {/* 검색창 */}
+        {/* 검색창 (UX용) */}
         <div className="max-w-2xl mx-auto mb-8 relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 h-5 w-5" />
           <Input
@@ -511,7 +472,7 @@ export default function MusicRecommendationApp() {
           </Button>
         </div>
 
-        {/* 추천 리스트 */}
+        {/* 추천 리스트 (현재는 더미) */}
         {showRecommendations && (
           <div className="mt-12">
             <h3 className="text-2xl font-bold mb-6 text-center text-gray-900">당신을 위한 오늘의 추천 음악</h3>
