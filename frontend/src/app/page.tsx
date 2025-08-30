@@ -1,3 +1,4 @@
+// src/app/page.tsx
 "use client"
 
 import type React from "react"
@@ -29,32 +30,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Settings, LogOut, UserCircle } from "lucide-react"
 import { useRouter } from "next/navigation"
-import { API_BASE, authHeaders } from "@/lib/api"
-
-/* =========================
- * Headers 유틸 (no any)
- * ========================= */
-type MaybeAuthHeaders = HeadersInit | (() => HeadersInit)
-
-const getAuthHeaders = (): HeadersInit => {
-  const h = authHeaders as unknown as MaybeAuthHeaders
-  return typeof h === "function" ? (h as () => HeadersInit)() : (h ?? {})
-}
-
-const toObject = (h?: HeadersInit): Record<string, string> => {
-  if (!h) return {}
-  if (h instanceof Headers) {
-    const obj: Record<string, string> = {}
-    h.forEach((v, k) => (obj[k] = v))
-    return obj
-  }
-  return h as Record<string, string>
-}
-
-const makeHeaders = (extra?: Record<string, string>): HeadersInit => ({
-  ...toObject(getAuthHeaders()),
-  ...(extra ?? {}),
-})
+import { API_BASE } from "@/lib/api"
 
 /* =========================
  * 타입들
@@ -83,7 +59,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === "object" && !Array.isArray(v)
 
 /* =========================
- * 더미 추천
+ * 더미 추천 (폴백용)
  * ========================= */
 const sampleRecommendations: Song[] = [
   { id: 1, title: "Sunset Dreams", artist: "Chill Vibes", genre: "팝/재즈", duration: "3:24", image: "/placeholder.svg?height=60&width=60" },
@@ -156,7 +132,7 @@ export default function MusicRecommendationApp() {
   }, [isPlaying, duration])
 
   /* -------------------------
-   * 이미지 업로드(프론트 미리보기)
+   * 이미지 업로드(미리보기)
    * ------------------------- */
   const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -175,22 +151,39 @@ export default function MusicRecommendationApp() {
   }
 
   /* -------------------------
-   * 추천 호출
+   * 추천 호출 (여러 후보 엔드포인트 시도)
    * ------------------------- */
   const generateRecommendations = async () => {
     setShowRecommendations(true)
 
-    try {
-      const res = await fetch(
-        `${API_BASE}/api/recommendations?limit=20&boost=0.15&min_pref=2&max_pref=3`,
-        { headers: makeHeaders() }
-      )
-      if (res.ok) {
-        const json: unknown = await res.json()
-        const rawList: unknown = (isRecord(json) && Array.isArray(json.items)) ? json.items : Array.isArray(json) ? json : []
-        const list = Array.isArray(rawList) ? rawList : []
+    const candidates = [
+      `${API_BASE}/api/recommendations?limit=20&boost=0.15&min_pref=2&max_pref=3`,
+      `${API_BASE}/api/recommendations?limit=20`,
+      `${API_BASE}/api/recommendations`,
+      `${API_BASE}/api/recommend`,
+      `${API_BASE}/recommendations`,
+    ]
 
-        const items: Song[] = list.map((raw, idx) => {
+    let loaded = false
+
+    for (const url of candidates) {
+      try {
+        const res = await fetch(url, { cache: "no-store" })
+        if (!res.ok) {
+          if (res.status !== 404) {
+            console.warn("[recommend] 실패", res.status, await res.text())
+          }
+          continue
+        }
+
+        const json: unknown = await res.json()
+        const rawList: unknown =
+          (isRecord(json) && Array.isArray(json.items)) ? json.items :
+          (Array.isArray(json) ? json : [])
+
+        if (!Array.isArray(rawList)) continue
+
+        const items: Song[] = rawList.map((raw, idx) => {
           const it: BackendSong = isRecord(raw) ? (raw as BackendSong) : {}
 
           const dur =
@@ -200,7 +193,7 @@ export default function MusicRecommendationApp() {
               ? it.duration
               : `${2 + Math.floor(Math.random() * 2)}:${String(30 + Math.floor(Math.random() * 30)).padStart(2, "0")}`
 
-          return {
+        return {
             id: it.id ?? it.music_id ?? idx,
             title: it.title ?? "Unknown Title",
             artist: it.artist ?? it.singer ?? "Unknown Artist",
@@ -214,10 +207,17 @@ export default function MusicRecommendationApp() {
           setRecommendations(items)
           setCurrentSong(items[0])
           setDuration(180)
+          loaded = true
+          break
         }
+      } catch (e) {
+        console.warn("[recommend] 요청 오류", e)
       }
-    } catch (e) {
-      console.warn("recommendations fallback to sample:", e)
+    }
+
+    if (!loaded) {
+      // 후보 전부 실패 → 더미 유지
+      console.warn("[recommend] 모든 후보 엔드포인트 실패. 더미 사용")
     }
 
     if (uploadedImage) {
