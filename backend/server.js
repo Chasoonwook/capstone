@@ -20,22 +20,17 @@ const envAllow = (process.env.CORS_ORIGIN || "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
+const corsOrigins = envAllow.length ? envAllow : ["http://localhost:3000"];
+app.use(cors({ origin: corsOrigins, credentials: true }));
 
-// 예: CORS_ORIGIN=http://localhost:3000,https://capstone-front-tau.vercel.app
-const corsOrigins = envAllow.length
-  ? envAllow
-  : ["http://localhost:3000", "https://capstone-front-tau.vercel.app"];
+/* ── Body Parser ── */
+app.use(express.json({ limit: "20mb" }));
+// app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 
-app.use(cors({
-  origin: (origin, cb) => {
-    // 서버-서버 호출(origin 없음)도 허용
-    if (!origin || corsOrigins.includes(origin)) return cb(null, true);
-    cb(new Error("Not allowed by CORS"));
-  },
-  credentials: true,
-  methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
-  allowedHeaders: ["Content-Type","Authorization"],
-}));
+/* ── 루트/헬스체크 ── */
+app.get("/", (_req, res) => {
+  res.send("정상작동");
+});
 
 app.get("/health", async (_req, res) => {
   try {
@@ -66,7 +61,7 @@ const musicRoutes = safeRequire("./routes/musics");
 const recommendationRoutes = safeRequire("./routes/recommendations");
 const imageRoutes = safeRequire("./routes/images");
 const aiRoutes = safeRequire("./routes/ai");
-const authRoutes = require("./routes/auth");
+const authRoutes = safeRequire("./routes/auth");
 const onboardingRoutes = safeRequire("./routes/onboarding");
 
 if (userRoutes) app.use("/api/users", userRoutes);

@@ -23,7 +23,7 @@ router.get('/users/me/onboarding', async (req, res) => {
          COALESCE(genre_setup_complete, false) AS genre_setup_complete,
          COALESCE(preferred_genres, '[]'::jsonb) AS preferred_genres
        FROM users
-       WHERE id = $1`,                  // ✅ PK가 id인 테이블 기준으로 수정
+       WHERE user_id = $1`,
       [userId]
     );
 
@@ -50,7 +50,7 @@ router.put('/users/me/genres', async (req, res) => {
 
   try {
     await pool.query(
-      `UPDATE users SET preferred_genres = $1::jsonb WHERE id = $2`, // ✅ id로 수정
+      `UPDATE users SET preferred_genres = $1::jsonb WHERE user_id = $2`,
       [JSON.stringify(genres), userId]
     );
     res.json({ ok: true });
@@ -67,7 +67,7 @@ router.put('/users/me/onboarding', async (req, res) => {
   const { genre_setup_complete } = req.body || {};
   try {
     await pool.query(
-      `UPDATE users SET genre_setup_complete = $1 WHERE id = $2`, // ✅ id로 수정
+      `UPDATE users SET genre_setup_complete = $1 WHERE user_id = $2`,
       [!!genre_setup_complete, userId]
     );
     res.json({ ok: true });
@@ -76,5 +76,6 @@ router.put('/users/me/onboarding', async (req, res) => {
     res.status(500).json({ error: 'failed to set onboarding flag' });
   }
 });
+
 
 module.exports = router;

@@ -1,81 +1,81 @@
 // Backend/routes/auth.js
-const express = require("express");
+const express = require('express');
 const router = express.Router();
-const pool = require("../db");
-const bcrypt = require("bcryptjs");
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+const pool = require('../db');
 
-// 허용 성별(남성/여성만)
-const ALLOWED_GENDERS = new Set(["남성", "여성"]);
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
+const JWT_EXPIRES_IN = '7d';
 
-const tidy = (v) => (typeof v === "string" ? v.trim() : v ?? null);
-const isEmail = (v) =>
-  typeof v === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
+/**
+ * POST /api/auth/register
+ * body: { name, email, password, gender?, phone? }
+ */
+router.post('/register', async (req, res) => {
+  const { name, email, password, gender, phone } = req.body || {};
+  if (!name || !email || !password) {
+    return res.status(400).json({ error: 'name, email, password are required' });
+  }
 
-// 헬스 체크
-router.get("/ping", (_req, res) => res.json({ ok: true }));
-
-// 회원가입
-router.post("/register", async (req, res) => {
   try {
-    // 0) 입력 정리
-    let { name, gender, email, phone, password } = req.body || {};
-    name = tidy(name);
-    gender = tidy(gender);
-    email = tidy(email);
-    phone = tidy(phone);
-    password = tidy(password);
-
-    // 1) 필수값/형식 검증
-    if (!name || !gender || !email || !password) {
-      return res.status(400).json({ error: "name, gender, email, password는 필수" });
-    }
-    if (!ALLOWED_GENDERS.has(gender)) {
-      return res.status(400).json({ error: "성별은 남성/여성만 가능합니다." });
-    }
-    if (!isEmail(email)) {
-      return res.status(400).json({ error: "이메일 형식이 올바르지 않습니다." });
-    }
-    if (password.length < 6) {
-      return res.status(400).json({ error: "비밀번호는 6자 이상이어야 합니다." });
+    // 이메일 중복 체크
+    const { rows: exist } = await pool.query(
+      'SELECT 1 FROM users WHERE email=$1 LIMIT 1',
+      [email]
+    );
+    if (exist.length) {
+      return res.status(409).json({ error: 'Email already exists' });
     }
 
-    // 2) 이메일 중복 사전 차단
-    const dup = await pool.query("SELECT 1 FROM users WHERE email = $1 LIMIT 1", [email]);
-    if (dup.rowCount > 0) {
-      return res.status(409).json({ error: "이미 등록된 이메일입니다." });
-    }
-
-    // 3) 비밀번호 해시
     const hash = await bcrypt.hash(password, 10);
 
-    // 4) INSERT (스키마: password 컬럼 사용)
-    const insertSql = `
-      INSERT INTO users
-        (name, gender, email, phone, password, created_at, updated_at, onboarding_done, genre_setup_complete, preferred_genres)
-      VALUES ($1, $2, $3, $4, $5, NOW(), NOW(), FALSE, FALSE, '[]')
-      RETURNING user_id, name, gender, email, phone, created_at
-    `;
-    const { rows } = await pool.query(insertSql, [name, gender, email, phone ?? null, hash]);
+    // ⚠️ users 테이블에 없는 컬럼을 넣으면 500이 납니다.
+    // gender/phone 컬럼이 없으면 아래 INSERT에서 제외하세요.
+    const { rows } = await pool.query(
+      `INSERT INTO users (name, email, password, gender, phone, genre_setup_complete)
+       VALUES ($1,$2,$3,$4,$5,false)
+       RETURNING user_id AS id, name, email`,
+      [name, email, hash, gender ?? null, phone ?? null]
+    );
 
-    return res.status(201).json({ user: rows[0] });
+    const user = rows[0];
+    const token = jwt.sign({ sub: user.id, email: user.email }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+
+    return res.status(201).json({ token, user, onboarding_done: false });
   } catch (err) {
-    // 서버 로그에 원인 남기기
-    console.error("[REGISTER] failed", {
-      message: err.message,
-      code: err.code,
-      detail: err.detail,
-      table: err.table,
-      constraint: err.constraint,
-      stack: err.stack,
-    });
+    console.error('Register error:', err);
+    return res.status(500).json({ error: 'Register failed' });
+  }
+});
 
-    // 대표적인 Postgres 에러 매핑
-    if (err.code === "23505") return res.status(409).json({ error: "이미 등록된 이메일입니다." }); // unique_violation
-    if (err.code === "23502") return res.status(400).json({ error: "DB NOT NULL 제약 위반 값이 있습니다." });
-    if (err.code === "42703") return res.status(500).json({ error: "users 테이블 컬럼명이 일치하지 않습니다." });
-    if (err.code === "42P01") return res.status(500).json({ error: "테이블(users)을 찾을 수 없습니다." });
+/**
+ * POST /api/auth/login
+ * body: { email, password }
+ */
+router.post('/login', async (req, res) => {
+  const { email, password } = req.body || {};
+  if (!email || !password) {
+    return res.status(400).json({ error: 'email, password required' });
+  }
+  try {
+    const { rows } = await pool.query(
+      `SELECT user_id AS id, name, email, password, COALESCE(genre_setup_complete,false) AS done
+       FROM users WHERE email=$1 LIMIT 1`,
+      [email]
+    );
+    if (!rows.length) return res.status(401).json({ error: 'Invalid email or password' });
 
-    return res.status(500).json({ error: "Register failed" });
+    const ok = await bcrypt.compare(password, rows[0].password);
+    if (!ok) return res.status(401).json({ error: 'Invalid email or password' });
+
+    const user = { id: rows[0].id, name: rows[0].name, email: rows[0].email };
+    const token = jwt.sign({ sub: user.id, email: user.email }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+
+    return res.json({ token, user, onboarding_done: rows[0].done });
+  } catch (err) {
+    console.error('Login error:', err);
+    return res.status(500).json({ error: 'Login failed' });
   }
 });
 
