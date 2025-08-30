@@ -112,9 +112,7 @@ export default function MusicRecommendationApp() {
     form.append("photo", file)
     form.append("filename", file.name)
 
-    // 기본 업로드 엔드포인트
     const url = `${API_BASE}/api/photos/upload`
-
     try {
       const res = await fetch(url, { method: "POST", body: form })
       if (!res.ok) {
@@ -173,7 +171,6 @@ export default function MusicRecommendationApp() {
     setCurrentSong(sampleRecommendations[0])
     setDuration(180)
 
-    // 업로드 성공했으면 몰입 뷰로 진입
     if (uploadedImage) {
       setTimeout(() => {
         setShowImmersiveView(true)
@@ -186,27 +183,23 @@ export default function MusicRecommendationApp() {
    * 플레이 컨트롤
    * ------------------------- */
   const togglePlay = () => setIsPlaying((p) => !p)
-
   const playNextSong = () => {
     const currentIndex = recommendations.findIndex((song) => song.id === currentSong.id)
     const nextIndex = (currentIndex + 1) % recommendations.length
     setCurrentSong(recommendations[nextIndex])
     setCurrentTime(0)
   }
-
   const playPreviousSong = () => {
     const currentIndex = recommendations.findIndex((song) => song.id === currentSong.id)
     const prevIndex = currentIndex === 0 ? recommendations.length - 1 : currentIndex - 1
     setCurrentSong(recommendations[prevIndex])
     setCurrentTime(0)
   }
-
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
     const secs = Math.floor(seconds % 60)
     return `${mins}:${secs.toString().padStart(2, "0")}`
   }
-
   const closeImmersiveView = () => {
     setShowImmersiveView(false)
     setIsPlaying(false)
@@ -216,7 +209,7 @@ export default function MusicRecommendationApp() {
   const prevView = () => setCurrentViewIndex((prev) => (prev - 1 + 3) % 3)
 
   /* -------------------------
-   * 뷰
+   * 플레이어 뷰들
    * ------------------------- */
   const CDPlayerView = () => (
     <div className="flex-1 flex justify-center items-center">
@@ -330,28 +323,6 @@ export default function MusicRecommendationApp() {
     </>
   )
 
-  const renderCurrentView = () => {
-    const views = ["cd", "instagram", "default"] as const
-    switch (views[currentViewIndex]) {
-      case "cd":
-        return (
-          <>
-            <CDPlayerView />
-            <div className="flex-1 ml-12 h-full flex flex-col justify-center">{renderPlayerAndPlaylist()}</div>
-          </>
-        )
-      case "instagram":
-        return <InstagramView />
-      default:
-        return (
-          <>
-            <DefaultView />
-            <div className="flex-1 ml-12 h-full flex flex-col justify-center">{renderPlayerAndPlaylist()}</div>
-          </>
-        )
-    }
-  }
-
   /* -------------------------
    * JSX 반환
    * ------------------------- */
@@ -441,6 +412,15 @@ export default function MusicRecommendationApp() {
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-10 py-3 text-lg border-2 border-purple-200 focus:border-purple-400 rounded-full bg-white"
           />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery("")}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              aria-label="검색어 지우기"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          )}
         </div>
 
         {/* 장르 선택(UX용) */}
