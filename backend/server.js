@@ -3,25 +3,42 @@ const express = require("express");
 const cors = require("cors");
 require("dotenv").config({ debug: true });
 const pool = require("./db");
-const multer = require("multer"); // 파일 업로드용
-const crypto = require("crypto"); // temp_name 해시용
+const multer = require("multer");
+const crypto = require("crypto");
 
 const app = express();
-
-//env route resot
-
 
 /* ── Proxy/HTTPS 환경 ── */
 app.set("trust proxy", 1);
 
 /* ── CORS ──
-   우선순위: .env의 CORS_ORIGIN(콤마 구분) → 기본 http://localhost:3000 */
-const envAllow = (process.env.CORS_ORIGIN || "")
+   우선순위: .env의 CORS_ORIGIN(콤마로 여러 개) → 기본값(로컬 + 배포 프론트)
+   예: CORS_ORIGIN=https://capstone-front-tau.vercel.app,http://localhost:3000
+*/
+const raw = process.env.CORS_ORIGIN || "";
+const envAllow = raw
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
-const corsOrigins = envAllow.length ? envAllow : ["http://localhost:3000"];
-app.use(cors({ origin: corsOrigins, credentials: true }));
+const defaultAllow = [
+  "http://localhost:3000",
+  "https://capstone-front-tau.vercel.app",
+];
+const allowList = envAllow.length ? envAllow : defaultAllow;
+
+app.use(
+  cors({
+    origin(origin, cb) {
+      // 서버-서버 호출(curl/healthcheck) 등 Origin 없는 요청 허용
+      if (!origin) return cb(null, true);
+      if (allowList.includes(origin)) return cb(null, true);
+      return cb(new Error(`Not allowed by CORS: ${origin}`));
+    },
+    credentials: true,
+    optionsSuccessStatus: 204,
+  })
+);
+console.log("[CORS allow list]", allowList);
 
 /* ── Body Parser ── */
 app.use(express.json({ limit: "20mb" }));
@@ -42,16 +59,19 @@ app.get("/health", async (_req, res) => {
   }
 });
 
-/* ── 라우터 로더(파일 없으면 건너뜀) ── */
+/* ── 라우터 로더(파일 없으면 건너뜀 + 로딩 로그) ── */
 function safeRequire(path) {
   try {
-    return require(path);
+    const mod = require(path);
+    console.log(`[router] loaded: ${path}`);
+    return mod;
   } catch (e) {
     if (e.code === "MODULE_NOT_FOUND") {
       console.warn(`[router] skip: ${path} (not found)`);
       return null;
     }
-    throw e;
+    console.error(`[router] error: ${path}`, e);
+    return null;
   }
 }
 
@@ -74,34 +94,20 @@ if (authRoutes) app.use("/api/auth", authRoutes);
 if (onboardingRoutes) app.use("/api", onboardingRoutes);
 
 /* ────────────────────────────────────────────────────────────────
- * Backup/기본 구현 핸들러 (routes에 동일 경로가 있으면 그쪽이 우선)
- *  - [1] 업로드 → DB photos 저장 + photo_id 반환
- *  - [3] AI 결과 수신 → photo_analysis 저장 (mood_mapping 보정)
- *  - [3] 대기목록/바이너리 제공
- *  - [4] 사진기반 추천 7+3
+ * 업로드/AI/추천 기본 핸들러
  * ──────────────────────────────────────────────────────────────── */
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
 });
 
-/** [1] 업로드: POST /api/photos/upload
- *  - formData.append("photo", file)
- *  - DB: photos(temp_name, original_name, mime_type, content, created_at)
- *  - 응답: { photo_id }
- */
-// server.js (일부만 수정)
+/** [1] 업로드: POST /api/photos/upload */
 app.post("/api/photos/upload", upload.single("photo"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "no file" });
 
     const { buffer, originalname, mimetype } = req.file;
-
-    // 기존 해시 → 교체
-    // const tempName = crypto.createHash("sha256").update(buffer).digest("hex").slice(0, 8);
-
-    // 새로운 UUID 기반 temp_name
-    const tempName = crypto.randomUUID();  
+    const tempName = crypto.randomUUID();
 
     const { rows } = await pool.query(
       `INSERT INTO photos (temp_name, original_name, mime_type, content, created_at)
@@ -117,11 +123,7 @@ app.post("/api/photos/upload", upload.single("photo"), async (req, res) => {
   }
 });
 
-
-
-/** [3] 미분석 목록: GET /api/photos/pending
- *  - photo_analysis에 아직 없는 사진들 50개
- */
+/** [2] 미분석 목록: GET /api/photos/pending */
 app.get("/api/photos/pending", async (_req, res) => {
   try {
     const { rows } = await pool.query(
@@ -139,9 +141,7 @@ app.get("/api/photos/pending", async (_req, res) => {
   }
 });
 
-/** [3] 바이너리 제공: GET /api/photos/:photoId/binary
- *  - DB bytea → 바이너리 직접 응답
- */
+/** [3] 바이너리 제공: GET /api/photos/:photoId/binary */
 app.get("/api/photos/:photoId/binary", async (req, res) => {
   try {
     const { photoId } = req.params;
@@ -158,10 +158,7 @@ app.get("/api/photos/:photoId/binary", async (req, res) => {
   }
 });
 
-/** [3] AI 결과 수신: POST /api/ai/results
- *  body: { photo_id, user_id?, time_label?, background?, emotion?, main_mood?, sub_mood? }
- *  - mood_mapping으로 보정 후 photo_analysis 멱등 저장
- */
+/** [4] AI 결과 수신: POST /api/ai/results */
 app.post("/api/ai/results", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -179,9 +176,8 @@ app.post("/api/ai/results", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // 무드 보정
     let finalMain = main_mood;
-    let finalSub  = sub_mood;
+    let finalSub = sub_mood;
 
     if (!finalMain) {
       const { rows } = await client.query(
@@ -195,11 +191,10 @@ app.post("/api/ai/results", async (req, res) => {
       );
       if (rows[0]) {
         finalMain = rows[0].main_mood;
-        finalSub  = rows[0].sub_mood;
+        finalSub = rows[0].sub_mood;
       }
     }
 
-    // 멱등 저장
     await client.query(`DELETE FROM photo_analysis WHERE photo_id = $1`, [photo_id]);
     await client.query(
       `INSERT INTO photo_analysis
@@ -219,10 +214,7 @@ app.post("/api/ai/results", async (req, res) => {
   }
 });
 
-/** [4] 사진기반 추천: GET /api/recommendations/by-photo/:photoId
- *  - photo_analysis에서 main/sub 읽고
- *  - music에서 메인 7 + 서브 3(중복제거) 반환
- */
+/** [5] 사진기반 추천: GET /api/recommendations/by-photo/:photoId */
 app.get("/api/recommendations/by-photo/:photoId", async (req, res) => {
   const { photoId } = req.params;
   try {
@@ -234,7 +226,6 @@ app.get("/api/recommendations/by-photo/:photoId", async (req, res) => {
       [photoId]
     );
 
-    // 아직 분석이 안 됐으면 202 Accepted로 "대기중" 신호
     if (aRows.length === 0) {
       return res.status(202).json({ pending: true, photo_id: Number(photoId) });
     }
@@ -279,7 +270,6 @@ app.get("/api/recommendations/by-photo/:photoId", async (req, res) => {
     res.status(500).json({ error: "recommendation failed" });
   }
 });
-
 
 /* ── 404 JSON (HTML 대신 JSON으로 통일) ── */
 app.use((req, res, next) => {
