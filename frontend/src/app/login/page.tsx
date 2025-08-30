@@ -10,7 +10,7 @@ import { Separator } from "@/components/ui/separator";
 import { Music, Eye, EyeOff, Mail, Lock } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { API_BASE } from "@/lib/api";
+import { API_BASE, authHeaders } from "@/lib/api"; // ✅ authHeaders 사용(없으면 지워도 동작)
 
 type LoginForm = {
   email: string;
@@ -26,8 +26,8 @@ type LoginUser = {
 type LoginResponse = {
   token: string;
   user: LoginUser;
-  onboarding_done?: boolean;          // 백엔드가 주는 보조 플래그
-  genre_setup_complete?: boolean;     // ✅ 선호장르 설정 완료 플래그(우선 사용)
+  onboarding_done?: boolean;
+  genre_setup_complete?: boolean;
   [key: string]: unknown;
 };
 
@@ -55,6 +55,7 @@ export default function LoginPage() {
     setError(null);
 
     try {
+      // 1) 로그인
       const res = await fetch(`${API_BASE}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -74,27 +75,43 @@ export default function LoginPage() {
       }
 
       const data = (await res.json()) as LoginResponse;
-
       if (!data?.token || !data?.user) {
         throw new Error("로그인 응답 형식이 올바르지 않습니다.");
       }
 
       const { token, user } = data;
-      const genreDone = Boolean(
-        // 백엔드 구현에 따라 둘 중 하나를 우선 사용
-        data.genre_setup_complete ?? data.onboarding_done
-      );
 
-      // 세션 저장
+      // 2) 세션 저장
+      const uid = String(user.id);
       localStorage.setItem("token", token);
-      localStorage.setItem("uid", String(user.id));
+      localStorage.setItem("uid", uid);
       localStorage.setItem("email", user.email);
       localStorage.setItem("name", user.name);
 
-      // 온보딩 쿠키 (선택)
+      // 3) 로그인 응답만 믿지 말고, 항상 서버의 최신 상태 재조회
+      let genreDone = false;
+      try {
+        const meRes = await fetch(`${API_BASE}/api/users/me`, {
+          headers: { "X-User-Id": uid, ...(authHeaders?.() as HeadersInit) },
+          cache: "no-store", // ✅ 반드시 최신값
+        });
+        if (meRes.ok) {
+          const me = await meRes.json();
+          genreDone = Boolean(me?.genre_setup_complete);
+        }
+      } catch {
+        // 무시하고 아래 폴백으로
+      }
+
+      // 4) 그래도 못 받으면 로그인 응답의 보조 플래그로 폴백
+      if (!genreDone) {
+        genreDone = Boolean(data.genre_setup_complete ?? data.onboarding_done);
+      }
+
+      // 5) (선택) 쿠키
       document.cookie = `onboardingDone=${genreDone ? "1" : "0"}; path=/; max-age=31536000`;
 
-      // ✅ 선호장르 완료면 홈, 아니면 장르 선택
+      // 6) 최종 라우팅
       router.replace(genreDone ? "/" : "/onboarding/genres");
     } catch (err: unknown) {
       const msg =

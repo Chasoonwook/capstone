@@ -23,7 +23,7 @@ export default function OnboardingGenresPage() {
   const router = useRouter();
   const [selected, setSelected] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
-  const [loading, setLoading] = useState(true);   // ✅ 초기 로딩
+  const [loading, setLoading] = useState(true);
 
   // 로그인/초기값 프리필 + 완료시 건너뛰기
   useEffect(() => {
@@ -36,7 +36,7 @@ export default function OnboardingGenresPage() {
     (async () => {
       try {
         const r = await fetch(`${API_BASE}/api/users/me`, {
-          headers: { "X-User-Id": uid, ...(authHeaders() as HeadersInit) },
+          headers: { "X-User-Id": uid, ...(authHeaders?.() as HeadersInit) },
           cache: "no-store",
         });
         if (r.status === 401) {
@@ -76,7 +76,7 @@ export default function OnboardingGenresPage() {
 
       const r1 = await fetch(`${API_BASE}/api/users/me/genres`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json", "X-User-Id": uid, ...(authHeaders() as HeadersInit) },
+        headers: { "Content-Type": "application/json", "X-User-Id": uid, ...(authHeaders?.() as HeadersInit) },
         body: JSON.stringify({ genres: selected }),
       });
       if (r1.status === 401) return router.replace("/login");
@@ -84,7 +84,7 @@ export default function OnboardingGenresPage() {
 
       const r2 = await fetch(`${API_BASE}/api/users/me/onboarding`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json", "X-User-Id": uid, ...(authHeaders() as HeadersInit) },
+        headers: { "Content-Type": "application/json", "X-User-Id": uid, ...(authHeaders?.() as HeadersInit) },
         body: JSON.stringify({ genre_setup_complete: true }),
       });
       if (!r2.ok) return alert((await r2.text().catch(() => "")) || "온보딩 완료 처리 실패");
