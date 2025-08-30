@@ -28,9 +28,16 @@ type LoginResponse = {
   token: string
   user: LoginUser
   onboarding_done: boolean
-  // 백엔드가 추가 정보 주더라도 에러 안 나게 여유 필드 허용
   [key: string]: unknown
 }
+
+/** 안전한 객체 판별 */
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  !!v && typeof v === "object" && !Array.isArray(v)
+
+/** { error: string } 형태인지 판별 */
+const hasErrorMessage = (v: unknown): v is { error: string } =>
+  isRecord(v) && typeof v.error === "string"
 
 export default function LoginPage() {
   const [formData, setFormData] = useState<LoginForm>({ email: "", password: "" })
@@ -58,22 +65,18 @@ export default function LoginPage() {
       })
 
       if (!res.ok) {
-        // 응답이 JSON이 아닐 수도 있으니 안전 파싱
         let msg = "이메일 또는 비밀번호가 올바르지 않습니다."
         try {
           const j: unknown = await res.json()
-          if (j && typeof j === "object" && "error" in j && typeof (j as any).error === "string") {
-            msg = (j as any).error as string
-          }
+          if (hasErrorMessage(j)) msg = j.error
         } catch {
-          /* ignore json parse error */
+          /* ignore */
         }
         throw new Error(msg)
       }
 
       const data = (await res.json()) as LoginResponse
 
-      // 필수 필드 최소 검증
       if (!data?.token || !data?.user) {
         throw new Error("로그인 응답 형식이 올바르지 않습니다.")
       }
@@ -92,13 +95,8 @@ export default function LoginPage() {
       // 이동: 온보딩 미완이면 온보딩, 완료면 홈
       router.replace(onboarding_done ? "/" : "/onboarding/genres")
     } catch (err: unknown) {
-      // catch는 unknown으로 받고 메시지 안전 추출
       const msg =
-        err instanceof Error
-          ? err.message
-          : typeof err === "string"
-          ? err
-          : "로그인 중 오류가 발생했습니다."
+        err instanceof Error ? err.message : typeof err === "string" ? err : "로그인 중 오류가 발생했습니다."
       setError(msg)
     } finally {
       setIsLoading(false)
