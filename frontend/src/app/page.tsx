@@ -393,40 +393,6 @@ export default function MusicRecommendationApp() {
               </Button>
             </div>
           </div>
-
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-6">
-            {[
-              { id: 1, title: "인생영화", artist: "pH-1", image: "/placeholder.svg?height=150&width=150&text=인생영화" },
-              { id: 2, title: "숲이넘기기엔", artist: "도우카", image: "/placeholder.svg?height=150&width=150&text=숲이넘기기엔" },
-              { id: 3, title: "오포닝", artist: "고주잠자리", image: "/placeholder.svg?height=150&width=150&text=오포닝" },
-              { id: 4, title: "넌 떠올리는 중이야", artist: "PATEKO", image: "/placeholder.svg?height=150&width=150&text=넌떠올리는중이야" },
-              { id: 5, title: "작은 봄", artist: "고주잠자리", image: "/placeholder.svg?height=150&width=150&text=작은봄" },
-              { id: 6, title: "Love Me Again", artist: "Jayci yucca", image: "/placeholder.svg?height=150&width=150&text=LoveMeAgain" },
-            ].map((item, index) => (
-              <div key={item.id} className="group cursor-default">
-                <div className="relative mb-3">
-                  <Image
-                    src={item.image || "/placeholder.svg"}
-                    alt={item.title}
-                    width={150}
-                    height={150}
-                    className="w-full aspect-square object-cover rounded-2xl transition-all duration-300"
-                  />
-                  <div
-                    className={`absolute inset-0 bg-gradient-to-br ${memoryColors[index % memoryColors.length]} opacity-0 group-hover:opacity-80 rounded-2xl transition-all flex items-center justify-center`}
-                  >
-                    <div className="bg-white text-purple-600 rounded-full p-3 shadow-lg opacity-0 group-hover:opacity-100 transition-opacity">
-                      <Play className="h-4 w-4" />
-                    </div>
-                  </div>
-                </div>
-                <div className="text-center px-2">
-                  <h4 className="font-medium text-gray-900 text-sm truncate mb-1">{item.title}</h4>
-                  <p className="text-xs text-gray-500 truncate font-light">{item.artist}</p>
-                </div>
-              </div>
-            ))}
-          </div>
         </div>
       </main>
     </div>
