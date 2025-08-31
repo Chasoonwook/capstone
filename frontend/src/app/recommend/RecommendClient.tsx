@@ -2,12 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Play, Pause, SkipBack, SkipForward, X, ChevronLeft, ChevronRight } from "lucide-react";
+import { X, ChevronLeft, ChevronRight } from "lucide-react";
 import { API_BASE } from "@/lib/api";
 
-/** ---------- 타입 ---------- */
 type Song = {
   id: number | string;
   title: string;
@@ -17,21 +15,6 @@ type Song = {
   image?: string | null;
 };
 
-type BackendSong = {
-  id?: number | string;
-  music_id?: number | string;
-  title?: string;
-  artist?: string;
-  label?: string;
-  genre?: string;
-  genre_code?: string;
-  duration?: number | string;
-};
-
-/** ---------- 유틸 ---------- */
-const isRecord = (v: unknown): v is Record<string, unknown> =>
-  !!v && typeof v === "object" && !Array.isArray(v);
-
 async function safeText(res: Response) {
   try {
     return await res.text();
@@ -40,7 +23,6 @@ async function safeText(res: Response) {
   }
 }
 
-// 이미지 바이너리 URL 탐색: /api/photos/... -> /photos/...
 async function resolveImageUrl(photoId: string): Promise<string | null> {
   const candidates = [
     `${API_BASE}/api/photos/${photoId}/binary`,
@@ -65,12 +47,9 @@ export default function RecommendClient() {
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   const [recommendations, setRecommendations] = useState<Song[]>([]);
   const [currentSong, setCurrentSong] = useState<Song | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(180);
   const [currentViewIndex, setCurrentViewIndex] = useState(0);
 
-  // === 1) 업로드 이미지 URL 탐색 ===
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -87,15 +66,12 @@ export default function RecommendClient() {
     };
   }, [photoId]);
 
-  // 추천 가져오기 (by-photo)
   useEffect(() => {
     let mounted = true;
     const fetchRecommendationsByPhoto = async () => {
       if (!photoId) return;
       try {
-        const r = await fetch(
-          `${API_BASE}/api/recommendations/by-photo/${photoId}`
-        );
+        const r = await fetch(`${API_BASE}/api/recommendations/by-photo/${photoId}`);
         if (!r.ok) {
           console.error("추천 API 실패:", r.status, await safeText(r));
           setRecommendations([]);
@@ -104,16 +80,9 @@ export default function RecommendClient() {
         }
         const data: any = await r.json();
 
-        // API 응답: { main_mood, sub_mood, main_songs, sub_songs }
-        const mainSongs: any[] = Array.isArray(data?.main_songs)
-          ? data.main_songs
-          : [];
-        const subSongs: any[] = Array.isArray(data?.sub_songs)
-          ? data.sub_songs
-          : [];
-        // mainSongs + subSongs 합치기
+        const mainSongs: any[] = Array.isArray(data?.main_songs) ? data.main_songs : [];
+        const subSongs: any[] = Array.isArray(data?.sub_songs) ? data.sub_songs : [];
         const list: any[] = [...mainSongs, ...subSongs];
-        // 중복 제거 (music_id 기준)
         const seen = new Set();
         const dedup = list.filter((s, i) => {
           const id = s.music_id ?? s.id ?? i;
@@ -122,7 +91,6 @@ export default function RecommendClient() {
           return true;
         });
 
-        // Song 타입 맞추기
         const songs: Song[] = dedup.map((it: any, idx: number) => {
           const sec =
             typeof it.duration === "number"
@@ -159,73 +127,9 @@ export default function RecommendClient() {
     };
   }, [photoId, uploadedImage]);
 
-  // === 3) 플레이 타이머 ===
-  useEffect(() => {
-    if (!isPlaying) return;
-    const id = setInterval(() => {
-      setCurrentTime((t) => (t + 1 > duration ? duration : t + 1));
-    }, 1000);
-    return () => clearInterval(id);
-  }, [isPlaying, duration]);
-
-  // === 4) 플레이어 컨트롤 ===
-  const togglePlay = () => setIsPlaying((p) => !p);
-  const playNextSong = () => {
-    if (!currentSong || recommendations.length === 0) return;
-    const currentIndex = recommendations.findIndex(
-      (song) => song.id === currentSong.id
-    );
-    const nextIndex = (currentIndex + 1) % recommendations.length;
-    setCurrentSong(recommendations[nextIndex]);
-    setCurrentTime(0);
-  };
-  const playPreviousSong = () => {
-    if (!currentSong || recommendations.length === 0) return;
-    const currentIndex = recommendations.findIndex(
-      (song) => song.id === currentSong.id
-    );
-    const prevIndex = currentIndex === 0
-      ? recommendations.length - 1
-      : currentIndex - 1;
-    setCurrentSong(recommendations[prevIndex]);
-    setCurrentTime(0);
-  };
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, "0")}`;
-  };
-
-  const nextView = () => setCurrentViewIndex((prev) => (prev + 1) % 3);
-  const prevView = () => setCurrentViewIndex((prev) => (prev - 1 + 3) % 3);
-
-  // === 5) 이미지 src 안전 처리 ===
   const safeImageSrc = useMemo(() => uploadedImage || "/placeholder.svg", [uploadedImage]);
   const safeBgStyle = useMemo(() => ({ backgroundImage: `url(${safeImageSrc})` }), [safeImageSrc]);
 
-  /** ---------- 뷰 컴포넌트들 ---------- */
-  // (A) CD 플레이어 뷰
-  const CDPlayerView = () => (
-    <div className="flex-1 flex justify-center items-center">
-      {/* ... 기존 CD 플레이어 UI ... */}
-    </div>
-  );
-
-  // (B) 인스타그램형 뷰
-  const InstagramView = () => (
-    <div className="flex-1 flex items-center justify-center w-full h-full">
-      {/* ... 기존 Instagram형 UI ... */}
-    </div>
-  );
-
-  // (C) 기본 뷰
-  const DefaultView = () => (
-    <div className="flex-1 flex justify-center">
-      {/* ... 기존 Default UI ... */}
-    </div>
-  );
-
-  // 음악 리스트 컨테이너 (공통적으로 항상 노출)
   const MusicListContainer = () => (
     <div className="fixed right-0 top-0 h-full w-[400px] bg-black bg-opacity-70 backdrop-blur-lg shadow-2xl z-50 p-6 flex flex-col">
       <h2 className="text-white font-bold text-2xl mb-5 text-center">추천 음악 리스트</h2>
@@ -234,10 +138,7 @@ export default function RecommendClient() {
           recommendations.map((song) => (
             <div
               key={song.id}
-              onClick={() => {
-                setCurrentSong(song);
-                setCurrentTime(0);
-              }}
+              onClick={() => setCurrentSong(song)}
               className={`flex items-center p-3 rounded-xl cursor-pointer mb-2 transition-all duration-200 hover:bg-white/10 ${
                 currentSong?.id === song.id
                   ? "bg-gradient-to-r from-purple-500/20 to-pink-500/20 border border-purple-400/30"
@@ -270,19 +171,18 @@ export default function RecommendClient() {
     const views = ["cd", "instagram", "default"] as const;
     switch (views[currentViewIndex]) {
       case "cd":
-        return <CDPlayerView />;
+        return <div>CD Player View (미구현)</div>;
       case "instagram":
-        return <InstagramView />;
+        return <div>Instagram View (미구현)</div>;
       default:
-        return <DefaultView />;
+        return <div>Default View (미구현)</div>;
     }
   };
 
   const handleClose = () => {
     try {
       router.replace("/");
-    } catch (error) {
-      console.error("Navigation error:", error);
+    } catch {
       window.location.href = "/";
     }
   };
@@ -292,11 +192,9 @@ export default function RecommendClient() {
 
   return (
     <div className="fixed inset-0 z-40 bg-black bg-opacity-95 flex items-center justify-center">
-      {/* 배경 처리 */}
       <div className="absolute inset-0 bg-cover bg-center blur-md scale-110" style={safeBgStyle} />
       <div className="absolute inset-0 bg-gradient-to-br from-purple-900/30 via-black/50 to-pink-900/30"></div>
 
-      {/* 닫기, 뷰 전환 버튼들 */}
       <div className="absolute top-6 right-[420px] z-50 flex space-x-3">
         <button
           onClick={handleClose}
@@ -321,12 +219,10 @@ export default function RecommendClient() {
         <ChevronRight className="h-6 w-6 text-white" />
       </button>
 
-      {/* 메인 View */}
       <div className="relative z-30 w-full max-w-6xl mx-auto px-6 flex items-center justify-between h-full">
         {renderCurrentView()}
       </div>
 
-      {/* 항상 떠있는 추천 음악 리스트 컨테이너 */}
       <MusicListContainer />
     </div>
   );
