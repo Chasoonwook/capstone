@@ -5,12 +5,7 @@ import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import {
-  Upload,
-  Search,
-  Music,
-  Play, // 아이콘만 표시용으로 남김(동작 없음)
-} from "lucide-react"
+import { Upload, Search, Music, Play } from "lucide-react"
 import Image from "next/image"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import {
@@ -22,10 +17,11 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { User, Settings, LogOut, CreditCard, History, UserCircle } from "lucide-react"
 import { useRouter } from "next/navigation"
+import { API_BASE, authHeaders } from "@/lib/api" // ✅ 로그인 페이지와 동일한 유틸 사용
 
 const musicGenres = ["팝", "재즈", "운동", "휴식", "집중", "평온", "슬픔", "파티", "로맨스", "출퇴근"]
 
-// ✅ 색감 팔레트
+// 색감 팔레트
 const genreColors: Record<string, string> = {
   팝: "bg-gradient-to-r from-pink-500 to-rose-500 text-white",
   재즈: "bg-gradient-to-r from-blue-500 to-indigo-500 text-white",
@@ -48,15 +44,22 @@ const memoryColors = [
   "from-red-400/20 to-pink-500/20",
 ]
 
+// 서버 응답 타입(유연 파싱)
+type PhotoUploadResponse =
+  | { id: string | number; url?: string }
+  | { photo: { id: string | number; url?: string } }
+  | Record<string, any>
+
 export default function MusicRecommendationApp() {
-  const [uploadedImage, setUploadedImage] = useState<string | null>(null)
+  const [uploadedImage, setUploadedImage] = useState<string | null>(null) // 미리보기
+  const [uploadedPhotoId, setUploadedPhotoId] = useState<string | null>(null) // ✅ DB 저장된 photo id
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedGenres, setSelectedGenres] = useState<string[]>([])
 
   // 로그인 상태/유저
   const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [user, setUser] = useState({
-    name: "진영", // 초기값(스토리지 복원 시 덮어씀)
+    name: "진영",
     email: "almond-v6w@gmail.com",
     avatar: "/placeholder.svg?height=32&width=32",
   })
@@ -64,7 +67,7 @@ export default function MusicRecommendationApp() {
   const router = useRouter()
   const [isUploading, setIsUploading] = useState(false)
 
-  // ✅ 로그인 정보 복원
+  // 로그인 정보 복원
   useEffect(() => {
     try {
       const token = localStorage.getItem("token")
@@ -95,18 +98,64 @@ export default function MusicRecommendationApp() {
     router.push("/login")
   }
 
+  // ✅ 업로드 → DB 저장
   const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
+
+    // 1) 프리뷰 먼저
+    const reader = new FileReader()
+    reader.onload = (e) => setUploadedImage(e.target?.result as string)
+    reader.readAsDataURL(file)
+
+    // 2) 서버 업로드
     setIsUploading(true)
     try {
-      const reader = new FileReader()
-      reader.onload = (e) => {
-        setUploadedImage(e.target?.result as string)
-        setIsUploading(false)
+      const fd = new FormData()
+      fd.append("file", file)                // 백엔드에서 file 필드로 받는다고 가정
+      // 선택: 메타데이터
+      // fd.append("title", file.name)
+      // fd.append("source", "main_page")
+
+      // 인증 헤더 구성
+      const uid = localStorage.getItem("uid") || ""
+      const baseHeaders = (authHeaders?.() as HeadersInit) || {}
+      // FormData 전송 시 Content-Type은 브라우저가 자동 설정(경계 포함) → 직접 지정 금지
+      const res = await fetch(`${API_BASE}/api/photos`, {
+        method: "POST",
+        headers: {
+          ...(uid ? { "X-User-Id": uid } : {}),
+          ...baseHeaders,
+        },
+        body: fd,
+      })
+
+      if (!res.ok) {
+        let msg = "사진 업로드에 실패했습니다."
+        try {
+          const j = (await res.json()) as { error?: string }
+          if (j?.error) msg = j.error
+        } catch {}
+        throw new Error(msg)
       }
-      reader.readAsDataURL(file)
-    } catch {
+
+      const data = (await res.json()) as PhotoUploadResponse
+      const id =
+        (data as any)?.id ??
+        (data as any)?.photo?.id ??
+        (typeof (data as any)?.data?.id !== "undefined" ? (data as any).data.id : null)
+
+      if (!id) throw new Error("업로드 응답에 photo id가 없습니다.")
+      setUploadedPhotoId(String(id))
+
+      // 필요하면 로컬 저장(다음 페이지에서 사용)
+      localStorage.setItem("lastPhotoId", String(id))
+    } catch (err) {
+      console.error(err)
+      // 사용자에게 보여주고 싶다면 토스트/알림 컴포넌트로 처리
+      alert(err instanceof Error ? err.message : "사진 업로드 중 오류가 발생했습니다.")
+      setUploadedPhotoId(null)
+    } finally {
       setIsUploading(false)
     }
   }
@@ -115,9 +164,15 @@ export default function MusicRecommendationApp() {
     setSelectedGenres((prev) => (prev.includes(genre) ? prev.filter((g) => g !== genre) : [...prev, genre]))
   }
 
-  // ✅ 추천 버튼 → /recommend로 이동
+  // 추천으로 이동(업로드된 photoId를 쿼리로 전달)
   const goRecommend = () => {
-    router.push("/recommend")
+    if (uploadedPhotoId) {
+      router.push(`/recommend?photoId=${encodeURIComponent(uploadedPhotoId)}`)
+    } else {
+      // 사진 없이 장르만 선택해서 가는 플로우도 허용하려면 쿼리에 genres 포함
+      const genres = selectedGenres.join(",")
+      router.push(genres ? `/recommend?genres=${encodeURIComponent(genres)}` : "/recommend")
+    }
   }
 
   return (
@@ -214,6 +269,9 @@ export default function MusicRecommendationApp() {
                   ) : uploadedImage ? (
                     <div className="relative">
                       <Image src={uploadedImage || "/placeholder.svg"} alt="업로드된 사진" width={240} height={160} className="rounded-2xl object-cover mx-auto" />
+                      {uploadedPhotoId && (
+                        <p className="mt-3 text-sm text-gray-500">저장됨 • Photo ID: {uploadedPhotoId}</p>
+                      )}
                     </div>
                   ) : (
                     <div className="text-center">
@@ -228,7 +286,7 @@ export default function MusicRecommendationApp() {
             </label>
           </div>
 
-          {/* ✅ 여기서 바로 /recommend 페이지로 이동 */}
+          {/* /recommend로 이동 (photoId/genres 전달) */}
           <Button
             onClick={goRecommend}
             size="lg"
@@ -253,7 +311,7 @@ export default function MusicRecommendationApp() {
           </div>
         </div>
 
-        {/* 기분 선택(장르 뱃지 색상) */}
+        {/* 기분 선택 */}
         <div className="mb-20">
           <h3 className="text-xl font-light text-gray-900 mb-8 text-center">오늘의 기분</h3>
           <div className="flex flex-wrap justify-center gap-3 max-w-2xl mx-auto">
@@ -274,7 +332,7 @@ export default function MusicRecommendationApp() {
           </div>
         </div>
 
-        {/* 사용자 추억 히스토리 (표시만, 클릭 동작 제거) */}
+        {/* 사용자 추억 히스토리(표시용) */}
         <div className="mb-16">
           <div className="flex items-center mb-10">
             <div className="flex items-center space-x-4">
