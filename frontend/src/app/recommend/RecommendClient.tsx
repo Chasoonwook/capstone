@@ -1,3 +1,4 @@
+// src/app/recommend/RecommendClient.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -6,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { X, ChevronLeft, ChevronRight } from "lucide-react";
 import { API_BASE } from "@/lib/api";
 
+/** ---------- 타입 ---------- */
 type Song = {
   id: number | string;
   title: string;
@@ -15,6 +17,52 @@ type Song = {
   image?: string | null;
 };
 
+type BackendSong = {
+  id?: number | string;
+  music_id?: number | string;
+  title?: string;
+  artist?: string;
+  label?: string;
+  genre?: string;
+  duration?: number;
+  duration_sec?: number;
+};
+
+type ByPhotoResponse = {
+  main_songs?: BackendSong[];
+  sub_songs?: BackendSong[];
+};
+
+/** ---------- 유틸 ---------- */
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+function isBackendSong(v: unknown): v is BackendSong {
+  if (!isRecord(v)) return false;
+  // 필수 필드는 없지만, 최소한 문자열/숫자 유형의 일부 키가 있는지 점검
+  const { id, music_id, title, artist, label, genre, duration, duration_sec } = v;
+  const isOptStrOrNum = (x: unknown) =>
+    typeof x === "string" || typeof x === "number" || typeof x === "undefined";
+  const isOptNum = (x: unknown) => typeof x === "number" || typeof x === "undefined";
+
+  return (
+    isOptStrOrNum(id) &&
+    isOptStrOrNum(music_id) &&
+    (typeof title === "string" || typeof title === "undefined") &&
+    (typeof artist === "string" || typeof artist === "undefined") &&
+    (typeof label === "string" || typeof label === "undefined") &&
+    (typeof genre === "string" || typeof genre === "undefined") &&
+    isOptNum(duration) &&
+    isOptNum(duration_sec)
+  );
+}
+
+function toBackendSongArray(v: unknown): BackendSong[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter(isBackendSong);
+}
+
 async function safeText(res: Response) {
   try {
     return await res.text();
@@ -23,6 +71,7 @@ async function safeText(res: Response) {
   }
 }
 
+// 이미지 바이너리 URL 탐색: /api/photos/... -> /photos/...
 async function resolveImageUrl(photoId: string): Promise<string | null> {
   const candidates = [
     `${API_BASE}/api/photos/${photoId}/binary`,
@@ -50,6 +99,7 @@ export default function RecommendClient() {
   const [duration, setDuration] = useState(180);
   const [currentViewIndex, setCurrentViewIndex] = useState(0);
 
+  // 업로드 이미지 URL 조회
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -66,32 +116,44 @@ export default function RecommendClient() {
     };
   }, [photoId]);
 
+  // 사진 기반 추천 조회
   useEffect(() => {
     let mounted = true;
     const fetchRecommendationsByPhoto = async () => {
       if (!photoId) return;
       try {
-        const r = await fetch(`${API_BASE}/api/recommendations/by-photo/${photoId}`);
+        const r = await fetch(`${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(photoId)}`);
         if (!r.ok) {
           console.error("추천 API 실패:", r.status, await safeText(r));
           setRecommendations([]);
           setCurrentSong(null);
           return;
         }
-        const data: any = await r.json();
 
-        const mainSongs: any[] = Array.isArray(data?.main_songs) ? data.main_songs : [];
-        const subSongs: any[] = Array.isArray(data?.sub_songs) ? data.sub_songs : [];
-        const list: any[] = [...mainSongs, ...subSongs];
-        const seen = new Set();
-        const dedup = list.filter((s, i) => {
-          const id = s.music_id ?? s.id ?? i;
-          if (seen.has(id)) return false;
-          seen.add(id);
-          return true;
+        const raw: unknown = await r.json();
+        const resp: ByPhotoResponse = isRecord(raw)
+          ? {
+              main_songs: toBackendSongArray((raw as Record<string, unknown>).main_songs),
+              sub_songs: toBackendSongArray((raw as Record<string, unknown>).sub_songs),
+            }
+          : { main_songs: [], sub_songs: [] };
+
+        const mainSongs = resp.main_songs ?? [];
+        const subSongs = resp.sub_songs ?? [];
+        const list: BackendSong[] = [...mainSongs, ...subSongs];
+
+        // dedup by music_id/id
+        const seen = new Set<string | number>();
+        const dedup: BackendSong[] = [];
+        list.forEach((s, i) => {
+          const id = (s.music_id ?? s.id ?? i) as string | number;
+          if (!seen.has(id)) {
+            seen.add(id);
+            dedup.push(s);
+          }
         });
 
-        const songs: Song[] = dedup.map((it: any, idx: number) => {
+        const songs: Song[] = dedup.map((it, idx) => {
           const sec =
             typeof it.duration === "number"
               ? it.duration
@@ -134,7 +196,7 @@ export default function RecommendClient() {
     <div className="fixed right-0 top-0 h-full w-[400px] bg-black bg-opacity-70 backdrop-blur-lg shadow-2xl z-50 p-6 flex flex-col">
       <h2 className="text-white font-bold text-2xl mb-5 text-center">추천 음악 리스트</h2>
       <div className="overflow-y-auto flex-1">
-        {recommendations?.length > 0 ? (
+        {recommendations.length > 0 ? (
           recommendations.map((song) => (
             <div
               key={song.id}
@@ -183,7 +245,7 @@ export default function RecommendClient() {
     try {
       router.replace("/");
     } catch {
-      window.location.href = "/";
+      (window as unknown as { location: Location }).location.href = "/";
     }
   };
 
