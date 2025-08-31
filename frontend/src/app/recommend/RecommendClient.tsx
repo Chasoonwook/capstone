@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Play, Pause, SkipBack, SkipForward, X, ChevronLeft, ChevronRight, Music } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, X, ChevronLeft, ChevronRight, Music } from "lucide-react";
 import Image from "next/image";
 import { API_BASE } from "@/lib/api";
 
@@ -16,7 +16,7 @@ type Song = {
   artist: string;
   genre: string;
   duration?: string;
-  image?: string;
+  image?: string | null;
 };
 
 type BackendSong = {
@@ -44,7 +44,10 @@ async function safeText(res: Response) {
 
 // 이미지 바이너리 URL 탐색: /api/photos/... -> /photos/...
 async function resolveImageUrl(photoId: string): Promise<string | null> {
-  const candidates = [`${API_BASE}/api/photos/${photoId}/binary`, `${API_BASE}/photos/${photoId}/binary`];
+  const candidates = [
+    `${API_BASE}/api/photos/${photoId}/binary`,
+    `${API_BASE}/photos/${photoId}/binary`,
+  ];
   for (const url of candidates) {
     try {
       const r = await fetch(url, { method: "GET" });
@@ -132,7 +135,8 @@ export default function RecommendClient() {
             artist: it.artist ?? "Unknown Artist",
             genre: it.genre ?? it.genre_code ?? it.label ?? "UNKNOWN",
             duration: dur,
-            image: "/placeholder.svg",
+            // 리스트/플레이어에서도 동일 커버를 쓰도록 기본값을 업로드 이미지로 세팅
+            image: uploadedImage ?? "/placeholder.svg",
           };
         });
 
@@ -151,7 +155,7 @@ export default function RecommendClient() {
       mounted = false;
       if (timer) clearTimeout(timer);
     };
-  }, [photoId]);
+  }, [photoId, uploadedImage]);
 
   // === 3) 플레이 타이머 ===
   useEffect(() => {
@@ -192,16 +196,26 @@ export default function RecommendClient() {
   const safeBgStyle = useMemo(() => ({ backgroundImage: `url(${safeImageSrc})` }), [safeImageSrc]);
 
   /** ---------- 뷰 컴포넌트들 ---------- */
+  // (A) CD 플레이어 뷰: 디스크 면에 업로드 이미지를 채우고, 중앙 라벨은 어둡게
   const CDPlayerView = () => (
     <div className="flex-1 flex justify-center items-center">
       <div className="relative">
         <div className={`relative w-80 h-80 ${isPlaying ? "animate-spin" : ""}`} style={{ animationDuration: "4s" }}>
           <div className="w-full h-full rounded-full bg-gradient-to-br from-slate-200 via-slate-300 to-slate-400 shadow-2xl border-4 border-slate-300 relative">
             <div className="absolute -inset-4 bg-gradient-to-r from-purple-400 via-pink-400 to-indigo-400 rounded-full opacity-20 blur-xl"></div>
+            {/* 디스크 표면에 업로드 이미지 */}
             <div className="w-full h-full rounded-full overflow-hidden border-8 border-slate-800 relative z-10">
-              <Image src={safeImageSrc || "/placeholder.svg"} alt="Current mood" width={320} height={320} className="w-full h-full object-cover" />
-              <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-16 h-16 bg-slate-800 rounded-full shadow-inner flex items-center justify-center">
-                <div className="w-8 h-8 bg-slate-900 rounded-full"></div>
+              <Image
+                src={safeImageSrc}
+                alt="Current mood"
+                width={320}
+                height={320}
+                className="w-full h-full object-cover"
+                priority
+              />
+              {/* 중앙 라벨 */}
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 bg-slate-900/90 rounded-full shadow-inner flex items-center justify-center">
+                <div className="w-8 h-8 bg-slate-950 rounded-full"></div>
               </div>
             </div>
           </div>
@@ -210,13 +224,21 @@ export default function RecommendClient() {
     </div>
   );
 
+  // (B) 인스타그램형 뷰: 좌측 원형 썸네일에 업로드 이미지
   const InstagramView = () => (
     <div className="flex-1 flex items-center justify-center w-full h-full">
       <div className="flex items-center justify-between w-full max-w-6xl mx-auto px-8">
         <div className="flex-shrink-0">
           <div className="relative">
             <div className="w-80 h-80 rounded-full overflow-hidden border-4 border-white/30 shadow-2xl">
-              <Image src={safeImageSrc || "/placeholder.svg"} alt="Uploaded photo" width={320} height={320} className="w-full h-full object-cover" />
+              <Image
+                src={safeImageSrc}
+                alt="Uploaded photo"
+                width={320}
+                height={320}
+                className="w-full h-full object-cover"
+                priority
+              />
             </div>
             <div className="absolute -inset-4 bg-gradient-to-r from-purple-400 via-pink-400 to-indigo-400 rounded-full opacity-20 blur-xl"></div>
           </div>
@@ -225,14 +247,30 @@ export default function RecommendClient() {
         <div className="flex-1 flex flex-col items-center justify-center mx-12">
           {currentSong && (
             <>
-              <div className="text-center mb-8">
-                <h2 className="text-5xl font-bold text-white mb-4 text-balance leading-tight">{currentSong.title}</h2>
-                <p className="text-2xl text-slate-300 mb-6 font-medium">{currentSong.artist}</p>
-                <Badge className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-8 py-3 text-lg font-semibold rounded-full shadow-lg">
-                  {currentSong.genre}
-                </Badge>
+              {/* 플레이어 헤더에 앨범 커버(업로드 이미지) 추가 */}
+              <div className="flex flex-col items-center mb-8">
+                <div className="mb-5">
+                  <Image
+                    src={currentSong.image ?? safeImageSrc}
+                    alt="Album cover"
+                    width={128}
+                    height={128}
+                    className="rounded-xl shadow-2xl border border-white/20 object-cover"
+                    priority
+                  />
+                </div>
+                <div className="text-center">
+                  <h2 className="text-5xl font-bold text-white mb-4 text-balance leading-tight">
+                    {currentSong.title}
+                  </h2>
+                  <p className="text-2xl text-slate-300 mb-6 font-medium">{currentSong.artist}</p>
+                  <Badge className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-8 py-3 text-lg font-semibold rounded-full shadow-lg">
+                    {currentSong.genre}
+                  </Badge>
+                </div>
               </div>
 
+              {/* 진행바 */}
               <div className="w-full max-w-md mb-8">
                 <div className="flex items-center justify-between text-slate-300 text-lg mb-4 font-medium">
                   <span>{formatTime(currentTime)}</span>
@@ -246,8 +284,14 @@ export default function RecommendClient() {
                 </div>
               </div>
 
+              {/* 컨트롤 */}
               <div className="flex items-center justify-center space-x-10">
-                <Button variant="ghost" size="lg" onClick={playPreviousSong} className="text-white hover:bg-white/10 rounded-full p-5 transition-all duration-200 hover:scale-110">
+                <Button
+                  variant="ghost"
+                  size="lg"
+                  onClick={playPreviousSong}
+                  className="text-white hover:bg-white/10 rounded-full p-5 transition-all duration-200 hover:scale-110"
+                >
                   <SkipBack className="h-8 w-8" />
                 </Button>
 
@@ -260,7 +304,12 @@ export default function RecommendClient() {
                   {isPlaying ? <Pause className="h-10 w-10" /> : <Play className="h-10 w-10 ml-1" />}
                 </Button>
 
-                <Button variant="ghost" size="lg" onClick={playNextSong} className="text-white hover:bg-white/10 rounded-full p-5 transition-all duration-200 hover:scale-110">
+                <Button
+                  variant="ghost"
+                  size="lg"
+                  onClick={playNextSong}
+                  className="text-white hover:bg-white/10 rounded-full p-5 transition-all duration-200 hover:scale-110"
+                >
                   <SkipForward className="h-8 w-8" />
                 </Button>
               </div>
@@ -268,6 +317,7 @@ export default function RecommendClient() {
           )}
         </div>
 
+        {/* 우측 추천 리스트: 각 항목 썸네일에 업로드 이미지 사용 */}
         {recommendations.length > 0 && (
           <div className="flex-shrink-0 w-80">
             <div className="bg-black/30 backdrop-blur-md rounded-2xl p-6 border border-white/10 shadow-2xl">
@@ -286,8 +336,14 @@ export default function RecommendClient() {
                         : "hover:bg-white/10 hover:scale-[1.02]"
                     }`}
                   >
-                    <div className="flex-shrink-0 w-12 h-12 bg-gradient-to-br from-purple-400 to-pink-400 rounded-lg flex items-center justify-center mr-3">
-                      <Music className="h-6 w-6 text-white" />
+                    <div className="flex-shrink-0 w-12 h-12 rounded-lg overflow-hidden mr-3 border border-white/10">
+                      <Image
+                        src={song.image ?? safeImageSrc}
+                        alt="thumb"
+                        width={48}
+                        height={48}
+                        className="w-12 h-12 object-cover"
+                      />
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-white font-medium truncate text-sm">{song.title}</p>
@@ -311,34 +367,50 @@ export default function RecommendClient() {
     </div>
   );
 
+  // (C) 기본 뷰: 좌측 큰 이미지 + 우측 플레이어/리스트 내부에도 업로드 커버 반영
   const DefaultView = () => (
     <div className="flex-1 flex justify-center">
       <div className="relative">
         <div className="absolute -inset-4 bg-gradient-to-r from-purple-400 via-pink-400 to-indigo-400 rounded-2xl opacity-30 blur-xl"></div>
         <Image
-          src={safeImageSrc || "/placeholder.svg"}
+          src={safeImageSrc}
           alt="Current mood"
           width={400}
           height={400}
           className="relative z-10 rounded-2xl shadow-2xl object-cover border-2 border-white/20"
+          priority
         />
       </div>
     </div>
   );
 
+  // 플레이어 + 리스트(공통) — 플레이어 헤더에 앨범 커버 추가, 리스트 썸네일도 이미지 사용
   const renderPlayerAndPlaylist = () => (
     <>
       {currentSong && (
         <>
-          <div className="text-center mb-8">
-            <h2 className="text-4xl font-bold text-white mb-3 text-balance leading-tight">{currentSong.title}</h2>
-            <p className="text-xl text-slate-300 mb-4 font-medium">{currentSong.artist}</p>
-            <Badge className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-6 py-2 text-sm font-semibold rounded-full shadow-lg">
-              {currentSong.genre}
-            </Badge>
+          <div className="flex flex-col items-center mb-8">
+            {/* 앨범 커버 */}
+            <Image
+              src={currentSong.image ?? safeImageSrc}
+              alt="Album cover"
+              width={128}
+              height={128}
+              className="rounded-xl shadow-2xl border border-white/20 object-cover mb-4"
+              priority
+            />
+            <div className="text-center">
+              <h2 className="text-4xl font-bold text-white mb-3 text-balance leading-tight">
+                {currentSong.title}
+              </h2>
+              <p className="text-xl text-slate-300 mb-4 font-medium">{currentSong.artist}</p>
+              <Badge className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-6 py-2 text-sm font-semibold rounded-full shadow-lg">
+                {currentSong.genre}
+              </Badge>
+            </div>
           </div>
 
-          <div className="mb-8">
+          <div className="mb-8 w-full max-w-md mx-auto">
             <div className="flex items-center justify-between text-slate-300 text-sm mb-3 font-medium">
               <span>{formatTime(currentTime)}</span>
               <span>{formatTime(duration)}</span>
@@ -354,7 +426,12 @@ export default function RecommendClient() {
       )}
 
       <div className="flex items-center justify-center space-x-8 mb-8">
-        <Button variant="ghost" size="lg" onClick={playPreviousSong} className="text-white hover:bg-white/10 rounded-full p-4 transition-all duration-200 hover:scale-110">
+        <Button
+          variant="ghost"
+          size="lg"
+          onClick={playPreviousSong}
+          className="text-white hover:bg-white/10 rounded-full p-4 transition-all duration-200 hover:scale-110"
+        >
           <SkipBack className="h-6 w-6" />
         </Button>
 
@@ -367,13 +444,18 @@ export default function RecommendClient() {
           {isPlaying ? <Pause className="h-8 w-8" /> : <Play className="h-8 w-8 ml-1" />}
         </Button>
 
-        <Button variant="ghost" size="lg" onClick={playNextSong} className="text-white hover:bg-white/10 rounded-full p-4 transition-all duration-200 hover:scale-110">
+        <Button
+          variant="ghost"
+          size="lg"
+          onClick={playNextSong}
+          className="text-white hover:bg-white/10 rounded-full p-4 transition-all duration-200 hover:scale-110"
+        >
           <SkipForward className="h-6 w-6" />
         </Button>
       </div>
 
       {recommendations.length > 0 && (
-        <div className="mt-8">
+        <div className="mt-8 w-full max-w-2xl mx-auto">
           <h3 className="text-xl font-semibold text-white mb-4 text-center">추천 음악</h3>
           <div className="bg-white/5 backdrop-blur-sm rounded-2xl p-4 max-h-80 overflow-y-auto border border-white/10">
             <div className="space-y-2">
@@ -390,8 +472,14 @@ export default function RecommendClient() {
                       : "hover:scale-[1.02]"
                   }`}
                 >
-                  <div className="flex-shrink-0 w-12 h-12 bg-gradient-to-br from-purple-400 to-pink-400 rounded-lg flex items-center justify-center mr-3">
-                    <Music className="h-6 w-6 text-white" />
+                  <div className="flex-shrink-0 w-12 h-12 rounded-lg overflow-hidden mr-3 border border-white/10">
+                    <Image
+                      src={song.image ?? safeImageSrc}
+                      alt="thumb"
+                      width={48}
+                      height={48}
+                      className="w-12 h-12 object-cover"
+                    />
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-white font-medium truncate">{song.title}</p>
@@ -448,25 +536,16 @@ export default function RecommendClient() {
   };
 
   const handlePrevView = () => {
-    console.log("Previous view clicked");
-    setCurrentViewIndex((prev) => {
-      const newIndex = (prev - 1 + 3) % 3;
-      console.log("View changed from", prev, "to", newIndex);
-      return newIndex;
-    });
+    setCurrentViewIndex((prev) => (prev - 1 + 3) % 3);
   };
 
   const handleNextView = () => {
-    console.log("Next view clicked");
-    setCurrentViewIndex((prev) => {
-      const newIndex = (prev + 1) % 3;
-      console.log("View changed from", prev, "to", newIndex);
-      return newIndex;
-    });
+    setCurrentViewIndex((prev) => (prev + 1) % 3);
   };
 
   return (
     <div className="fixed inset-0 z-50 bg-black bg-opacity-95 flex items-center justify-center">
+      {/* 배경에도 업로드 이미지 */}
       <div className="absolute inset-0 bg-cover bg-center blur-md scale-110" style={safeBgStyle} />
       <div className="absolute inset-0 bg-gradient-to-br from-purple-900/30 via-black/50 to-pink-900/30"></div>
 
