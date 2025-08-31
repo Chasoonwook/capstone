@@ -198,7 +198,7 @@ export default function MusicRecommendationApp() {
               <div className="w-10 h-10 bg-purple-600 rounded-xl flex items-center justify-center">
                 <Music className="h-6 w-6 text-white" />
               </div>
-              <h1 className="text-xl font-medium text-gray-900">Music</h1>
+              <h1 className="text-xl font-medium text-gray-900">Photo_Music</h1>
             </div>
             {isLoggedIn ? (
               <DropdownMenu>
