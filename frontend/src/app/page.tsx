@@ -132,7 +132,7 @@ export default function MusicRecommendationApp() {
   }
 
   /* -------------------------
-   * 이미지 업로드(미리보기 + DB 저장)
+   * 이미지 업로드(미리보기 + DB 저장 + 이동)
    * ------------------------- */
   const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -152,6 +152,9 @@ export default function MusicRecommendationApp() {
       setUploadedPhotoId(result.photoId)
       localStorage.setItem("lastPhotoId", result.photoId)
       console.log("[upload] 저장 성공 photo_id =", result.photoId)
+
+      // ✅ 업로드 성공 즉시 RecommendClient.tsx 라우트로 이동
+      router.push(`/recommend-client?photoId=${encodeURIComponent(result.photoId)}`)
     } else {
       setUploadedPhotoId(null)
       console.warn("[upload] 저장 실패")
@@ -163,13 +166,13 @@ export default function MusicRecommendationApp() {
     setSelectedGenres((prev) => (prev.includes(genre) ? prev.filter((g) => g !== genre) : [...prev, genre]))
   }
 
-  // 추천으로 이동(업로드된 photoId를 쿼리로 전달)
+  // (버튼으로 이동하는 경우도 /recommend-client 사용)
   const goRecommend = () => {
     if (uploadedPhotoId) {
-      router.push(`/recommend?photoId=${encodeURIComponent(uploadedPhotoId)}`)
+      router.push(`/recommend-client?photoId=${encodeURIComponent(uploadedPhotoId)}`)
     } else {
       const genres = selectedGenres.join(",")
-      router.push(genres ? `/recommend?genres=${encodeURIComponent(genres)}` : "/recommend")
+      router.push(genres ? `/recommend-client?genres=${encodeURIComponent(genres)}` : "/recommend-client")
     }
   }
 
@@ -198,6 +201,7 @@ export default function MusicRecommendationApp() {
               <div className="w-10 h-10 bg-purple-600 rounded-xl flex items-center justify-center">
                 <Music className="h-6 w-6 text-white" />
               </div>
+              {/* ← 원하는 이름으로 자유롭게 바꾸세요 */}
               <h1 className="text-xl font-medium text-gray-900">Photo_Music</h1>
             </div>
             {isLoggedIn ? (
@@ -284,7 +288,7 @@ export default function MusicRecommendationApp() {
             </label>
           </div>
 
-          {/* /recommend로 이동 (photoId/genres 전달) */}
+          {/* (선택) 버튼으로도 이동 가능: /recommend-client */}
           <Button
             onClick={goRecommend}
             size="lg"
