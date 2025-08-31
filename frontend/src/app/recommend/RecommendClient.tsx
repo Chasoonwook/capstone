@@ -90,71 +90,62 @@ export default function RecommendClient() {
 
   // 추천 가져오기 (by-photo → 실패/대기 시 random 폴백)
   useEffect(() => {
-    let mounted = true;
-    let timer: ReturnType<typeof setTimeout> | null = null;
+  let mounted = true;
 
-    const fetchRecs = async () => {
-      try {
-        // 1) by-photo 먼저 시도 (페이지가 구버전으로 빌드되었을 때도 대비)
-        let r = await fetch(`${API_BASE}/api/recommendations/by-photo/${photoId}`);
-        if (r.status === 202 || r.status === 404 || r.status === 409) {
-          // 2) 분석 대기/없음/에러면 랜덤으로 폴백
-          r = await fetch(`${API_BASE}/api/recommendations/random?nocache=${Date.now()}`);
-        }
-        if (!r.ok) {
-          console.error("추천 API 실패:", r.status, await safeText(r));
-          return;
-        }
-        const data: any = await r.json();
-        const list = Array.isArray(data?.total) && data.total.length
-          ? data.total
-          : [
-              ...(Array.isArray(data?.main_songs) ? data.main_songs : []),
-              ...(Array.isArray(data?.sub_songs) ? data.sub_songs : []),
-              ...(Array.isArray(data?.preferred_songs) ? data.preferred_songs : []),
-            ];
+  const fetchRandom = async () => {
+    try {
+      // 무조건 랜덤 엔드포인트 호출 (캐시 회피용 nocache 추가)
+      const r = await fetch(`${API_BASE}/api/recommendations/random?nocache=${Date.now()}`);
+      if (!r.ok) {
+        console.error("추천 API 실패:", r.status, await safeText(r));
+        return;
+      }
+      const data: any = await r.json();
 
-        // dedup: id가 없을 때를 대비해 index를 최후 폴백으로 사용
-        const seen = new Set();
-        const dedup = list.filter((s: any, i: number) => {
-          const id = s.music_id ?? s.id ?? i;
+      const list = Array.isArray(data?.total) ? data.total : [];
+      const seen = new Set();
+      const dedup = list
+        .filter((s: any, i: number) => {
+          const id = s.music_id ?? s.id ?? i; // id 없을 때 인덱스로 폴백
           if (seen.has(id)) return false;
           seen.add(id);
           return true;
-        }).slice(0, 10);
+        })
+        .slice(0, 10);
 
-        const songs: Song[] = dedup.map((it: any, idx: number) => {
-          const sec = typeof it.duration === "number" ? it.duration
-                    : typeof it.duration_sec === "number" ? it.duration_sec
-                    : 180;
-          const mm = Math.floor(sec / 60);
-          const ss = String(sec % 60).padStart(2, "0");
-          return {
-            id: it.music_id ?? it.id ?? idx,
-            title: it.title ?? "Unknown Title",
-            artist: it.artist ?? "Unknown Artist",
-            genre: it.genre ?? it.label ?? "UNKNOWN",
-            duration: `${mm}:${ss}`,
-            image: uploadedImage ?? "/placeholder.svg",
-          };
-        });
+      const songs: Song[] = dedup.map((it: any, idx: number) => {
+        const sec =
+          typeof it.duration === "number" ? it.duration :
+          typeof it.duration_sec === "number" ? it.duration_sec : 180;
+        const mm = Math.floor(sec / 60);
+        const ss = String(sec % 60).padStart(2, "0");
 
-        if (mounted) {
-          setRecommendations(songs);
-          setCurrentSong(songs[0] ?? null);
-          setDuration(180);
-        }
-      } catch (e) {
-        console.error("추천 불러오기 오류:", e);
+        return {
+          id: it.music_id ?? it.id ?? idx,
+          title: it.title ?? "Unknown Title",
+          artist: it.artist ?? "Unknown Artist",
+          genre: it.genre ?? it.label ?? "UNKNOWN",
+          duration: `${mm}:${ss}`,
+          image: uploadedImage ?? "/placeholder.svg",
+        };
+      });
+
+      if (mounted) {
+        setRecommendations(songs);
+        setCurrentSong(songs[0] ?? null);
+        setDuration(180);
       }
-    };
+    } catch (e) {
+      console.error("추천 불러오기 오류:", e);
+    }
+  };
 
-    if (photoId) fetchRecs();
-    return () => {
-      mounted = false;
-      if (timer) clearTimeout(timer);
-    };
-  }, [photoId, uploadedImage]);
+  // photoId는 배경이미지 로딩용이고, 추천은 랜덤으로 항상 가능
+  fetchRandom();
+  return () => {
+    mounted = false;
+  };
+}, [uploadedImage]); // ← 이미지 바뀌면 커버도 업데이트
 
 
   // === 3) 플레이 타이머 ===
