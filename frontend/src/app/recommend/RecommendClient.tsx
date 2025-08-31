@@ -247,130 +247,138 @@ export default function RecommendClient() {
 
   /** ---------- 뷰들 ---------- */
   const CDPlayerView = () => (
-    <div className="flex items-center justify-between w-full h-full px-8">
-      {/* CD Player - Left Side */}
-      <div className="flex items-center justify-center">
-        <div className="relative">
-          <div className={`relative w-64 h-64 ${isPlaying ? "animate-spin" : ""}`} style={{ animationDuration: "4s" }}>
-            <div className="w-full h-full rounded-full bg-gradient-to-br from-slate-200 via-slate-300 to-slate-400 shadow-2xl border-4 border-slate-300 relative">
-              <div
-                className="w-full h-full rounded-full overflow-hidden border-8 border-slate-800 relative z-10 bg-center bg-cover"
-                style={{ backgroundImage: `url(${currentSong?.image ?? safeImageSrc})` }}
-              >
-                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-12 h-12 bg-slate-900/90 rounded-full shadow-inner flex items-center justify-center">
-                  <div className="w-6 h-6 bg-slate-950 rounded-full"></div>
+    <div className="flex flex-col items-center justify-center w-full h-full px-8">
+      {/* Top Section - CD Player and Song Info */}
+      <div className="flex items-center justify-center w-full mb-8">
+        {/* CD Player - Left Side */}
+        <div className="flex items-center justify-center mr-16">
+          <div className="relative">
+            <div
+              className={`relative w-64 h-64 ${isPlaying ? "animate-spin" : ""}`}
+              style={{ animationDuration: "4s" }}
+            >
+              <div className="w-full h-full rounded-full bg-gradient-to-br from-slate-200 via-slate-300 to-slate-400 shadow-2xl border-4 border-slate-300 relative">
+                <div
+                  className="w-full h-full rounded-full overflow-hidden border-8 border-slate-800 relative z-10 bg-center bg-cover"
+                  style={{ backgroundImage: `url(${currentSong?.image ?? safeImageSrc})` }}
+                >
+                  <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-12 h-12 bg-slate-900/90 rounded-full shadow-inner flex items-center justify-center">
+                    <div className="w-6 h-6 bg-slate-950 rounded-full"></div>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
         </div>
-      </div>
 
-      {/* Song Info & Controls - Center */}
-      <div className="flex flex-col items-center justify-center flex-1 max-w-md mx-8">
-        {/* Album Cover */}
-        <div
-          className="w-20 h-20 rounded-lg overflow-hidden mb-4 bg-center bg-cover border border-white/20"
-          style={{ backgroundImage: `url(${currentSong?.image ?? safeImageSrc})` }}
-        />
-
-        {/* Song Info */}
-        <div className="text-center mb-4">
-          <h3 className="text-white text-2xl font-semibold mb-1">{currentSong?.title ?? "—"}</h3>
-          <p className="text-slate-300 text-lg mb-2">{currentSong?.artist ?? "—"}</p>
-          {currentSong?.genre && (
-            <Badge className="bg-gradient-to-r from-purple-500 to-pink-500 text-white border-0 px-4 py-1">
-              {currentSong.genre}
-            </Badge>
-          )}
-        </div>
-
-        {/* Progress Bar */}
-        <div className="w-full mb-4">
-          <div className="flex justify-between text-slate-300 text-sm mb-2">
-            <span>{formatTime(currentTime)}</span>
-            <span>{formatTime(duration)}</span>
-          </div>
-          <input
-            type="range"
-            min={0}
-            max={duration}
-            value={currentTime}
-            onChange={handleSeek}
-            className="w-full accent-purple-500"
+        {/* Song Info & Controls - Center */}
+        <div className="flex flex-col items-center justify-center max-w-md">
+          {/* Album Cover */}
+          <div
+            className="w-20 h-20 rounded-lg overflow-hidden mb-4 bg-center bg-cover border border-white/20"
+            style={{ backgroundImage: `url(${currentSong?.image ?? safeImageSrc})` }}
           />
-        </div>
 
-        {/* Controls */}
-        <div className="flex items-center space-x-4">
-          <Button
-            size="icon"
-            variant="ghost"
-            className="rounded-full bg-white/10 hover:bg-white/20 w-12 h-12"
-            onClick={playPreviousSong}
-            aria-label="previous"
-          >
-            <SkipBack className="h-5 w-5 text-white" />
-          </Button>
+          {/* Song Info */}
+          <div className="text-center mb-4">
+            <h3 className="text-white text-2xl font-semibold mb-1">{currentSong?.title ?? "—"}</h3>
+            <p className="text-slate-300 text-lg mb-2">{currentSong?.artist ?? "—"}</p>
+            {currentSong?.genre && (
+              <Badge className="bg-gradient-to-r from-purple-500 to-pink-500 text-white border-0 px-4 py-1">
+                {currentSong.genre}
+              </Badge>
+            )}
+          </div>
 
-          <Button
-            size="icon"
-            className="rounded-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 w-14 h-14"
-            onClick={togglePlay}
-            aria-label={isPlaying ? "pause" : "play"}
-          >
-            {isPlaying ? <Pause className="h-6 w-6 text-white" /> : <Play className="h-6 w-6 text-white" />}
-          </Button>
+          {/* Progress Bar */}
+          <div className="w-full mb-4">
+            <div className="flex justify-between text-slate-300 text-sm mb-2">
+              <span>{formatTime(currentTime)}</span>
+              <span>{formatTime(duration)}</span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={duration}
+              value={currentTime}
+              onChange={handleSeek}
+              className="w-full accent-purple-500"
+            />
+          </div>
 
-          <Button
-            size="icon"
-            variant="ghost"
-            className="rounded-full bg-white/10 hover:bg-white/20 w-12 h-12"
-            onClick={playNextSong}
-            aria-label="next"
-          >
-            <SkipForward className="h-5 w-5 text-white" />
-          </Button>
+          {/* Controls */}
+          <div className="flex items-center space-x-4">
+            <Button
+              size="icon"
+              variant="ghost"
+              className="rounded-full bg-white/10 hover:bg-white/20 w-12 h-12"
+              onClick={playPreviousSong}
+              aria-label="previous"
+            >
+              <SkipBack className="h-5 w-5 text-white" />
+            </Button>
+
+            <Button
+              size="icon"
+              className="rounded-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 w-14 h-14"
+              onClick={togglePlay}
+              aria-label={isPlaying ? "pause" : "play"}
+            >
+              {isPlaying ? <Pause className="h-6 w-6 text-white" /> : <Play className="h-6 w-6 text-white" />}
+            </Button>
+
+            <Button
+              size="icon"
+              variant="ghost"
+              className="rounded-full bg-white/10 hover:bg-white/20 w-12 h-12"
+              onClick={playNextSong}
+              aria-label="next"
+            >
+              <SkipForward className="h-5 w-5 text-white" />
+            </Button>
+          </div>
         </div>
       </div>
 
-      {/* Playlist - Right Side */}
-      <div className="w-80 h-full bg-black/30 backdrop-blur-sm rounded-2xl p-4 flex flex-col">
+      {/* Bottom Section - Playlist */}
+      <div className="w-full max-w-4xl bg-black/30 backdrop-blur-sm rounded-2xl p-6">
         <h2 className="text-white font-bold text-xl mb-4 text-center">추천 음악</h2>
-        <div className="overflow-y-auto flex-1 space-y-2">
+        <div className="max-h-64 overflow-y-auto">
           {recommendations.length > 0 ? (
-            recommendations.map((song) => (
-              <div
-                key={song.id}
-                onClick={() => {
-                  setCurrentSong(song)
-                  setCurrentTime(0)
-                  setDuration(parseDurationToSec(song.duration))
-                  setIsPlaying(true)
-                }}
-                className={`flex items-center p-3 rounded-xl cursor-pointer transition-all duration-200 hover:bg-white/10 ${
-                  currentSong?.id === song.id
-                    ? "bg-gradient-to-r from-purple-500/30 to-pink-500/30 border border-purple-400/50"
-                    : ""
-                }`}
-              >
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {recommendations.map((song) => (
                 <div
-                  className="flex-shrink-0 w-12 h-12 rounded-lg overflow-hidden mr-3 border border-white/10 bg-center bg-cover"
-                  style={{ backgroundImage: `url(${song.image ?? safeImageSrc})` }}
-                />
-                <div className="flex-1 min-w-0">
-                  <p className="text-white font-medium truncate text-sm">{song.title}</p>
-                  <p className="text-slate-300 text-xs truncate">{song.artist}</p>
+                  key={song.id}
+                  onClick={() => {
+                    setCurrentSong(song)
+                    setCurrentTime(0)
+                    setDuration(parseDurationToSec(song.duration))
+                    setIsPlaying(true)
+                  }}
+                  className={`flex items-center p-3 rounded-xl cursor-pointer transition-all duration-200 hover:bg-white/10 ${
+                    currentSong?.id === song.id
+                      ? "bg-gradient-to-r from-purple-500/30 to-pink-500/30 border border-purple-400/50"
+                      : ""
+                  }`}
+                >
+                  <div
+                    className="flex-shrink-0 w-12 h-12 rounded-lg overflow-hidden mr-3 border border-white/10 bg-center bg-cover"
+                    style={{ backgroundImage: `url(${song.image ?? safeImageSrc})` }}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-white font-medium truncate text-sm">{song.title}</p>
+                    <p className="text-slate-300 text-xs truncate">{song.artist}</p>
+                  </div>
+                  <div className="flex-shrink-0 ml-2 text-right">
+                    <Badge variant="secondary" className="bg-white/10 text-slate-300 text-xs px-2 py-0.5 border-0">
+                      {song.genre}
+                    </Badge>
+                  </div>
                 </div>
-                <div className="flex-shrink-0 ml-2 text-right">
-                  <Badge variant="secondary" className="bg-white/10 text-slate-300 text-xs px-2 py-0.5 border-0 mb-1">
-                    {song.genre}
-                  </Badge>
-                </div>
-              </div>
-            ))
+              ))}
+            </div>
           ) : (
-            <div className="text-center text-slate-400 mt-10">추천 음악이 없습니다.</div>
+            <div className="text-center text-slate-400 py-8">추천 음악이 없습니다.</div>
           )}
         </div>
       </div>
