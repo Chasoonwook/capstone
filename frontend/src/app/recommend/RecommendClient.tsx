@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Play, Pause, SkipBack, SkipForward, X, ChevronLeft, ChevronRight, Music } from "lucide-react";
+import { Play, Pause, SkipBack, SkipForward, X, ChevronLeft, ChevronRight } from "lucide-react";
 import { API_BASE } from "@/lib/api";
 
 /** ---------- 타입 ---------- */
@@ -14,7 +14,7 @@ type Song = {
   title: string;
   artist: string;
   genre: string;
-  duration?: string;
+  duration?: string; // "mm:ss"
   image?: string | null;
 };
 
@@ -26,12 +26,38 @@ type BackendSong = {
   label?: string;
   genre?: string;
   genre_code?: string;
-  duration?: number | string;
+  duration?: number;
+  duration_sec?: number;
+};
+
+type ByPhotoResponse = {
+  main_songs?: BackendSong[];
+  sub_songs?: BackendSong[];
 };
 
 /** ---------- 유틸 ---------- */
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === "object" && !Array.isArray(v);
+
+const isBackendSong = (v: unknown): v is BackendSong => {
+  if (!isRecord(v)) return false;
+  const { id, music_id, title, artist, label, genre, duration, duration_sec } = v;
+  const isOptStrOrNum = (x: unknown) =>
+    typeof x === "string" || typeof x === "number" || typeof x === "undefined";
+  const isOptNum = (x: unknown) => typeof x === "number" || typeof x === "undefined";
+  return (
+    isOptStrOrNum(id) &&
+    isOptStrOrNum(music_id) &&
+    (typeof title === "string" || typeof title === "undefined") &&
+    (typeof artist === "string" || typeof artist === "undefined") &&
+    (typeof label === "string" || typeof label === "undefined") &&
+    (typeof genre === "string" || typeof genre === "undefined") &&
+    isOptNum(duration) &&
+    isOptNum(duration_sec)
+  );
+};
+
+const toBackendSongArray = (v: unknown): BackendSong[] => (Array.isArray(v) ? v.filter(isBackendSong) : []);
 
 async function safeText(res: Response) {
   try {
@@ -41,7 +67,7 @@ async function safeText(res: Response) {
   }
 }
 
-// 이미지 바이너리 URL 탐색: /api/photos/... -> /photos/...
+// 업로드 이미지 바이너리 URL 탐색
 async function resolveImageUrl(photoId: string): Promise<string | null> {
   const candidates = [
     `${API_BASE}/api/photos/${photoId}/binary`,
@@ -58,6 +84,25 @@ async function resolveImageUrl(photoId: string): Promise<string | null> {
   return null;
 }
 
+// "mm:ss" -> seconds
+function parseDurationToSec(d?: string): number {
+  if (!d) return 180;
+  const m = /^(\d+):(\d{2})$/.exec(d);
+  if (!m) return 180;
+  const mins = Number(m[1]);
+  const secs = Number(m[2]);
+  if (Number.isNaN(mins) || Number.isNaN(secs)) return 180;
+  return mins * 60 + secs;
+}
+
+function formatTime(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  const mins = Math.floor(s / 60);
+  const secs = s % 60;
+  return `${mins}:${String(secs).padStart(2, "0")}`;
+}
+
+/** ---------- 컴포넌트 ---------- */
 export default function RecommendClient() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -66,12 +111,14 @@ export default function RecommendClient() {
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   const [recommendations, setRecommendations] = useState<Song[]>([]);
   const [currentSong, setCurrentSong] = useState<Song | null>(null);
+
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(180);
+
   const [currentViewIndex, setCurrentViewIndex] = useState(0);
 
-  // === 1) 업로드 이미지 URL 탐색 ===
+  /** 1) 업로드 이미지 URL */
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -88,50 +135,55 @@ export default function RecommendClient() {
     };
   }, [photoId]);
 
-  // === 2) 추천 가져오기 (분위기 무시하고 /random 호출) ===
+  /** 2) 추천(by-photo) */
   useEffect(() => {
     let mounted = true;
 
-    const fetchRandom = async () => {
+    const fetchByPhoto = async () => {
+      if (!photoId) return;
       try {
-        // 필요하면 선호 장르 전달: ?preferred=POP,ROCK 등
-        const r = await fetch(`${API_BASE}/api/recommendations/random`);
+        const r = await fetch(`${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(photoId)}`);
         if (!r.ok) {
-          console.error("추천 API 실패:", r.status, await safeText(r));
+          console.error("[by-photo] 실패:", r.status, await safeText(r));
+          setRecommendations([]);
+          setCurrentSong(null);
           return;
         }
-        const data: any = await r.json();
+        const raw: unknown = await r.json();
+        const resp: ByPhotoResponse = isRecord(raw)
+          ? {
+              main_songs: toBackendSongArray((raw as Record<string, unknown>).main_songs),
+              sub_songs: toBackendSongArray((raw as Record<string, unknown>).sub_songs),
+            }
+          : { main_songs: [], sub_songs: [] };
 
-        const list =
-          (Array.isArray(data?.total) && data.total.length > 0)
-            ? data.total
-            : [
-                ...(Array.isArray(data?.main_songs) ? data.main_songs : []),
-                ...(Array.isArray(data?.sub_songs) ? data.sub_songs : []),
-                ...(Array.isArray(data?.preferred_songs) ? data.preferred_songs : []),
-              ];
+        const list: BackendSong[] = [...(resp.main_songs ?? []), ...(resp.sub_songs ?? [])];
 
-        // 중복 제거
-        const seen = new Set();
-        const dedup = list.filter((s: any, i: number) => {
-          const id = s.music_id ?? s.id ?? i; // 인덱스까지 최후 fallback
-          if (seen.has(id)) return false;
-          seen.add(id);
-          return true;
-        }).slice(0, 10);
+        // dedup by music_id/id
+        const seen = new Set<string | number>();
+        const dedup: BackendSong[] = [];
+        list.forEach((s, i) => {
+          const id = (s.music_id ?? s.id ?? i) as string | number;
+          if (!seen.has(id)) {
+            seen.add(id);
+            dedup.push(s);
+          }
+        });
 
-        const songs: Song[] = dedup.map((it: any, idx: number) => {
-          const seconds =
-            typeof it.duration === "number" ? it.duration :
-            typeof it.duration_sec === "number" ? it.duration_sec : 180;
-          const mm = Math.floor(seconds / 60);
-          const ss = String(Math.floor(seconds % 60)).padStart(2, "0");
-
+        const songs: Song[] = dedup.map((it, idx) => {
+          const sec =
+            typeof it.duration === "number"
+              ? it.duration
+              : typeof it.duration_sec === "number"
+              ? it.duration_sec
+              : 180;
+          const mm = Math.floor(sec / 60);
+          const ss = String(sec % 60).padStart(2, "0");
           return {
             id: it.music_id ?? it.id ?? idx,
             title: it.title ?? "Unknown Title",
             artist: it.artist ?? "Unknown Artist",
-            genre: it.genre ?? it.genre_code ?? it.label ?? "UNKNOWN",
+            genre: it.genre ?? it.label ?? "UNKNOWN",
             duration: `${mm}:${ss}`,
             image: uploadedImage ?? "/placeholder.svg",
           };
@@ -139,21 +191,26 @@ export default function RecommendClient() {
 
         if (mounted) {
           setRecommendations(songs);
-          setCurrentSong(songs[0] ?? null);
-          setDuration(180);
+          const first = songs[0] ?? null;
+          setCurrentSong(first);
+          setCurrentTime(0);
+          setIsPlaying(false);
+          setDuration(parseDurationToSec(first?.duration));
         }
       } catch (e) {
         console.error("추천 불러오기 오류:", e);
+        setRecommendations([]);
+        setCurrentSong(null);
       }
     };
 
-    fetchRandom();
+    fetchByPhoto();
     return () => {
       mounted = false;
     };
-  }, [uploadedImage]); // photoId는 이미지용이라 추천엔 영향 X
+  }, [photoId, uploadedImage]);
 
-  // === 3) 플레이 타이머 ===
+  /** 3) 타이머 */
   useEffect(() => {
     if (!isPlaying) return;
     const id = setInterval(() => {
@@ -162,46 +219,50 @@ export default function RecommendClient() {
     return () => clearInterval(id);
   }, [isPlaying, duration]);
 
-  // === 4) 플레이어 컨트롤 ===
+  /** 4) 컨트롤 */
   const togglePlay = () => setIsPlaying((p) => !p);
+
   const playNextSong = () => {
     if (!currentSong || recommendations.length === 0) return;
     const currentIndex = recommendations.findIndex((song) => song.id === currentSong.id);
     const nextIndex = (currentIndex + 1) % recommendations.length;
-    setCurrentSong(recommendations[nextIndex]);
+    const next = recommendations[nextIndex];
+    setCurrentSong(next);
     setCurrentTime(0);
+    setDuration(parseDurationToSec(next.duration));
+    setIsPlaying(true);
   };
+
   const playPreviousSong = () => {
     if (!currentSong || recommendations.length === 0) return;
     const currentIndex = recommendations.findIndex((song) => song.id === currentSong.id);
     const prevIndex = currentIndex === 0 ? recommendations.length - 1 : currentIndex - 1;
-    setCurrentSong(recommendations[prevIndex]);
+    const prev = recommendations[prevIndex];
+    setCurrentSong(prev);
     setCurrentTime(0);
-  };
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, "0")}`;
+    setDuration(parseDurationToSec(prev.duration));
+    setIsPlaying(true);
   };
 
-  const nextView = () => setCurrentViewIndex((prev) => (prev + 1) % 3);
-  const prevView = () => setCurrentViewIndex((prev) => (prev - 1 + 3) % 3);
+  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = Number(e.target.value);
+    if (Number.isFinite(val)) setCurrentTime(Math.min(Math.max(val, 0), duration));
+  };
 
-  // === 5) 이미지 src 안전 처리 ===
+  /** 5) 배경 이미지 */
   const safeImageSrc = useMemo(() => uploadedImage || "/placeholder.svg", [uploadedImage]);
   const safeBgStyle = useMemo(() => ({ backgroundImage: `url(${safeImageSrc})` }), [safeImageSrc]);
 
-  /** ---------- 뷰 컴포넌트들 ---------- */
-  // (A) CD 플레이어 뷰
+  /** ---------- 뷰들 ---------- */
   const CDPlayerView = () => (
-    <div className="flex-1 flex justify-center items-center">
-      <div className="relative">
+    <div className="flex-1 flex flex-col items-center">
+      <div className="relative mb-10">
         <div className={`relative w-80 h-80 ${isPlaying ? "animate-spin" : ""}`} style={{ animationDuration: "4s" }}>
           <div className="w-full h-full rounded-full bg-gradient-to-br from-slate-200 via-slate-300 to-slate-400 shadow-2xl border-4 border-slate-300 relative">
             <div className="absolute -inset-4 bg-gradient-to-r from-purple-400 via-pink-400 to-indigo-400 rounded-full opacity-20 blur-xl"></div>
             <div
               className="w-full h-full rounded-full overflow-hidden border-8 border-slate-800 relative z-10 bg-center bg-cover"
-              style={{ backgroundImage: `url(${safeImageSrc})` }}
+              style={{ backgroundImage: `url(${currentSong?.image ?? safeImageSrc})` }}
             >
               <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 bg-slate-900/90 rounded-full shadow-inner flex items-center justify-center">
                 <div className="w-8 h-8 bg-slate-950 rounded-full"></div>
@@ -210,258 +271,144 @@ export default function RecommendClient() {
           </div>
         </div>
       </div>
-    </div>
-  );
 
-  // (B) 인스타그램형 뷰
-  const InstagramView = () => (
-    <div className="flex-1 flex items-center justify-center w-full h-full">
-      <div className="flex items-center justify-between w-full max-w-6xl mx-auto px-8">
-        <div className="flex-shrink-0">
-          <div className="relative">
-            <div
-              className="w-80 h-80 rounded-full overflow-hidden border-4 border-white/30 shadow-2xl bg-center bg-cover"
-              style={{ backgroundImage: `url(${safeImageSrc})` }}
-            />
-            <div className="absolute -inset-4 bg-gradient-to-r from-purple-400 via-pink-400 to-indigo-400 rounded-full opacity-20 blur-xl"></div>
-          </div>
-        </div>
-
-        <div className="flex-1 flex flex-col items-center justify-center mx-12">
-          {currentSong && (
-            <>
-              <div className="flex flex-col items-center mb-8">
-                <div
-                  className="mb-5 w-32 h-32 rounded-xl shadow-2xl border border-white/20 bg-center bg-cover"
-                  style={{ backgroundImage: `url(${currentSong.image ?? safeImageSrc})` }}
-                />
-                <div className="text-center">
-                  <h2 className="text-5xl font-bold text-white mb-4 text-balance leading-tight">{currentSong.title}</h2>
-                  <p className="text-2xl text-slate-300 mb-6 font-medium">{currentSong.artist}</p>
-                  <Badge className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-8 py-3 text-lg font-semibold rounded-full shadow-lg">
-                    {currentSong.genre}
-                  </Badge>
-                </div>
-              </div>
-
-              <div className="w-full max-w-md mb-8">
-                <div className="flex items-center justify-between text-slate-300 text-lg mb-4 font-medium">
-                  <span>{formatTime(currentTime)}</span>
-                  <span>{formatTime(duration)}</span>
-                </div>
-                <div className="w-full bg-slate-700/50 rounded-full h-3 backdrop-blur-sm">
-                  <div
-                    className="bg-gradient-to-r from-purple-500 to-pink-500 h-3 rounded-full shadow-lg transition-all duration-300 ease-out"
-                    style={{ width: `${(currentTime / duration) * 100}%` }}
-                  />
-                </div>
-              </div>
-
-              <div className="flex items-center justify-center space-x-10">
-                <Button variant="ghost" size="lg" onClick={playPreviousSong} className="text-white hover:bg-white/10 rounded-full p-5 transition-all duration-200 hover:scale-110">
-                  <SkipBack className="h-8 w-8" />
-                </Button>
-
-                <Button
-                  variant="ghost"
-                  size="lg"
-                  onClick={togglePlay}
-                  className="text-white rounded-full p-8 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 shadow-xl transition-all duration-200 hover:scale-105"
-                >
-                  {isPlaying ? <Pause className="h-10 w-10" /> : <Play className="h-10 w-10 ml-1" />}
-                </Button>
-
-                <Button variant="ghost" size="lg" onClick={playNextSong} className="text-white hover:bg-white/10 rounded-full p-5 transition-all duration-200 hover:scale-110">
-                  <SkipForward className="h-8 w-8" />
-                </Button>
-              </div>
-            </>
-          )}
-        </div>
-
-        {recommendations.length > 0 && (
-          <div className="flex-shrink-0 w-80">
-            <div className="bg-black/30 backdrop-blur-md rounded-2xl p-6 border border-white/10 shadow-2xl">
-              <h3 className="text-xl font-semibold text-white mb-4 text-center">추천 플레이리스트</h3>
-              <div className="max-h-96 overflow-y-auto space-y-3">
-                {recommendations.slice(0, 6).map((song) => (
-                  <div
-                    key={song.id}
-                    onClick={() => {
-                      setCurrentSong(song);
-                      setCurrentTime(0);
-                    }}
-                    className={`flex items-center p-3 rounded-xl cursor-pointer transition-all duration-200 ${
-                      currentSong?.id === song.id
-                        ? "bg-gradient-to-r from-purple-500/30 to-pink-500/30 border border-purple-400/50 shadow-lg"
-                        : "hover:bg-white/10 hover:scale-[1.02]"
-                    }`}
-                  >
-                    <div
-                      className="flex-shrink-0 w-12 h-12 rounded-lg overflow-hidden mr-3 border border-white/10 bg-center bg-cover"
-                      style={{ backgroundImage: `url(${song.image ?? safeImageSrc})` }}
-                    />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-white font-medium truncate text-sm">{song.title}</p>
-                      <p className="text-slate-300 text-xs truncate">{song.artist}</p>
-                    </div>
-                    <div className="flex-shrink-0 ml-2">
-                      <span className="text-slate-400 text-xs">{song.duration || "3:24"}</span>
-                    </div>
-                    {currentSong?.id === song.id && (
-                      <div className="flex-shrink-0 ml-2">
-                        <div className="w-2 h-2 bg-gradient-to-r from-purple-400 to-pink-500 rounded-full animate-pulse"></div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
+      {/* 곡 정보 */}
+      <div className="text-center mb-6">
+        <h3 className="text-white text-3xl font-semibold">{currentSong?.title ?? "—"}</h3>
+        <p className="text-slate-300 text-lg">{currentSong?.artist ?? "—"}</p>
+        {currentSong?.genre && (
+          <div className="mt-3">
+            <Badge variant="secondary" className="bg-white/10 text-slate-200 border-0">
+              {currentSong.genre}
+            </Badge>
           </div>
         )}
       </div>
-    </div>
-  );
 
-  // (C) 기본 뷰
-  const DefaultView = () => (
-    <div className="flex-1 flex justify-center">
-      <div className="relative">
-        <div className="absolute -inset-4 bg-gradient-to-r from-purple-400 via-pink-400 to-indigo-400 rounded-2xl opacity-30 blur-xl"></div>
-        <div
-          className="relative z-10 rounded-2xl shadow-2xl border-2 border-white/20 w-[400px] h-[400px] bg-center bg-cover"
-          style={{ backgroundImage: `url(${safeImageSrc})` }}
+      {/* 진행바 */}
+      <div className="w-full max-w-md mb-6">
+        <div className="flex justify-between text-slate-300 text-sm mb-1">
+          <span>{formatTime(currentTime)}</span>
+          <span>{formatTime(duration)}</span>
+        </div>
+        <input
+          type="range"
+          min={0}
+          max={duration}
+          value={currentTime}
+          onChange={handleSeek}
+          className="w-full accent-purple-500"
         />
       </div>
-    </div>
-  );
 
-  // 공통 플레이어 + 리스트
-  const renderPlayerAndPlaylist = () => (
-    <>
-      {currentSong && (
-        <>
-          <div className="flex flex-col items-center mb-8">
-            <div
-              className="mb-4 w-32 h-32 rounded-xl shadow-2xl border border-white/20 bg-center bg-cover"
-              style={{ backgroundImage: `url(${currentSong.image ?? safeImageSrc})` }}
-            />
-            <div className="text-center">
-              <h2 className="text-4xl font-bold text-white mb-3 text-balance leading-tight">{currentSong.title}</h2>
-              <p className="text-xl text-slate-300 mb-4 font-medium">{currentSong.artist}</p>
-              <Badge className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-6 py-2 text-sm font-semibold rounded-full shadow-lg">
-                {currentSong.genre}
-              </Badge>
-            </div>
-          </div>
-
-          <div className="mb-8 w-full max-w-md mx-auto">
-            <div className="flex items-center justify-between text-slate-300 text-sm mb-3 font-medium">
-              <span>{formatTime(currentTime)}</span>
-              <span>{formatTime(duration)}</span>
-            </div>
-            <div className="w-full bg-slate-700/50 rounded-full h-2 backdrop-blur-sm">
-              <div
-                className="bg-gradient-to-r from-purple-500 to-pink-500 h-2 rounded-full shadow-lg transition-all duration-300 ease-out"
-                style={{ width: `${(currentTime / duration) * 100}%` }}
-              />
-            </div>
-          </div>
-        </>
-      )}
-
-      <div className="flex items-center justify-center space-x-8 mb-8">
-        <Button variant="ghost" size="lg" onClick={playPreviousSong} className="text-white hover:bg-white/10 rounded-full p-4 transition-all duration-200 hover:scale-110">
-          <SkipBack className="h-6 w-6" />
+      {/* 컨트롤 */}
+      <div className="flex items-center space-x-6">
+        <Button
+          size="icon"
+          variant="ghost"
+          className="rounded-full bg-white/10 hover:bg-white/20"
+          onClick={playPreviousSong}
+          aria-label="previous"
+        >
+          <SkipBack className="h-6 w-6 text-white" />
         </Button>
 
         <Button
-          variant="ghost"
-          size="lg"
+          size="icon"
+          className="rounded-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
           onClick={togglePlay}
-          className="text-white rounded-full p-6 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 shadow-xl transition-all duration-200 hover:scale-105"
+          aria-label={isPlaying ? "pause" : "play"}
         >
-          {isPlaying ? <Pause className="h-8 w-8" /> : <Play className="h-8 w-8 ml-1" />}
+          {isPlaying ? <Pause className="h-7 w-7 text-white" /> : <Play className="h-7 w-7 text-white" />}
         </Button>
 
-        <Button variant="ghost" size="lg" onClick={playNextSong} className="text-white hover:bg-white/10 rounded-full p-4 transition-all duration-200 hover:scale-110">
-          <SkipForward className="h-6 w-6" />
+        <Button
+          size="icon"
+          variant="ghost"
+          className="rounded-full bg-white/10 hover:bg-white/20"
+          onClick={playNextSong}
+          aria-label="next"
+        >
+          <SkipForward className="h-6 w-6 text-white" />
         </Button>
       </div>
+    </div>
+  );
 
-      {recommendations.length > 0 && (
-        <div className="mt-8 w-full max-w-2xl mx-auto">
-          <h3 className="text-xl font-semibold text-white mb-4 text-center">추천 음악</h3>
-          <div className="bg-white/5 backdrop-blur-sm rounded-2xl p-4 max-h-80 overflow-y-auto border border-white/10">
-            <div className="space-y-2">
-              {recommendations.map((song) => (
-                <div
-                  key={song.id}
-                  onClick={() => {
-                    setCurrentSong(song);
-                    setCurrentTime(0);
-                  }}
-                  className={`flex items-center p-3 rounded-xl cursor-pointer transition-all duration-200 hover:bg-white/10 ${
-                    currentSong?.id === song.id
-                      ? "bg-gradient-to-r from-purple-500/20 to-pink-500/20 border border-purple-400/30"
-                      : "hover:scale-[1.02]"
-                  }`}
-                >
-                  <div
-                    className="flex-shrink-0 w-12 h-12 rounded-lg overflow-hidden mr-3 border border-white/10 bg-center bg-cover"
-                    style={{ backgroundImage: `url(${song.image ?? safeImageSrc})` }}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-white font-medium truncate">{song.title}</p>
-                    <p className="text-slate-300 text-sm truncate">{song.artist}</p>
-                  </div>
-                  <div className="flex-shrink-0 ml-3">
-                    <Badge variant="secondary" className="bg-white/10 text-slate-300 text-xs px-2 py-1 border-0">
-                      {song.genre}
-                    </Badge>
-                  </div>
-                  {currentSong?.id === song.id && (
-                    <div className="flex-shrink-0 ml-2">
-                      <div className="w-2 h-2 bg-gradient-to-r from-purple-400 to-pink-400 rounded-full animate-pulse"></div>
-                    </div>
-                  )}
-                </div>
-              ))}
+  const InstagramView = () => (
+    <div className="flex-1 flex items-center justify-center w-full h-full">
+      <div className="text-slate-300">Instagram View (준비 중)</div>
+    </div>
+  );
+
+  const DefaultView = () => (
+    <div className="flex-1 flex justify-center items-center">
+      <div className="text-slate-300">Default View (준비 중)</div>
+    </div>
+  );
+
+  /** 플레이리스트(항상 노출) */
+  const MusicListContainer = () => (
+    <div className="fixed right-0 top-0 h-full w-[400px] bg-black bg-opacity-70 backdrop-blur-lg shadow-2xl z-50 p-6 flex flex-col">
+      <h2 className="text-white font-bold text-2xl mb-5 text-center">추천 음악</h2>
+      <div className="overflow-y-auto flex-1">
+        {recommendations.length > 0 ? (
+          recommendations.map((song) => (
+            <div
+              key={song.id}
+              onClick={() => {
+                setCurrentSong(song);
+                setCurrentTime(0);
+                setDuration(parseDurationToSec(song.duration));
+                setIsPlaying(true);
+              }}
+              className={`flex items-center p-3 rounded-xl cursor-pointer mb-2 transition-all duration-200 hover:bg-white/10 ${
+                currentSong?.id === song.id
+                  ? "bg-gradient-to-r from-purple-500/20 to-pink-500/20 border border-purple-400/30"
+                  : ""
+              }`}
+            >
+              <div
+                className="flex-shrink-0 w-12 h-12 rounded-lg overflow-hidden mr-3 border border-white/10 bg-center bg-cover"
+                style={{ backgroundImage: `url(${song.image ?? safeImageSrc})` }}
+              />
+              <div className="flex-1 min-w-0">
+                <p className="text-white font-medium truncate">{song.title}</p>
+                <p className="text-slate-300 text-sm truncate">{song.artist}</p>
+              </div>
+              <div className="flex-shrink-0 ml-3 text-right">
+                <Badge variant="secondary" className="bg-white/10 text-slate-300 text-xs px-2 py-1 border-0 mb-1">
+                  {song.genre}
+                </Badge>
+                <div className="text-slate-400 text-xs">{song.duration ?? "—"}</div>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
-    </>
+          ))
+        ) : (
+          <div className="text-center text-slate-400 mt-10">추천 음악이 없습니다.</div>
+        )}
+      </div>
+    </div>
   );
 
   const renderCurrentView = () => {
     const views = ["cd", "instagram", "default"] as const;
     switch (views[currentViewIndex]) {
       case "cd":
-        return (
-          <>
-            <CDPlayerView />
-            <div className="flex-1 ml-12 h-full flex flex-col justify-center">{renderPlayerAndPlaylist()}</div>
-          </>
-        );
+        return <CDPlayerView />;
       case "instagram":
         return <InstagramView />;
       default:
-        return (
-          <>
-            <DefaultView />
-            <div className="flex-1 ml-12 h-full flex flex-col justify-center">{renderPlayerAndPlaylist()}</div>
-          </>
-        );
+        return <DefaultView />;
     }
   };
 
+  /** 네비게이션/뷰 전환 */
   const handleClose = () => {
     try {
       router.replace("/");
-    } catch (error) {
-      console.error("Navigation error:", error);
-      window.location.href = "/";
+    } catch {
+      (window as unknown as { location: Location }).location.href = "/";
     }
   };
 
@@ -469,11 +416,13 @@ export default function RecommendClient() {
   const handleNextView = () => setCurrentViewIndex((prev) => (prev + 1) % 3);
 
   return (
-    <div className="fixed inset-0 z-50 bg-black bg-opacity-95 flex items-center justify-center">
+    <div className="fixed inset-0 z-40 bg-black bg-opacity-95 flex items-center justify-center">
+      {/* 배경 */}
       <div className="absolute inset-0 bg-cover bg-center blur-md scale-110" style={safeBgStyle} />
       <div className="absolute inset-0 bg-gradient-to-br from-purple-900/30 via-black/50 to-pink-900/30"></div>
 
-      <div className="absolute top-6 right-6 z-10 flex space-x-3">
+      {/* 닫기 */}
+      <div className="absolute top-6 right-[420px] z-50 flex space-x-3">
         <button
           onClick={handleClose}
           className="bg-white/10 backdrop-blur-sm rounded-full p-3 shadow-lg hover:bg-white/20 transition-all duration-200 hover:scale-110 border border-white/20"
@@ -483,24 +432,29 @@ export default function RecommendClient() {
         </button>
       </div>
 
+      {/* 좌/우 뷰 전환 */}
       <button
         onClick={handlePrevView}
-        className="absolute left-6 top-1/2 -translate-y-1/2 z-10 bg-white/10 hover:bg-white/20 backdrop-blur-sm rounded-full p-4 transition-all duration-200 hover:scale-110 border border-white/20"
+        className="absolute left-6 top-1/2 -translate-y-1/2 z-40 bg-white/10 hover:bg-white/20 backdrop-blur-sm rounded-full p-4 transition-all duration-200 hover:scale-110 border border-white/20"
         type="button"
       >
         <ChevronLeft className="h-6 w-6 text-white" />
       </button>
       <button
         onClick={handleNextView}
-        className="absolute right-6 top-1/2 -translate-y-1/2 z-10 bg-white/10 hover:bg-white/20 backdrop-blur-sm rounded-full p-4 transition-all duration-200 hover:scale-110 border border-white/20"
+        className="absolute right-[420px] top-1/2 -translate-y-1/2 z-40 bg-white/10 hover:bg-white/20 backdrop-blur-sm rounded-full p-4 transition-all duration-200 hover:scale-110 border border-white/20"
         type="button"
       >
         <ChevronRight className="h-6 w-6 text-white" />
       </button>
 
-      <div className="relative z-10 w-full max-w-6xl mx-auto px-6 flex items-center justify-between h-full">
+      {/* 메인 View */}
+      <div className="relative z-30 w-full max-w-6xl mx-auto px-6 flex items-center justify-between h-full">
         {renderCurrentView()}
       </div>
+
+      {/* 추천 리스트 */}
+      <MusicListContainer />
     </div>
   );
 }
