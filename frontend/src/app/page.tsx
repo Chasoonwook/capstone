@@ -395,12 +395,11 @@ export default function MusicRecommendationApp() {
           </div>
 
           {/* ✅ 하드코딩된 음악 그리드 제거 → 안내 문구만 표시 */}
-          <div className="w-full">
-            <div className="text-center text-gray-500 bg-white/70 backdrop-blur-sm border border-gray-100 rounded-2xl py-14">
+           {/* 음악 리스트 대신 메시지 출력 */}
+            <div className="text-center text-gray-500 py-20 border border-dashed rounded-lg">
               아직 추억이 없습니다.
             </div>
           </div>
-        </div>
       </main>
     </div>
   )
