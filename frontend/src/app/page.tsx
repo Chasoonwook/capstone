@@ -1,7 +1,6 @@
 "use client"
 
 import type React from "react"
-
 import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -50,6 +49,29 @@ const viewStyles = [
   { id: "instagram", name: "인스타그램", description: "소셜 미디어 스타일 플레이어" },
 ]
 
+// ✅ 색감 추가: 장르/메모리 그라디언트 팔레트
+const genreColors: Record<string, string> = {
+  팝: "bg-gradient-to-r from-pink-500 to-rose-500 text-white",
+  재즈: "bg-gradient-to-r from-blue-500 to-indigo-500 text-white",
+  운동: "bg-gradient-to-r from-orange-500 to-red-500 text-white",
+  휴식: "bg-gradient-to-r from-green-500 to-emerald-500 text-white",
+  집중: "bg-gradient-to-r from-purple-500 to-violet-500 text-white",
+  평온: "bg-gradient-to-r from-cyan-500 to-blue-500 text-white",
+  슬픔: "bg-gradient-to-r from-gray-500 to-slate-500 text-white",
+  파티: "bg-gradient-to-r from-yellow-500 to-orange-500 text-white",
+  로맨스: "bg-gradient-to-r from-pink-500 to-purple-500 text-white",
+  출퇴근: "bg-gradient-to-r from-teal-500 to-cyan-500 text-white",
+}
+
+const memoryColors = [
+  "from-pink-400/20 to-purple-500/20",
+  "from-blue-400/20 to-cyan-500/20",
+  "from-green-400/20 to-emerald-500/20",
+  "from-yellow-400/20 to-orange-500/20",
+  "from-purple-400/20 to-indigo-500/20",
+  "from-red-400/20 to-pink-500/20",
+]
+
 export default function MusicRecommendationApp() {
   const [uploadedImage, setUploadedImage] = useState<string | null>(null)
   const [uploadedPhotoId, setUploadedPhotoId] = useState<string | null>(null)
@@ -60,7 +82,7 @@ export default function MusicRecommendationApp() {
   // 로그인 상태/유저
   const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [user, setUser] = useState({
-    name: "진영", // 초기값 (로컬 저장소 복원되면 덮어씌워짐)
+    name: "진영", // 초기값(스토리지 복원 시 덮어씀)
     email: "almond-v6w@gmail.com",
     avatar: "/placeholder.svg?height=32&width=32",
   })
@@ -74,26 +96,19 @@ export default function MusicRecommendationApp() {
   const [recommendations, setRecommendations] = useState(sampleRecommendations)
 
   const router = useRouter()
-
   const [isUploading, setIsUploading] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
 
-  // ✅ 마운트 시 localStorage에서 로그인 상태 복원
+  // ✅ 로그인 정보 복원
   useEffect(() => {
     try {
       const token = localStorage.getItem("token")
       const name = localStorage.getItem("name")
       const email = localStorage.getItem("email")
-      // uid/avatar는 선택
-      const avatar = "/placeholder.svg?height=32&width=32"
+      const avatar = localStorage.getItem("avatar") || "/placeholder.svg?height=32&width=32"
 
       if (token && name && email) {
-        setUser((prev) => ({
-          ...prev,
-          name,
-          email,
-          avatar: prev.avatar || avatar,
-        }))
+        setUser((prev) => ({ ...prev, name, email, avatar: prev.avatar || avatar }))
         setIsLoggedIn(true)
       } else {
         setIsLoggedIn(false)
@@ -103,16 +118,15 @@ export default function MusicRecommendationApp() {
     }
   }, [])
 
-  // 로그아웃: 상태 + 저장소 정리 후 로그인 페이지로 이동(선택)
   const handleLogout = () => {
     try {
       localStorage.removeItem("token")
       localStorage.removeItem("uid")
       localStorage.removeItem("email")
       localStorage.removeItem("name")
+      localStorage.removeItem("avatar")
     } catch {}
     setIsLoggedIn(false)
-    // 필요 시 메인 유지하려면 아래 라인 주석
     router.push("/login")
   }
 
@@ -184,7 +198,7 @@ export default function MusicRecommendationApp() {
   const prevView = () => setCurrentViewIndex((prev) => (prev - 1 + viewStyles.length) % viewStyles.length)
   const goToView = (index: number) => setCurrentViewIndex(index)
 
-  // ----- 뷰 컴포넌트들 -----
+  // ----- 뷰 컴포넌트들 (기존과 동일) -----
   const CDPlayerView = () => (
     <div className="flex-1 flex justify-center items-center">
       <div className="relative">
@@ -273,7 +287,7 @@ export default function MusicRecommendationApp() {
               {isPlaying && (
                 <div className="absolute bottom-4 left-4 flex space-x-1">
                   {[...Array(8)].map((_, i) => (
-                    <div key={i} className="w-2 bg-purple-400 rounded-full animate-pulse" style={{ height: `${Math.random() * 20 + 10}px`, animationDelay: `${i * 0.1}s` }} />
+                    <div key={i} className="w-2 rounded-full animate-pulse bg-purple-400" style={{ height: `${Math.random() * 20 + 10}px`, animationDelay: `${i * 0.1}s` }} />
                   ))}
                 </div>
               )}
@@ -338,7 +352,9 @@ export default function MusicRecommendationApp() {
                       <Image src={song.image || "/placeholder.svg"} alt={song.title} width={40} height={40} className="w-full h-full object-cover" />
                     </div>
                     {currentSong.id === song.id && <div className="absolute -inset-1 rounded-full border-2 border-white animate-pulse"></div>}
-                    <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-purple-600 rounded-full flex items-center justify-center text-white text-xs font-bold">{index + 1}</div>
+                    <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-purple-600 rounded-full flex items-center justify-center text-white text-xs font-bold">
+                      {index + 1}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -398,20 +414,24 @@ export default function MusicRecommendationApp() {
   }
 
   return (
-    <div className="min-h-screen bg-white relative overflow-hidden">
-      {/* Background Pattern */}
-      <div className="absolute inset-0 opacity-5">
-        <div className="absolute inset-0 bg-gradient-to-br from-purple-100 to-pink-100"></div>
+    <div className="min-h-screen bg-gradient-to-br from-purple-100 via-pink-100 to-blue-100 relative overflow-hidden">
+      {/* ✅ 배경 색감 요소들 */}
+      <div className="absolute inset-0 opacity-20">
+        <div className="absolute inset-0 bg-gradient-to-br from-purple-200/50 to-pink-200/50"></div>
         <div
-          className="absolute inset-0 opacity-30"
+          className="absolute inset-0 opacity-60"
           style={{
-            backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fillRule='evenodd'%3E%3Cg fill='%23a855f7' fillOpacity='0.1'%3E%3Ccircle cx='30' cy='30' r='2'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
+            backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fillRule='evenodd'%3E%3Cg fill='%23a855f7' fillOpacity='0.3'%3E%3Ccircle cx='30' cy='30' r='2'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
           }}
         ></div>
+        <div className="absolute top-20 left-20 w-32 h-32 bg-gradient-to-br from-pink-300 to-purple-400 rounded-full opacity-20 blur-3xl"></div>
+        <div className="absolute top-40 right-32 w-24 h-24 bg-gradient-to-br from-blue-300 to-cyan-400 rounded-full opacity-25 blur-2xl"></div>
+        <div className="absolute bottom-32 left-1/3 w-40 h-40 bg-gradient-to-br from-yellow-300 to-orange-400 rounded-full opacity-15 blur-3xl"></div>
+        <div className="absolute bottom-20 right-20 w-28 h-28 bg-gradient-to-br from-green-300 to-emerald-400 rounded-full opacity-20 blur-2xl"></div>
       </div>
 
-      {/* Header */}
-      <header className="bg-white/80 backdrop-blur-sm border-b border-gray-100 relative z-10">
+      {/* Header (그라디언트 배경/버튼) */}
+      <header className="bg-gradient-to-r from-white/90 via-purple-50/90 to-pink-50/90 backdrop-blur-sm border-b border-purple-100 relative z-10">
         <div className="max-w-6xl mx-auto px-6 py-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
@@ -442,26 +462,11 @@ export default function MusicRecommendationApp() {
                     </div>
                   </div>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem>
-                    <UserCircle className="mr-2 h-4 w-4" />
-                    <span>내 채널</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem>
-                    <CreditCard className="mr-2 h-4 w-4" />
-                    <span>유료 멤버십</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem>
-                    <User className="mr-2 h-4 w-4" />
-                    <span>개인 정보</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem>
-                    <History className="mr-2 h-4 w-4" />
-                    <span>시청 기록</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem>
-                    <Settings className="mr-2 h-4 w-4" />
-                    <span>설정</span>
-                  </DropdownMenuItem>
+                  <DropdownMenuItem><UserCircle className="mr-2 h-4 w-4" /><span>내 채널</span></DropdownMenuItem>
+                  <DropdownMenuItem><CreditCard className="mr-2 h-4 w-4" /><span>유료 멤버십</span></DropdownMenuItem>
+                  <DropdownMenuItem><User className="mr-2 h-4 w-4" /><span>개인 정보</span></DropdownMenuItem>
+                  <DropdownMenuItem><History className="mr-2 h-4 w-4" /><span>시청 기록</span></DropdownMenuItem>
+                  <DropdownMenuItem><Settings className="mr-2 h-4 w-4" /><span>설정</span></DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={handleLogout}>
                     <LogOut className="mr-2 h-4 w-4" />
@@ -470,7 +475,10 @@ export default function MusicRecommendationApp() {
                 </DropdownMenuContent>
               </DropdownMenu>
             ) : (
-              <Button onClick={() => router.push("/login")} className="bg-purple-600 hover:bg-purple-700 text-white rounded-full px-6">
+              <Button
+                onClick={() => router.push("/login")}
+                className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-full px-6 shadow-md hover:shadow-lg transition-all"
+              >
                 로그인
               </Button>
             )}
@@ -479,7 +487,7 @@ export default function MusicRecommendationApp() {
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-16 relative z-10">
-        {/* 사진 업로드 */}
+        {/* 업로드 영역(그라디언트 보더) */}
         <div className="text-center mb-20">
           <h2 className="text-4xl font-light text-gray-900 mb-4">사진으로 음악을 찾아보세요</h2>
           <p className="text-gray-500 mb-12 text-lg font-light max-w-2xl mx-auto">
@@ -489,24 +497,26 @@ export default function MusicRecommendationApp() {
           <div className="flex justify-center mb-8">
             <label className="cursor-pointer group">
               <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" disabled={isUploading} />
-              <div className="border-2 border-dashed border-gray-200 rounded-3xl p-16 bg-gray-50/50 hover:border-purple-300 hover:bg-purple-50/30 transition-all duration-300">
-                {isUploading ? (
-                  <div className="text-center">
-                    <div className="animate-spin h-8 w-8 border-2 border-purple-600 border-t-transparent rounded-full mx-auto mb-4"></div>
-                    <p className="text-gray-600 font-light">업로드 중...</p>
-                  </div>
-                ) : uploadedImage ? (
-                  <div className="relative">
-                    <Image src={uploadedImage || "/placeholder.svg"} alt="업로드된 사진" width={240} height={160} className="rounded-2xl object-cover mx-auto" />
-                  </div>
-                ) : (
-                  <div className="text-center">
-                    <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4 group-hover:bg-purple-100 transition-colors">
-                      <Upload className="h-8 w-8 text-gray-400 group-hover:text-purple-500" />
+              <div className="border-2 border-dashed border-transparent bg-gradient-to-r from-purple-200 via-pink-200 to-blue-200 p-0.5 rounded-3xl hover:from-purple-300 hover:via-pink-300 hover:to-blue-300 transition-all duration-300">
+                <div className="bg-white/80 backdrop-blur-sm rounded-3xl p-16 hover:bg-white/90 transition-all">
+                  {isUploading ? (
+                    <div className="text-center">
+                      <div className="animate-spin h-8 w-8 border-2 border-purple-600 border-t-transparent rounded-full mx-auto mb-4"></div>
+                      <p className="text-gray-600 font-light">업로드 중...</p>
                     </div>
-                    <p className="text-gray-600 font-light">사진을 업로드하세요</p>
-                  </div>
-                )}
+                  ) : uploadedImage ? (
+                    <div className="relative">
+                      <Image src={uploadedImage || "/placeholder.svg"} alt="업로드된 사진" width={240} height={160} className="rounded-2xl object-cover mx-auto" />
+                    </div>
+                  ) : (
+                    <div className="text-center">
+                      <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4 group-hover:bg-purple-100 transition-colors">
+                        <Upload className="h-8 w-8 text-gray-400 group-hover:text-purple-500" />
+                      </div>
+                      <p className="text-gray-600 font-light">사진을 업로드하세요</p>
+                    </div>
+                  )}
+                </div>
               </div>
             </label>
           </div>
@@ -515,7 +525,7 @@ export default function MusicRecommendationApp() {
             onClick={generateRecommendations}
             size="lg"
             disabled={isGenerating || (!uploadedImage && selectedGenres.length === 0)}
-            className="bg-purple-600 hover:bg-purple-700 text-white px-12 py-3 rounded-full font-light disabled:opacity-50"
+            className="bg-gradient-to-r from-purple-600 via-pink-600 to-blue-600 hover:from-purple-700 hover:via-pink-700 hover:to-blue-700 text-white px-12 py-3 rounded-full font-light disabled:opacity-50 shadow-lg hover:shadow-xl transition-all"
           >
             {isGenerating ? (
               <>
@@ -528,7 +538,7 @@ export default function MusicRecommendationApp() {
           </Button>
         </div>
 
-        {/* 검색창 */}
+        {/* 검색 */}
         <div className="mb-16">
           <div className="max-w-xl mx-auto relative">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 h-5 w-5" />
@@ -542,7 +552,7 @@ export default function MusicRecommendationApp() {
           </div>
         </div>
 
-        {/* 기분 선택 */}
+        {/* 기분 선택(장르 뱃지 색상 적용) */}
         <div className="mb-20">
           <h3 className="text-xl font-light text-gray-900 mb-8 text-center">오늘의 기분</h3>
           <div className="flex flex-wrap justify-center gap-3 max-w-2xl mx-auto">
@@ -552,8 +562,8 @@ export default function MusicRecommendationApp() {
                 variant={selectedGenres.includes(genre) ? "default" : "outline"}
                 className={`cursor-pointer px-6 py-2 text-sm rounded-full font-light transition-all ${
                   selectedGenres.includes(genre)
-                    ? "bg-purple-600 text-white"
-                    : "border-gray-200 text-gray-600 hover:border-purple-300 hover:text-purple-600"
+                    ? genreColors[genre] || "bg-purple-600 text-white"
+                    : "border-gray-200 text-gray-600 hover:border-purple-300 hover:text-purple-600 bg-white/80"
                 }`}
                 onClick={() => toggleGenre(genre)}
               >
@@ -563,7 +573,7 @@ export default function MusicRecommendationApp() {
           </div>
         </div>
 
-        {/* 사용자 추억 히스토리 */}
+        {/* 사용자 추억 히스토리(카드 오버레이 색감) */}
         <div className="mb-16">
           <div className="flex items-center mb-10">
             <div className="flex items-center space-x-4">
@@ -572,7 +582,6 @@ export default function MusicRecommendationApp() {
                 <AvatarFallback className="bg-purple-600 text-white">{user.name.charAt(0)}</AvatarFallback>
               </Avatar>
               <div>
-                {/* 🔥 여기: 동적 사용자 이름 표시 (하드코딩 제거) */}
                 <h3 className="text-2xl font-light text-gray-900">{user.name}님의 추억</h3>
                 <p className="text-gray-500 font-light">최근에 들었던 음악들</p>
               </div>
@@ -592,11 +601,11 @@ export default function MusicRecommendationApp() {
               { id: 4, title: "넌 떠올리는 중이야", artist: "PATEKO", image: "/placeholder.svg?height=150&width=150&text=넌떠올리는중이야" },
               { id: 5, title: "작은 봄", artist: "고주잠자리", image: "/placeholder.svg?height=150&width=150&text=작은봄" },
               { id: 6, title: "Love Me Again", artist: "Jayci yucca", image: "/placeholder.svg?height=150&width=150&text=LoveMeAgain" },
-            ].map((item) => (
+            ].map((item, index) => (
               <div key={item.id} className="group cursor-pointer">
                 <div className="relative mb-3">
                   <Image src={item.image || "/placeholder.svg"} alt={item.title} width={150} height={150} className="w-full aspect-square object-cover rounded-2xl transition-all duration-300 group-hover:scale-105" />
-                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 rounded-2xl transition-all flex items-center justify-center">
+                  <div className={`absolute inset-0 bg-gradient-to-br ${memoryColors[index % memoryColors.length]} group-hover:opacity-80 opacity-0 rounded-2xl transition-all flex items-center justify-center`}>
                     <Button
                       size="sm"
                       className="opacity-0 group-hover:opacity-100 transition-all bg-white text-purple-600 hover:bg-gray-50 rounded-full p-3 shadow-lg"
@@ -648,10 +657,10 @@ export default function MusicRecommendationApp() {
         )}
       </main>
 
-      {/* Immersive Music View */}
+      {/* Immersive View (색감 그대로) */}
       {showImmersiveView && uploadedImage && (
         <div className="fixed inset-0 z-50 bg-black bg-opacity-90 flex items-center justify-center">
-          <div className="absolute inset-0 bg-cover bg-center blur-sm" style={{ backgroundImage: `url(${uploadedImage})` }} />
+          <div className="absolute inset-0 bg-cover bg-center filter blur-sm" style={{ backgroundImage: `url(${uploadedImage})` }} />
           <div className="absolute inset-0 bg-black bg-opacity-40" />
           <div className="absolute top-6 right-6 z-10 flex space-x-3">
             <button
@@ -659,14 +668,14 @@ export default function MusicRecommendationApp() {
                 setCurrentSong(sampleRecommendations[Math.floor(Math.random() * sampleRecommendations.length)])
                 setIsPlaying(true)
               }}
-              className="bg-white/20 hover:bg-white/30 rounded-full p-3 text-white transition-all"
+              className="bg-white bg-opacity-20 hover:bg-opacity-30 rounded-full p-3 text-white transition-all"
               title="음악 다시 추천받기"
             >
               <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
             </button>
-            <button onClick={closeImmersiveView} className="bg-white/20 hover:bg-white/30 rounded-full p-3 text-white transition-all">
+            <button onClick={closeImmersiveView} className="bg-white bg-opacity-20 hover:bg-opacity-30 rounded-full p-3 text-white transition-all">
               <X className="h-6 w-6" />
             </button>
           </div>
@@ -684,15 +693,16 @@ export default function MusicRecommendationApp() {
             </div>
           </div>
 
-          <button onClick={prevView} className="absolute left-6 top-1/2 -translate-y-1/2 z-10 bg-white/20 hover:bg-white/30 rounded-full p-3 text-white transition-all">
+          <button onClick={prevView} className="absolute left-6 top-1/2 -translate-y-1/2 z-10 bg-white bg-opacity-20 hover:bg-opacity-30 rounded-full p-3 text-white transition-all">
             <ChevronLeft className="h-6 w-6" />
           </button>
-          <button onClick={nextView} className="absolute right-6 top-1/2 -translate-y-1/2 z-10 bg-white/20 hover:bg-white/30 rounded-full p-3 text-white transition-all">
+          <button onClick={nextView} className="absolute right-6 top-1/2 -translate-y-1/2 z-10 bg-white bg-opacity-20 hover:bg-opacity-30 rounded-full p-3 text-white transition-all">
             <ChevronRight className="h-6 w-6" />
           </button>
 
           <div className="relative z-10 w-full max-w-6xl mx-auto px-6 flex items-center justify-between h-full">
             {renderCurrentView()}
+
             {viewStyles[currentViewIndex].id !== "instagram" && (
               <div className="flex-1 ml-12 h-full flex flex-col justify-center">
                 <div className="text-center mb-8">
@@ -701,6 +711,7 @@ export default function MusicRecommendationApp() {
                   <Badge className="bg-purple-600 text-white px-4 py-1">{currentSong.genre}</Badge>
                   <p className="text-sm text-gray-400 mt-2">{viewStyles[currentViewIndex].description}</p>
                 </div>
+
                 <div className="mb-8">
                   <div className="flex items-center justify-between text-white text-sm mb-2">
                     <span>{formatTime(currentTime)}</span>
@@ -710,6 +721,7 @@ export default function MusicRecommendationApp() {
                     <div className="bg-purple-500 h-2 rounded-full transition-all duration-300" style={{ width: `${(currentTime / duration) * 100}%` }} />
                   </div>
                 </div>
+
                 <div className="flex items-center justify-center space-x-6 mb-8">
                   <Button variant="ghost" size="lg" onClick={playPreviousSong} className="text-white hover:bg-white/20 rounded-full p-3">
                     <SkipBack className="h-6 w-6" />
@@ -721,6 +733,7 @@ export default function MusicRecommendationApp() {
                     <SkipForward className="h-6 w-6" />
                   </Button>
                 </div>
+
                 <div className="bg-black/30 backdrop-blur-sm rounded-2xl p-6 max-h-80 overflow-y-auto">
                   <h3 className="text-white text-lg font-semibold mb-4">추천 플레이리스트</h3>
                   <div className="space-y-3">
