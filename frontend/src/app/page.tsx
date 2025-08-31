@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -35,71 +35,19 @@ import { useRouter } from "next/navigation"
 const musicGenres = ["팝", "재즈", "운동", "휴식", "집중", "평온", "슬픔", "파티", "로맨스", "출퇴근"]
 
 const sampleRecommendations = [
-  {
-    id: 1,
-    title: "Sunset Dreams",
-    artist: "Chill Vibes",
-    genre: "팝",
-    duration: "3:24",
-    image: "/placeholder.svg?height=60&width=60",
-  },
-  {
-    id: 2,
-    title: "Morning Coffee",
-    artist: "Acoustic Soul",
-    genre: "휴식",
-    duration: "4:12",
-    image: "/placeholder.svg?height=60&width=60",
-  },
-  {
-    id: 3,
-    title: "City Lights",
-    artist: "Urban Beats",
-    genre: "집중",
-    duration: "3:45",
-    image: "/placeholder.svg?height=60&width=60",
-  },
-  {
-    id: 4,
-    title: "Peaceful Mind",
-    artist: "Meditation Music",
-    genre: "평온",
-    duration: "5:30",
-    image: "/placeholder.svg?height=60&width=60",
-  },
+  { id: 1, title: "Sunset Dreams", artist: "Chill Vibes", genre: "팝", duration: "3:24", image: "/placeholder.svg?height=60&width=60" },
+  { id: 2, title: "Morning Coffee", artist: "Acoustic Soul", genre: "휴식", duration: "4:12", image: "/placeholder.svg?height=60&width=60" },
+  { id: 3, title: "City Lights", artist: "Urban Beats", genre: "집중", duration: "3:45", image: "/placeholder.svg?height=60&width=60" },
+  { id: 4, title: "Peaceful Mind", artist: "Meditation Music", genre: "평온", duration: "5:30", image: "/placeholder.svg?height=60&width=60" },
 ]
 
 const viewStyles = [
-  {
-    id: "cd",
-    name: "CD 플레이어",
-    description: "클래식한 CD 플레이어 스타일",
-  },
-  {
-    id: "vinyl",
-    name: "비닐 레코드",
-    description: "빈티지 레코드 플레이어",
-  },
-  {
-    id: "cassette",
-    name: "카세트 테이프",
-    description: "레트로 카세트 플레이어",
-  },
-  {
-    id: "digital",
-    name: "디지털",
-    description: "모던 디지털 플레이어",
-  },
-  {
-    id: "radio",
-    name: "라디오",
-    description: "클래식 라디오 스타일",
-  },
-  {
-    id: "instagram",
-    name: "인스타그램",
-    description: "소셜 미디어 스타일 플레이어",
-  },
+  { id: "cd", name: "CD 플레이어", description: "클래식한 CD 플레이어 스타일" },
+  { id: "vinyl", name: "비닐 레코드", description: "빈티지 레코드 플레이어" },
+  { id: "cassette", name: "카세트 테이프", description: "레트로 카세트 플레이어" },
+  { id: "digital", name: "디지털", description: "모던 디지털 플레이어" },
+  { id: "radio", name: "라디오", description: "클래식 라디오 스타일" },
+  { id: "instagram", name: "인스타그램", description: "소셜 미디어 스타일 플레이어" },
 ]
 
 export default function MusicRecommendationApp() {
@@ -108,12 +56,15 @@ export default function MusicRecommendationApp() {
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedGenres, setSelectedGenres] = useState<string[]>([])
   const [showRecommendations, setShowRecommendations] = useState(false)
+
+  // 로그인 상태/유저
   const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [user, setUser] = useState({
-    name: "진영",
+    name: "진영", // 초기값 (로컬 저장소 복원되면 덮어씌워짐)
     email: "almond-v6w@gmail.com",
     avatar: "/placeholder.svg?height=32&width=32",
   })
+
   const [showImmersiveView, setShowImmersiveView] = useState(false)
   const [currentSong, setCurrentSong] = useState(sampleRecommendations[0])
   const [isPlaying, setIsPlaying] = useState(false)
@@ -127,12 +78,48 @@ export default function MusicRecommendationApp() {
   const [isUploading, setIsUploading] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
 
+  // ✅ 마운트 시 localStorage에서 로그인 상태 복원
+  useEffect(() => {
+    try {
+      const token = localStorage.getItem("token")
+      const name = localStorage.getItem("name")
+      const email = localStorage.getItem("email")
+      // uid/avatar는 선택
+      const avatar = "/placeholder.svg?height=32&width=32"
+
+      if (token && name && email) {
+        setUser((prev) => ({
+          ...prev,
+          name,
+          email,
+          avatar: prev.avatar || avatar,
+        }))
+        setIsLoggedIn(true)
+      } else {
+        setIsLoggedIn(false)
+      }
+    } catch {
+      setIsLoggedIn(false)
+    }
+  }, [])
+
+  // 로그아웃: 상태 + 저장소 정리 후 로그인 페이지로 이동(선택)
+  const handleLogout = () => {
+    try {
+      localStorage.removeItem("token")
+      localStorage.removeItem("uid")
+      localStorage.removeItem("email")
+      localStorage.removeItem("name")
+    } catch {}
+    setIsLoggedIn(false)
+    // 필요 시 메인 유지하려면 아래 라인 주석
+    router.push("/login")
+  }
+
   const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
-
     setIsUploading(true)
-
     try {
       const reader = new FileReader()
       reader.onload = (e) => {
@@ -141,7 +128,7 @@ export default function MusicRecommendationApp() {
         setIsUploading(false)
       }
       reader.readAsDataURL(file)
-    } catch (error) {
+    } catch {
       setIsUploading(false)
     }
   }
@@ -152,13 +139,10 @@ export default function MusicRecommendationApp() {
 
   const generateRecommendations = async () => {
     if (!uploadedImage && selectedGenres.length === 0) return
-
     setIsGenerating(true)
-
     setTimeout(() => {
       setShowRecommendations(true)
       setIsGenerating(false)
-
       if (uploadedImage) {
         setTimeout(() => {
           setShowImmersiveView(true)
@@ -169,9 +153,7 @@ export default function MusicRecommendationApp() {
     }, 2000)
   }
 
-  const togglePlay = () => {
-    setIsPlaying(!isPlaying)
-  }
+  const togglePlay = () => setIsPlaying((v) => !v)
 
   const playNextSong = () => {
     const currentIndex = sampleRecommendations.findIndex((song) => song.id === currentSong.id)
@@ -198,35 +180,21 @@ export default function MusicRecommendationApp() {
     setIsPlaying(false)
   }
 
-  const nextView = () => {
-    setCurrentViewIndex((prev) => (prev + 1) % viewStyles.length)
-  }
+  const nextView = () => setCurrentViewIndex((prev) => (prev + 1) % viewStyles.length)
+  const prevView = () => setCurrentViewIndex((prev) => (prev - 1 + viewStyles.length) % viewStyles.length)
+  const goToView = (index: number) => setCurrentViewIndex(index)
 
-  const prevView = () => {
-    setCurrentViewIndex((prev) => (prev - 1 + viewStyles.length) % viewStyles.length)
-  }
-
-  const goToView = (index: number) => {
-    setCurrentViewIndex(index)
-  }
-
-  // CD Player View Component
+  // ----- 뷰 컴포넌트들 -----
   const CDPlayerView = () => (
     <div className="flex-1 flex justify-center items-center">
       <div className="relative">
         <div className={`relative w-80 h-80 ${isPlaying ? "animate-spin" : ""}`} style={{ animationDuration: "3s" }}>
           <div className="w-full h-full rounded-full bg-gradient-to-br from-gray-200 via-gray-300 to-gray-400 shadow-2xl border-4 border-gray-300">
             <div className="w-full h-full rounded-full overflow-hidden border-8 border-gray-800 relative">
-              <Image
-                src={uploadedImage || "/placeholder.svg"}
-                alt="Current mood"
-                width={320}
-                height={320}
-                className="w-full h-full object-cover"
-              />
+              <Image src={uploadedImage || "/placeholder.svg"} alt="Current mood" width={320} height={320} className="w-full h-full object-cover" />
               <div className="absolute inset-0 bg-gradient-to-br from-white/20 via-transparent to-black/20 rounded-full" />
             </div>
-            <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-16 h-16 bg-gray-800 rounded-full shadow-inner border-2 border-gray-600">
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 bg-gray-800 rounded-full shadow-inner border-2 border-gray-600">
               <div className="w-full h-full rounded-full bg-gradient-to-br from-gray-700 to-gray-900 flex items-center justify-center">
                 <div className="w-4 h-4 bg-black rounded-full"></div>
               </div>
@@ -236,41 +204,24 @@ export default function MusicRecommendationApp() {
             <div className="absolute inset-12 rounded-full border border-gray-400/10"></div>
           </div>
         </div>
-        <div className="absolute -bottom-4 left-1/2 transform -translate-x-1/2 w-72 h-8 bg-black/20 rounded-full blur-xl"></div>
+        <div className="absolute -bottom-4 left-1/2 -translate-x-1/2 w-72 h-8 bg-black/20 rounded-full blur-xl"></div>
       </div>
     </div>
   )
 
-  // Vinyl Record View Component
   const VinylRecordView = () => (
     <div className="flex-1 flex justify-center items-center">
       <div className="relative">
         <div className={`relative w-96 h-96 ${isPlaying ? "animate-spin" : ""}`} style={{ animationDuration: "2s" }}>
           <div className="w-full h-full rounded-full bg-gradient-to-br from-gray-900 via-black to-gray-800 shadow-2xl">
             <div className="w-full h-full rounded-full overflow-hidden relative">
-              <Image
-                src={uploadedImage || "/placeholder.svg"}
-                alt="Current mood"
-                width={384}
-                height={384}
-                className="w-full h-full object-cover opacity-80"
-              />
+              <Image src={uploadedImage || "/placeholder.svg"} alt="Current mood" width={384} height={384} className="w-full h-full object-cover opacity-80" />
               <div className="absolute inset-0 bg-gradient-to-br from-transparent via-black/40 to-black/60 rounded-full" />
-
-              {/* Vinyl grooves */}
               {[...Array(12)].map((_, i) => (
-                <div
-                  key={i}
-                  className="absolute rounded-full border border-gray-600/20"
-                  style={{
-                    inset: `${i * 8 + 20}px`,
-                  }}
-                />
+                <div key={i} className="absolute rounded-full border border-gray-600/20" style={{ inset: `${i * 8 + 20}px` }} />
               ))}
             </div>
-
-            {/* Center label */}
-            <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-24 h-24 bg-red-600 rounded-full shadow-inner border-2 border-red-700 flex items-center justify-center">
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-24 h-24 bg-red-600 rounded-full shadow-inner border-2 border-red-700 flex items-center justify-center">
               <div className="text-white text-xs font-bold text-center">
                 <div>STEREO</div>
                 <div className="w-3 h-3 bg-black rounded-full mx-auto mt-1"></div>
@@ -278,105 +229,55 @@ export default function MusicRecommendationApp() {
             </div>
           </div>
         </div>
-        <div className="absolute -bottom-6 left-1/2 transform -translate-x-1/2 w-80 h-10 bg-black/30 rounded-full blur-xl"></div>
+        <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 w-80 h-10 bg-black/30 rounded-full blur-xl"></div>
       </div>
     </div>
   )
 
-  // Cassette Tape View Component
   const CassetteView = () => (
     <div className="flex-1 flex justify-center items-center">
       <div className="relative">
         <div className="w-96 h-64 bg-gradient-to-br from-gray-800 via-gray-700 to-gray-900 rounded-lg shadow-2xl border-2 border-gray-600">
-          {/* Cassette body */}
           <div className="w-full h-full p-4 relative">
-            {/* Top section with image */}
             <div className="w-full h-20 bg-white rounded-sm mb-4 overflow-hidden">
-              <Image
-                src={uploadedImage || "/placeholder.svg"}
-                alt="Current mood"
-                width={352}
-                height={80}
-                className="w-full h-full object-cover"
-              />
+              <Image src={uploadedImage || "/placeholder.svg"} alt="Current mood" width={352} height={80} className="w-full h-full object-cover" />
             </div>
-
-            {/* Tape reels */}
             <div className="flex justify-between items-center px-8">
-              <div
-                className={`w-16 h-16 bg-gray-900 rounded-full border-4 border-gray-600 flex items-center justify-center ${
-                  isPlaying ? "animate-spin" : ""
-                }`}
-                style={{ animationDuration: "1s" }}
-              >
-                <div className="w-8 h-8 bg-gray-700 rounded-full">
-                  <div className="w-full h-full rounded-full bg-gradient-to-br from-gray-600 to-gray-800"></div>
-                </div>
+              <div className={`w-16 h-16 bg-gray-900 rounded-full border-4 border-gray-600 flex items-center justify-center ${isPlaying ? "animate-spin" : ""}`} style={{ animationDuration: "1s" }}>
+                <div className="w-8 h-8 bg-gray-700 rounded-full"><div className="w-full h-full rounded-full bg-gradient-to-br from-gray-600 to-gray-800"></div></div>
               </div>
-
-              <div className="flex-1 mx-4 h-1 bg-brown-600 relative">
-                <div className="absolute inset-0 bg-gradient-to-r from-brown-700 to-brown-500"></div>
-              </div>
-
-              <div
-                className={`w-16 h-16 bg-gray-900 rounded-full border-4 border-gray-600 flex items-center justify-center ${
-                  isPlaying ? "animate-spin" : ""
-                }`}
-                style={{ animationDuration: "1.2s" }}
-              >
-                <div className="w-8 h-8 bg-gray-700 rounded-full">
-                  <div className="w-full h-full rounded-full bg-gradient-to-br from-gray-600 to-gray-800"></div>
-                </div>
+              <div className="flex-1 mx-4 h-1 bg-brown-600 relative"><div className="absolute inset-0 bg-gradient-to-r from-brown-700 to-brown-500"></div></div>
+              <div className={`w-16 h-16 bg-gray-900 rounded-full border-4 border-gray-600 flex items-center justify-center ${isPlaying ? "animate-spin" : ""}`} style={{ animationDuration: "1.2s" }}>
+                <div className="w-8 h-8 bg-gray-700 rounded-full"><div className="w-full h-full rounded-full bg-gradient-to-br from-gray-600 to-gray-800"></div></div>
               </div>
             </div>
-
-            {/* Bottom section */}
             <div className="mt-4 text-center">
               <div className="text-white text-sm font-mono">SIDE A</div>
               <div className="text-gray-400 text-xs mt-1">90 MIN</div>
             </div>
           </div>
         </div>
-        <div className="absolute -bottom-4 left-1/2 transform -translate-x-1/2 w-80 h-6 bg-black/20 rounded-full blur-lg"></div>
+        <div className="absolute -bottom-4 left-1/2 -translate-x-1/2 w-80 h-6 bg-black/20 rounded-full blur-lg"></div>
       </div>
     </div>
   )
 
-  // Digital View Component
   const DigitalView = () => (
     <div className="flex-1 flex justify-center items-center">
       <div className="relative">
         <div className="w-80 h-80 bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 rounded-3xl shadow-2xl border border-purple-500/30 overflow-hidden">
-          {/* Digital display */}
           <div className="w-full h-full p-6 relative">
             <div className="w-full h-48 rounded-2xl overflow-hidden mb-4 relative">
-              <Image
-                src={uploadedImage || "/placeholder.svg"}
-                alt="Current mood"
-                width={320}
-                height={192}
-                className="w-full h-full object-cover"
-              />
+              <Image src={uploadedImage || "/placeholder.svg"} alt="Current mood" width={320} height={192} className="w-full h-full object-cover" />
               <div className="absolute inset-0 bg-gradient-to-t from-purple-900/50 to-transparent"></div>
-
-              {/* Digital equalizer bars */}
               {isPlaying && (
                 <div className="absolute bottom-4 left-4 flex space-x-1">
                   {[...Array(8)].map((_, i) => (
-                    <div
-                      key={i}
-                      className="w-2 bg-purple-400 rounded-full animate-pulse"
-                      style={{
-                        height: `${Math.random() * 20 + 10}px`,
-                        animationDelay: `${i * 0.1}s`,
-                      }}
-                    />
+                    <div key={i} className="w-2 bg-purple-400 rounded-full animate-pulse" style={{ height: `${Math.random() * 20 + 10}px`, animationDelay: `${i * 0.1}s` }} />
                   ))}
                 </div>
               )}
             </div>
-
-            {/* Digital info display */}
             <div className="text-center">
               <div className="text-purple-300 text-lg font-mono mb-2">NOW PLAYING</div>
               <div className="text-white text-sm font-light">Digital Stream Quality</div>
@@ -384,175 +285,96 @@ export default function MusicRecommendationApp() {
             </div>
           </div>
         </div>
-        <div className="absolute -bottom-4 left-1/2 transform -translate-x-1/2 w-72 h-8 bg-purple-500/20 rounded-full blur-xl"></div>
+        <div className="absolute -bottom-4 left-1/2 -translate-x-1/2 w-72 h-8 bg-purple-500/20 rounded-full blur-xl"></div>
       </div>
     </div>
   )
 
-  // Radio View Component
   const RadioView = () => (
     <div className="flex-1 flex justify-center items-center">
       <div className="relative">
         <div className="w-96 h-72 bg-gradient-to-br from-amber-800 via-yellow-700 to-orange-800 rounded-2xl shadow-2xl border-4 border-amber-600">
-          {/* Radio body */}
           <div className="w-full h-full p-6 relative">
-            {/* Speaker grille */}
             <div className="w-full h-32 bg-amber-900 rounded-lg mb-4 relative overflow-hidden">
-              <Image
-                src={uploadedImage || "/placeholder.svg"}
-                alt="Current mood"
-                width={352}
-                height={128}
-                className="w-full h-full object-cover opacity-60"
-              />
+              <Image src={uploadedImage || "/placeholder.svg"} alt="Current mood" width={352} height={128} className="w-full h-full object-cover opacity-60" />
               <div className="absolute inset-0 bg-amber-900/70"></div>
-
-              {/* Speaker holes pattern */}
               <div className="absolute inset-2 grid grid-cols-12 gap-1">
-                {[...Array(60)].map((_, i) => (
-                  <div key={i} className="w-2 h-2 bg-amber-700 rounded-full"></div>
-                ))}
+                {[...Array(60)].map((_, i) => <div key={i} className="w-2 h-2 bg-amber-700 rounded-full" />)}
               </div>
             </div>
-
-            {/* Radio controls */}
             <div className="flex justify-between items-center">
               <div className="flex space-x-2">
                 <div className="w-8 h-8 bg-amber-600 rounded-full border-2 border-amber-500"></div>
                 <div className="w-8 h-8 bg-amber-600 rounded-full border-2 border-amber-500"></div>
               </div>
-
-              {/* Frequency display */}
               <div className="flex-1 mx-4 h-8 bg-black rounded-lg flex items-center justify-center">
                 <div className="text-green-400 text-sm font-mono">FM 107.5</div>
                 {isPlaying && <div className="ml-2 w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>}
               </div>
-
               <div className="w-12 h-8 bg-amber-600 rounded-lg border-2 border-amber-500"></div>
             </div>
-
             <div className="text-center mt-4">
               <div className="text-amber-200 text-xs">VINTAGE RADIO</div>
             </div>
           </div>
         </div>
-        <div className="absolute -bottom-4 left-1/2 transform -translate-x-1/2 w-80 h-6 bg-amber-500/20 rounded-full blur-lg"></div>
+        <div className="absolute -bottom-4 left-1/2 -translate-x-1/2 w-80 h-6 bg-amber-500/20 rounded-full blur-lg"></div>
       </div>
     </div>
   )
 
-  // Instagram Style View Component
   const InstagramView = () => (
     <div className="flex-1 flex justify-center items-center relative">
-      {/* Full screen image background */}
       <div className="relative w-full h-full max-w-md mx-auto">
-        {/* Main image container */}
         <div className="w-full h-full rounded-3xl overflow-hidden shadow-2xl relative">
-          <Image
-            src={uploadedImage || "/placeholder.svg"}
-            alt="Current mood"
-            width={400}
-            height={600}
-            className="w-full h-full object-cover"
-          />
-
-          {/* Gradient overlays for better text readability */}
+          <Image src={uploadedImage || "/placeholder.svg"} alt="Current mood" width={400} height={600} className="w-full h-full object-cover" />
           <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-black/20"></div>
-
-          {/* Right side playlist */}
-          <div className="absolute right-4 top-1/2 transform -translate-y-1/2">
+          <div className="absolute right-4 top-1/2 -translate-y-1/2">
             <div className="bg-black/20 backdrop-blur-sm rounded-2xl p-3 max-h-80 overflow-y-auto w-16">
               <div className="space-y-3">
                 {sampleRecommendations.map((song, index) => (
-                  <div
-                    key={song.id}
-                    onClick={() => setCurrentSong(song)}
-                    className={`relative cursor-pointer transition-all ${
-                      currentSong.id === song.id ? "scale-110" : "hover:scale-105"
-                    }`}
-                  >
+                  <div key={song.id} onClick={() => setCurrentSong(song)} className={`relative cursor-pointer transition-all ${currentSong.id === song.id ? "scale-110" : "hover:scale-105"}`}>
                     <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-white/50">
-                      <Image
-                        src={song.image || "/placeholder.svg"}
-                        alt={song.title}
-                        width={40}
-                        height={40}
-                        className="w-full h-full object-cover"
-                      />
+                      <Image src={song.image || "/placeholder.svg"} alt={song.title} width={40} height={40} className="w-full h-full object-cover" />
                     </div>
-                    {currentSong.id === song.id && (
-                      <div className="absolute -inset-1 rounded-full border-2 border-white animate-pulse"></div>
-                    )}
-                    <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-purple-600 rounded-full flex items-center justify-center text-white text-xs font-bold">
-                      {index + 1}
-                    </div>
+                    {currentSong.id === song.id && <div className="absolute -inset-1 rounded-full border-2 border-white animate-pulse"></div>}
+                    <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-purple-600 rounded-full flex items-center justify-center text-white text-xs font-bold">{index + 1}</div>
                   </div>
                 ))}
               </div>
             </div>
           </div>
-
-          {/* Bottom player controls - 더 작고 중앙 정렬 */}
-          <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2">
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2">
             <div className="bg-black/40 backdrop-blur-sm rounded-2xl p-3 w-80">
-              {/* Song info inside player - 더 컴팩트하게 */}
               <div className="mb-3 text-center">
                 <h3 className="text-white font-medium text-base truncate">{currentSong.title}</h3>
                 <p className="text-white/70 text-xs truncate">{currentSong.artist}</p>
-                <Badge className="bg-white/20 text-white border-white/30 backdrop-blur-sm mt-1 text-xs px-2 py-0.5">
-                  {currentSong.genre}
-                </Badge>
+                <Badge className="bg-white/20 text-white border-white/30 backdrop-blur-sm mt-1 text-xs px-2 py-0.5">{currentSong.genre}</Badge>
               </div>
-
-              {/* Progress bar - 더 얇게 */}
               <div className="mb-3">
                 <div className="flex items-center justify-between text-white text-xs mb-1">
                   <span>{formatTime(currentTime)}</span>
                   <span>{formatTime(duration)}</span>
                 </div>
                 <div className="w-full bg-white/20 rounded-full h-0.5">
-                  <div
-                    className="bg-white h-0.5 rounded-full transition-all duration-300"
-                    style={{ width: `${(currentTime / duration) * 100}%` }}
-                  />
+                  <div className="bg-white h-0.5 rounded-full transition-all duration-300" style={{ width: `${(currentTime / duration) * 100}%` }} />
                 </div>
               </div>
-
-              {/* Control buttons - 더 작게 */}
               <div className="flex items-center justify-center space-x-4">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={playPreviousSong}
-                  className="text-white hover:bg-white/20 rounded-full p-1.5"
-                >
+                <Button variant="ghost" size="sm" onClick={playPreviousSong} className="text-white hover:bg-white/20 rounded-full p-1.5">
                   <SkipBack className="h-4 w-4" />
                 </Button>
-
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={togglePlay}
-                  className="text-white hover:bg-white/20 rounded-full p-2 bg-white/20"
-                >
+                <Button variant="ghost" size="sm" onClick={togglePlay} className="text-white hover:bg-white/20 rounded-full p-2 bg-white/20">
                   {isPlaying ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}
                 </Button>
-
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={playNextSong}
-                  className="text-white hover:bg-white/20 rounded-full p-1.5"
-                >
+                <Button variant="ghost" size="sm" onClick={playNextSong} className="text-white hover:bg-white/20 rounded-full p-1.5">
                   <SkipForward className="h-4 w-4" />
                 </Button>
               </div>
             </div>
           </div>
-
-          {/* Instagram-style heart animation when playing */}
           {isPlaying && (
-            <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 pointer-events-none">
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
               <div className="animate-ping">
                 <Heart className="h-8 w-8 text-white/50 fill-current" />
               </div>
@@ -565,20 +387,13 @@ export default function MusicRecommendationApp() {
 
   const renderCurrentView = () => {
     switch (viewStyles[currentViewIndex].id) {
-      case "cd":
-        return <CDPlayerView />
-      case "vinyl":
-        return <VinylRecordView />
-      case "cassette":
-        return <CassetteView />
-      case "digital":
-        return <DigitalView />
-      case "radio":
-        return <RadioView />
-      case "instagram":
-        return <InstagramView />
-      default:
-        return <CDPlayerView />
+      case "cd": return <CDPlayerView />
+      case "vinyl": return <VinylRecordView />
+      case "cassette": return <CassetteView />
+      case "digital": return <DigitalView />
+      case "radio": return <RadioView />
+      case "instagram": return <InstagramView />
+      default: return <CDPlayerView />
     }
   }
 
@@ -648,17 +463,14 @@ export default function MusicRecommendationApp() {
                     <span>설정</span>
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={() => setIsLoggedIn(false)}>
+                  <DropdownMenuItem onClick={handleLogout}>
                     <LogOut className="mr-2 h-4 w-4" />
                     <span>로그아웃</span>
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             ) : (
-              <Button
-                onClick={() => router.push("/login")}
-                className="bg-purple-600 hover:bg-purple-700 text-white rounded-full px-6"
-              >
+              <Button onClick={() => router.push("/login")} className="bg-purple-600 hover:bg-purple-700 text-white rounded-full px-6">
                 로그인
               </Button>
             )}
@@ -676,13 +488,7 @@ export default function MusicRecommendationApp() {
 
           <div className="flex justify-center mb-8">
             <label className="cursor-pointer group">
-              <input
-                type="file"
-                accept="image/*"
-                onChange={handleImageUpload}
-                className="hidden"
-                disabled={isUploading}
-              />
+              <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" disabled={isUploading} />
               <div className="border-2 border-dashed border-gray-200 rounded-3xl p-16 bg-gray-50/50 hover:border-purple-300 hover:bg-purple-50/30 transition-all duration-300">
                 {isUploading ? (
                   <div className="text-center">
@@ -691,13 +497,7 @@ export default function MusicRecommendationApp() {
                   </div>
                 ) : uploadedImage ? (
                   <div className="relative">
-                    <Image
-                      src={uploadedImage || "/placeholder.svg"}
-                      alt="업로드된 사진"
-                      width={240}
-                      height={160}
-                      className="rounded-2xl object-cover mx-auto"
-                    />
+                    <Image src={uploadedImage || "/placeholder.svg"} alt="업로드된 사진" width={240} height={160} className="rounded-2xl object-cover mx-auto" />
                   </div>
                 ) : (
                   <div className="text-center">
@@ -772,6 +572,7 @@ export default function MusicRecommendationApp() {
                 <AvatarFallback className="bg-purple-600 text-white">{user.name.charAt(0)}</AvatarFallback>
               </Avatar>
               <div>
+                {/* 🔥 여기: 동적 사용자 이름 표시 (하드코딩 제거) */}
                 <h3 className="text-2xl font-light text-gray-900">{user.name}님의 추억</h3>
                 <p className="text-gray-500 font-light">최근에 들었던 음악들</p>
               </div>
@@ -785,53 +586,17 @@ export default function MusicRecommendationApp() {
 
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-6">
             {[
-              {
-                id: 1,
-                title: "인생영화",
-                artist: "pH-1",
-                image: "/placeholder.svg?height=150&width=150&text=인생영화",
-              },
-              {
-                id: 2,
-                title: "숲이넘기기엔",
-                artist: "도우카",
-                image: "/placeholder.svg?height=150&width=150&text=숲이넘기기엔",
-              },
-              {
-                id: 3,
-                title: "오포닝",
-                artist: "고주잠자리",
-                image: "/placeholder.svg?height=150&width=150&text=오포닝",
-              },
-              {
-                id: 4,
-                title: "넌 떠올리는 중이야",
-                artist: "PATEKO",
-                image: "/placeholder.svg?height=150&width=150&text=넌떠올리는중이야",
-              },
-              {
-                id: 5,
-                title: "작은 봄",
-                artist: "고주잠자리",
-                image: "/placeholder.svg?height=150&width=150&text=작은봄",
-              },
-              {
-                id: 6,
-                title: "Love Me Again",
-                artist: "Jayci yucca",
-                image: "/placeholder.svg?height=150&width=150&text=LoveMeAgain",
-              },
+              { id: 1, title: "인생영화", artist: "pH-1", image: "/placeholder.svg?height=150&width=150&text=인생영화" },
+              { id: 2, title: "숲이넘기기엔", artist: "도우카", image: "/placeholder.svg?height=150&width=150&text=숲이넘기기엔" },
+              { id: 3, title: "오포닝", artist: "고주잠자리", image: "/placeholder.svg?height=150&width=150&text=오포닝" },
+              { id: 4, title: "넌 떠올리는 중이야", artist: "PATEKO", image: "/placeholder.svg?height=150&width=150&text=넌떠올리는중이야" },
+              { id: 5, title: "작은 봄", artist: "고주잠자리", image: "/placeholder.svg?height=150&width=150&text=작은봄" },
+              { id: 6, title: "Love Me Again", artist: "Jayci yucca", image: "/placeholder.svg?height=150&width=150&text=LoveMeAgain" },
             ].map((item) => (
               <div key={item.id} className="group cursor-pointer">
                 <div className="relative mb-3">
-                  <Image
-                    src={item.image || "/placeholder.svg"}
-                    alt={item.title}
-                    width={150}
-                    height={150}
-                    className="w-full aspect-square object-cover rounded-2xl transition-all duration-300 group-hover:scale-105"
-                  />
-                  <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-20 rounded-2xl transition-all flex items-center justify-center">
+                  <Image src={item.image || "/placeholder.svg"} alt={item.title} width={150} height={150} className="w-full aspect-square object-cover rounded-2xl transition-all duration-300 group-hover:scale-105" />
+                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 rounded-2xl transition-all flex items-center justify-center">
                     <Button
                       size="sm"
                       className="opacity-0 group-hover:opacity-100 transition-all bg-white text-purple-600 hover:bg-gray-50 rounded-full p-3 shadow-lg"
@@ -867,23 +632,12 @@ export default function MusicRecommendationApp() {
               {recommendations.map((song) => (
                 <Card key={song.id} className="hover:shadow-sm transition-shadow border-gray-100">
                   <CardContent className="p-4 flex items-center space-x-4">
-                    <Image
-                      src={song.image || "/placeholder.svg"}
-                      alt={song.title}
-                      width={48}
-                      height={48}
-                      className="rounded-xl"
-                    />
+                    <Image src={song.image || "/placeholder.svg"} alt={song.title} width={48} height={48} className="rounded-xl" />
                     <div className="flex-1">
                       <h4 className="font-medium text-gray-900 text-sm">{song.title}</h4>
                       <p className="text-gray-500 text-sm font-light">{song.artist}</p>
                     </div>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="rounded-full text-gray-400 hover:text-purple-600"
-                      onClick={() => setCurrentSong(song)}
-                    >
+                    <Button size="sm" variant="ghost" className="rounded-full text-gray-400 hover:text-purple-600" onClick={() => setCurrentSong(song)}>
                       <Play className="h-4 w-4" />
                     </Button>
                   </CardContent>
@@ -894,141 +648,79 @@ export default function MusicRecommendationApp() {
         )}
       </main>
 
-      {/* Immersive Music View with Multiple Styles */}
+      {/* Immersive Music View */}
       {showImmersiveView && uploadedImage && (
         <div className="fixed inset-0 z-50 bg-black bg-opacity-90 flex items-center justify-center">
-          {/* Background Image */}
-          <div
-            className="absolute inset-0 bg-cover bg-center filter blur-sm"
-            style={{ backgroundImage: `url(${uploadedImage})` }}
-          />
+          <div className="absolute inset-0 bg-cover bg-center blur-sm" style={{ backgroundImage: `url(${uploadedImage})` }} />
           <div className="absolute inset-0 bg-black bg-opacity-40" />
-
-          {/* Close Button and Refresh Button */}
           <div className="absolute top-6 right-6 z-10 flex space-x-3">
             <button
               onClick={() => {
-                // 음악 다시 추천받기 로직
                 setCurrentSong(sampleRecommendations[Math.floor(Math.random() * sampleRecommendations.length)])
                 setIsPlaying(true)
               }}
-              className="bg-white bg-opacity-20 hover:bg-opacity-30 rounded-full p-3 text-white transition-all"
+              className="bg-white/20 hover:bg-white/30 rounded-full p-3 text-white transition-all"
               title="음악 다시 추천받기"
             >
               <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
             </button>
-
-            <button
-              onClick={closeImmersiveView}
-              className="bg-white bg-opacity-20 hover:bg-opacity-30 rounded-full p-3 text-white transition-all"
-            >
+            <button onClick={closeImmersiveView} className="bg-white/20 hover:bg-white/30 rounded-full p-3 text-white transition-all">
               <X className="h-6 w-6" />
             </button>
           </div>
 
-          {/* View Style Selector */}
-          <div className="absolute top-6 left-1/2 transform -translate-x-1/2 z-10">
+          <div className="absolute top-6 left-1/2 -translate-x-1/2 z-10">
             <div className="bg-black/30 backdrop-blur-sm rounded-full px-6 py-3">
               <div className="flex items-center space-x-4">
                 <span className="text-white text-sm font-medium">{viewStyles[currentViewIndex].name}</span>
                 <div className="flex space-x-2">
                   {viewStyles.map((_, index) => (
-                    <button
-                      key={index}
-                      onClick={() => goToView(index)}
-                      className={`w-2 h-2 rounded-full transition-all ${
-                        index === currentViewIndex ? "bg-white" : "bg-white/40"
-                      }`}
-                    />
+                    <button key={index} onClick={() => goToView(index)} className={`w-2 h-2 rounded-full transition-all ${index === currentViewIndex ? "bg-white" : "bg-white/40"}`} />
                   ))}
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Navigation Arrows */}
-          <button
-            onClick={prevView}
-            className="absolute left-6 top-1/2 transform -translate-y-1/2 z-10 bg-white bg-opacity-20 hover:bg-opacity-30 rounded-full p-3 text-white transition-all"
-          >
+          <button onClick={prevView} className="absolute left-6 top-1/2 -translate-y-1/2 z-10 bg-white/20 hover:bg-white/30 rounded-full p-3 text-white transition-all">
             <ChevronLeft className="h-6 w-6" />
           </button>
-
-          <button
-            onClick={nextView}
-            className="absolute right-6 top-1/2 transform -translate-y-1/2 z-10 bg-white bg-opacity-20 hover:bg-opacity-30 rounded-full p-3 text-white transition-all"
-          >
+          <button onClick={nextView} className="absolute right-6 top-1/2 -translate-y-1/2 z-10 bg-white/20 hover:bg-white/30 rounded-full p-3 text-white transition-all">
             <ChevronRight className="h-6 w-6" />
           </button>
 
-          {/* Main Content */}
           <div className="relative z-10 w-full max-w-6xl mx-auto px-6 flex items-center justify-between h-full">
-            {/* Left Side - Dynamic Player View */}
             {renderCurrentView()}
-
-            {/* Right Side - Music Controls & Playlist */}
             {viewStyles[currentViewIndex].id !== "instagram" && (
               <div className="flex-1 ml-12 h-full flex flex-col justify-center">
-                {/* Current Song Info */}
                 <div className="text-center mb-8">
                   <h2 className="text-4xl font-bold text-white mb-2">{currentSong.title}</h2>
                   <p className="text-xl text-gray-300 mb-4">{currentSong.artist}</p>
                   <Badge className="bg-purple-600 text-white px-4 py-1">{currentSong.genre}</Badge>
                   <p className="text-sm text-gray-400 mt-2">{viewStyles[currentViewIndex].description}</p>
                 </div>
-
-                {/* Progress Bar */}
                 <div className="mb-8">
                   <div className="flex items-center justify-between text-white text-sm mb-2">
                     <span>{formatTime(currentTime)}</span>
                     <span>{formatTime(duration)}</span>
                   </div>
                   <div className="w-full bg-gray-600 rounded-full h-2">
-                    <div
-                      className="bg-purple-500 h-2 rounded-full transition-all duration-300"
-                      style={{ width: `${(currentTime / duration) * 100}%` }}
-                    />
+                    <div className="bg-purple-500 h-2 rounded-full transition-all duration-300" style={{ width: `${(currentTime / duration) * 100}%` }} />
                   </div>
                 </div>
-
-                {/* Music Controls */}
                 <div className="flex items-center justify-center space-x-6 mb-8">
-                  <Button
-                    variant="ghost"
-                    size="lg"
-                    onClick={playPreviousSong}
-                    className="text-white hover:bg-white/20 rounded-full p-3"
-                  >
+                  <Button variant="ghost" size="lg" onClick={playPreviousSong} className="text-white hover:bg-white/20 rounded-full p-3">
                     <SkipBack className="h-6 w-6" />
                   </Button>
-
-                  <Button
-                    variant="ghost"
-                    size="lg"
-                    onClick={togglePlay}
-                    className="text-white hover:bg-white/20 rounded-full p-4 bg-purple-600 hover:bg-purple-700"
-                  >
+                  <Button variant="ghost" size="lg" onClick={togglePlay} className="text-white hover:bg-white/20 rounded-full p-4 bg-purple-600 hover:bg-purple-700">
                     {isPlaying ? <Pause className="h-8 w-8" /> : <Play className="h-8 w-8" />}
                   </Button>
-
-                  <Button
-                    variant="ghost"
-                    size="lg"
-                    onClick={playNextSong}
-                    className="text-white hover:bg-white/20 rounded-full p-3"
-                  >
+                  <Button variant="ghost" size="lg" onClick={playNextSong} className="text-white hover:bg-white/20 rounded-full p-3">
                     <SkipForward className="h-6 w-6" />
                   </Button>
                 </div>
-
-                {/* Recommended Playlist */}
                 <div className="bg-black/30 backdrop-blur-sm rounded-2xl p-6 max-h-80 overflow-y-auto">
                   <h3 className="text-white text-lg font-semibold mb-4">추천 플레이리스트</h3>
                   <div className="space-y-3">
@@ -1040,13 +732,7 @@ export default function MusicRecommendationApp() {
                           currentSong.id === song.id ? "bg-purple-600/50 text-white" : "text-gray-300 hover:bg-white/10"
                         }`}
                       >
-                        <Image
-                          src={song.image || "/placeholder.svg"}
-                          alt={song.title}
-                          width={40}
-                          height={40}
-                          className="rounded-lg"
-                        />
+                        <Image src={song.image || "/placeholder.svg"} alt={song.title} width={40} height={40} className="rounded-lg" />
                         <div className="flex-1 min-w-0">
                           <p className="font-medium truncate">{song.title}</p>
                           <p className="text-sm opacity-70 truncate">{song.artist}</p>
@@ -1055,14 +741,8 @@ export default function MusicRecommendationApp() {
                         {currentSong.id === song.id && isPlaying && (
                           <div className="flex space-x-1">
                             <div className="w-1 h-4 bg-purple-400 animate-pulse"></div>
-                            <div
-                              className="w-1 h-4 bg-purple-400 animate-pulse"
-                              style={{ animationDelay: "0.2s" }}
-                            ></div>
-                            <div
-                              className="w-1 h-4 bg-purple-400 animate-pulse"
-                              style={{ animationDelay: "0.4s" }}
-                            ></div>
+                            <div className="w-1 h-4 bg-purple-400 animate-pulse" style={{ animationDelay: "0.2s" }}></div>
+                            <div className="w-1 h-4 bg-purple-400 animate-pulse" style={{ animationDelay: "0.4s" }}></div>
                           </div>
                         )}
                       </div>
