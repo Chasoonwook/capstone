@@ -318,7 +318,7 @@ export default function MusicRecommendationApp() {
                       <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4 group-hover:bg-purple-100 transition-colors">
                         <Upload className="h-8 w-8 text-gray-400 group-hover:text-purple-500" />
                       </div>
-                      <p className="text-gray-600 font-light">사진을 업로드하세요 (버튼 클릭 시 저장됩니다)</p>
+                      <p className="text-gray-600 font-light">사진을 업로드하세요</p>
                     </div>
                   )}
                 </div>
