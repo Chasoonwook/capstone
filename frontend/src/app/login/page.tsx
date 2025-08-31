@@ -1,6 +1,6 @@
-//"use client";
+"use client";
 
-/*import type React from "react";
+import type React from "react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -205,7 +205,7 @@ export default function LoginPage() {
 
             <div className="grid grid-cols-2 gap-4">
               <Button variant="outline" onClick={() => handleSocialLogin("Google")} className="w-full">
-                {/* Google 아이콘 *//*}
+                {/* Google 아이콘 */}
                 <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24">
                   <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
                   <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
@@ -219,7 +219,7 @@ export default function LoginPage() {
                 onClick={() => handleSocialLogin("Kakao")}
                 className="w-full bg-yellow-400 hover:bg-yellow-500 text-black border-yellow-400"
               >
-                {/* Kakao 아이콘 *//*}
+                {/* Kakao 아이콘 */}
                 <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M12 3c5.799 0 10.5 3.664 10.5 8.185 0 4.52-4.701 8.184-10.5 8.184a13.5 13.5 0 0 1-1.727-.11l-4.408 2.883c-.501.265-.678.236-.472-.413l.892-3.678c-2.88-1.46-4.785-3.99-4.785-6.866C1.5 6.665 6.201 3 12 3z" />
                 </svg>
@@ -238,4 +238,4 @@ export default function LoginPage() {
       </div>
     </div>
   );
-}*/
+}
