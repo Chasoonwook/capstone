@@ -97,9 +97,13 @@ export default function RecommendClient() {
       if (!photoId) return;
 
       try {
-        const r = await fetch(`${API_BASE}/api/recommendations/by-photo/${photoId}`);
+        const r = await fetch(`${API_BASE}/api/recommendations/by-photo/${photoId}`, {
+          headers: {
+            // 필요 시 로그인 유저 id를 헤더나 쿼리로 넘겨주세요.
+            // 'x-user-id': localStorage.getItem('uid') ?? ''
+          }
+        });
         if (r.status === 202) {
-          // 분석 대기중 → 2.5s 후 재시도
           if (mounted) timer = setTimeout(fetchByPhoto, 2500);
           return;
         }
@@ -108,39 +112,45 @@ export default function RecommendClient() {
           return;
         }
 
-        const data: unknown = await r.json();
-        const main =
-          isRecord(data) && Array.isArray((data as { [k: string]: unknown }).main_songs)
-            ? (data as { main_songs: unknown[] }).main_songs
-            : [];
-        const sub =
-          isRecord(data) && Array.isArray((data as { [k: string]: unknown }).sub_songs)
-            ? (data as { sub_songs: unknown[] }).sub_songs
-            : [];
-        const combined: unknown[] = [...main, ...sub];
+        const data: any = await r.json();
+        const main = Array.isArray(data?.main_songs) ? data.main_songs : [];
+        const sub  = Array.isArray(data?.sub_songs) ? data.sub_songs : [];
+        const pref = Array.isArray(data?.preferred_songs) ? data.preferred_songs : [];
 
-        const songs: Song[] = combined.map((raw, idx) => {
-          const it: BackendSong = isRecord(raw) ? (raw as BackendSong) : {};
-          const dur =
-            typeof it.duration === "number"
-              ? `${Math.floor(it.duration / 60)}:${String(Math.floor(it.duration % 60)).padStart(2, "0")}`
-              : typeof it.duration === "string"
-              ? it.duration
-              : undefined;
+        // 서버에서 total 10개도 주지만, 호환성 위해 다시 합쳐 사용
+        const combined: any[] = [...main, ...sub, ...pref];
+        // 중복 제거(같은 id)
+        const seen = new Set();
+        const dedup = combined.filter((s) => {
+          const id = s.music_id ?? s.id;
+          if (seen.has(id)) return false;
+          seen.add(id);
+          return true;
+        }).slice(0, 10);
+
+        const songs: Song[] = dedup.map((it: any, idx: number) => {
+          const seconds =
+            typeof it.duration === "number" ? it.duration :
+            typeof it.duration_sec === "number" ? it.duration_sec : 180;
+
+          const mm = Math.floor(seconds / 60);
+          const ss = String(Math.floor(seconds % 60)).padStart(2, "0");
 
           return {
             id: it.music_id ?? it.id ?? idx,
             title: it.title ?? "Unknown Title",
             artist: it.artist ?? "Unknown Artist",
             genre: it.genre ?? it.genre_code ?? it.label ?? "UNKNOWN",
-            duration: dur,
+            duration: `${mm}:${ss}`,
             image: uploadedImage ?? "/placeholder.svg",
           };
         });
 
-        setRecommendations(songs);
-        setCurrentSong(songs[0] ?? null);
-        setDuration(180);
+        if (mounted) {
+          setRecommendations(songs);
+          setCurrentSong(songs[0] ?? null);
+          setDuration(180);
+        }
       } catch (e) {
         console.error("추천 불러오기 오류:", e);
       }
@@ -152,6 +162,7 @@ export default function RecommendClient() {
       if (timer) clearTimeout(timer);
     };
   }, [photoId, uploadedImage]);
+
 
   // === 3) 플레이 타이머 ===
   useEffect(() => {
