@@ -88,40 +88,32 @@ export default function RecommendClient() {
     };
   }, [photoId]);
 
-  // === 2) 추천 가져오기 ===
+  // === 2) 추천 가져오기 (분위기 무시하고 /random 호출) ===
   useEffect(() => {
     let mounted = true;
-    let timer: ReturnType<typeof setTimeout> | null = null;
 
-    const fetchByPhoto = async () => {
-      if (!photoId) return;
-
+    const fetchRandom = async () => {
       try {
-        const r = await fetch(`${API_BASE}/api/recommendations/by-photo/${photoId}`, {
-          headers: {
-            // 필요 시 로그인 유저 id를 헤더나 쿼리로 넘겨주세요.
-            // 'x-user-id': localStorage.getItem('uid') ?? ''
-          }
-        });
-        if (r.status === 202) {
-          if (mounted) timer = setTimeout(fetchByPhoto, 2500);
-          return;
-        }
+        // 필요하면 선호 장르 전달: ?preferred=POP,ROCK 등
+        const r = await fetch(`${API_BASE}/api/recommendations/random`);
         if (!r.ok) {
           console.error("추천 API 실패:", r.status, await safeText(r));
           return;
         }
-
         const data: any = await r.json();
-        const main = Array.isArray(data?.main_songs) ? data.main_songs : [];
-        const sub  = Array.isArray(data?.sub_songs) ? data.sub_songs : [];
-        const pref = Array.isArray(data?.preferred_songs) ? data.preferred_songs : [];
 
-        // 서버에서 total 10개도 주지만, 호환성 위해 다시 합쳐 사용
-        const combined: any[] = [...main, ...sub, ...pref];
-        // 중복 제거(같은 id)
+        const list =
+          (Array.isArray(data?.total) && data.total.length > 0)
+            ? data.total
+            : [
+                ...(Array.isArray(data?.main_songs) ? data.main_songs : []),
+                ...(Array.isArray(data?.sub_songs) ? data.sub_songs : []),
+                ...(Array.isArray(data?.preferred_songs) ? data.preferred_songs : []),
+              ];
+
+        // 중복 제거
         const seen = new Set();
-        const dedup = combined.filter((s) => {
+        const dedup = list.filter((s: any) => {
           const id = s.music_id ?? s.id;
           if (seen.has(id)) return false;
           seen.add(id);
@@ -132,7 +124,6 @@ export default function RecommendClient() {
           const seconds =
             typeof it.duration === "number" ? it.duration :
             typeof it.duration_sec === "number" ? it.duration_sec : 180;
-
           const mm = Math.floor(seconds / 60);
           const ss = String(Math.floor(seconds % 60)).padStart(2, "0");
 
@@ -156,13 +147,11 @@ export default function RecommendClient() {
       }
     };
 
-    fetchByPhoto();
+    fetchRandom();
     return () => {
       mounted = false;
-      if (timer) clearTimeout(timer);
     };
-  }, [photoId, uploadedImage]);
-
+  }, [uploadedImage]); // photoId는 이미지용이라 추천엔 영향 X
 
   // === 3) 플레이 타이머 ===
   useEffect(() => {
@@ -203,19 +192,17 @@ export default function RecommendClient() {
   const safeBgStyle = useMemo(() => ({ backgroundImage: `url(${safeImageSrc})` }), [safeImageSrc]);
 
   /** ---------- 뷰 컴포넌트들 ---------- */
-  // (A) CD 플레이어 뷰: 디스크 표면을 업로드 이미지로 표시 (CSS background)
+  // (A) CD 플레이어 뷰
   const CDPlayerView = () => (
     <div className="flex-1 flex justify-center items-center">
       <div className="relative">
         <div className={`relative w-80 h-80 ${isPlaying ? "animate-spin" : ""}`} style={{ animationDuration: "4s" }}>
           <div className="w-full h-full rounded-full bg-gradient-to-br from-slate-200 via-slate-300 to-slate-400 shadow-2xl border-4 border-slate-300 relative">
             <div className="absolute -inset-4 bg-gradient-to-r from-purple-400 via-pink-400 to-indigo-400 rounded-full opacity-20 blur-xl"></div>
-
             <div
               className="w-full h-full rounded-full overflow-hidden border-8 border-slate-800 relative z-10 bg-center bg-cover"
               style={{ backgroundImage: `url(${safeImageSrc})` }}
             >
-              {/* 중앙 라벨 */}
               <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 bg-slate-900/90 rounded-full shadow-inner flex items-center justify-center">
                 <div className="w-8 h-8 bg-slate-950 rounded-full"></div>
               </div>
@@ -226,24 +213,23 @@ export default function RecommendClient() {
     </div>
   );
 
-  // (B) 인스타그램형 뷰: 좌측 원형 썸네일, 플레이어 커버 모두 CSS background 사용
+  // (B) 인스타그램형 뷰
   const InstagramView = () => (
     <div className="flex-1 flex items-center justify-center w-full h-full">
       <div className="flex items-center justify-between w-full max-w-6xl mx-auto px-8">
-        {/* 좌측 원형 프레임 */}
         <div className="flex-shrink-0">
           <div className="relative">
-            <div className="w-80 h-80 rounded-full overflow-hidden border-4 border-white/30 shadow-2xl bg-center bg-cover"
-                 style={{ backgroundImage: `url(${safeImageSrc})` }} />
+            <div
+              className="w-80 h-80 rounded-full overflow-hidden border-4 border-white/30 shadow-2xl bg-center bg-cover"
+              style={{ backgroundImage: `url(${safeImageSrc})` }}
+            />
             <div className="absolute -inset-4 bg-gradient-to-r from-purple-400 via-pink-400 to-indigo-400 rounded-full opacity-20 blur-xl"></div>
           </div>
         </div>
 
-        {/* 중앙 플레이어 */}
         <div className="flex-1 flex flex-col items-center justify-center mx-12">
           {currentSong && (
             <>
-              {/* 플레이어 헤더 커버 */}
               <div className="flex flex-col items-center mb-8">
                 <div
                   className="mb-5 w-32 h-32 rounded-xl shadow-2xl border border-white/20 bg-center bg-cover"
@@ -258,7 +244,6 @@ export default function RecommendClient() {
                 </div>
               </div>
 
-              {/* 진행바 */}
               <div className="w-full max-w-md mb-8">
                 <div className="flex items-center justify-between text-slate-300 text-lg mb-4 font-medium">
                   <span>{formatTime(currentTime)}</span>
@@ -272,7 +257,6 @@ export default function RecommendClient() {
                 </div>
               </div>
 
-              {/* 컨트롤 */}
               <div className="flex items-center justify-center space-x-10">
                 <Button variant="ghost" size="lg" onClick={playPreviousSong} className="text-white hover:bg-white/10 rounded-full p-5 transition-all duration-200 hover:scale-110">
                   <SkipBack className="h-8 w-8" />
@@ -295,7 +279,6 @@ export default function RecommendClient() {
           )}
         </div>
 
-        {/* 우측 추천 리스트: 썸네일도 background 방식 */}
         {recommendations.length > 0 && (
           <div className="flex-shrink-0 w-80">
             <div className="bg-black/30 backdrop-blur-md rounded-2xl p-6 border border-white/10 shadow-2xl">
@@ -340,7 +323,7 @@ export default function RecommendClient() {
     </div>
   );
 
-  // (C) 기본 뷰: 좌측 큰 카드도 background 방식으로 표시
+  // (C) 기본 뷰
   const DefaultView = () => (
     <div className="flex-1 flex justify-center">
       <div className="relative">
@@ -359,7 +342,6 @@ export default function RecommendClient() {
       {currentSong && (
         <>
           <div className="flex flex-col items-center mb-8">
-            {/* 커버도 background 방식으로 통일 */}
             <div
               className="mb-4 w-32 h-32 rounded-xl shadow-2xl border border-white/20 bg-center bg-cover"
               style={{ backgroundImage: `url(${currentSong.image ?? safeImageSrc})` }}
@@ -488,11 +470,9 @@ export default function RecommendClient() {
 
   return (
     <div className="fixed inset-0 z-50 bg-black bg-opacity-95 flex items-center justify-center">
-      {/* 배경에도 업로드 이미지 */}
       <div className="absolute inset-0 bg-cover bg-center blur-md scale-110" style={safeBgStyle} />
       <div className="absolute inset-0 bg-gradient-to-br from-purple-900/30 via-black/50 to-pink-900/30"></div>
 
-      {/* 닫기 버튼 */}
       <div className="absolute top-6 right-6 z-10 flex space-x-3">
         <button
           onClick={handleClose}
@@ -503,7 +483,6 @@ export default function RecommendClient() {
         </button>
       </div>
 
-      {/* 뷰 전환 버튼들 */}
       <button
         onClick={handlePrevView}
         className="absolute left-6 top-1/2 -translate-y-1/2 z-10 bg-white/10 hover:bg-white/20 backdrop-blur-sm rounded-full p-4 transition-all duration-200 hover:scale-110 border border-white/20"
@@ -519,7 +498,6 @@ export default function RecommendClient() {
         <ChevronRight className="h-6 w-6 text-white" />
       </button>
 
-      {/* 메인 콘텐츠 */}
       <div className="relative z-10 w-full max-w-6xl mx-auto px-6 flex items-center justify-between h-full">
         {renderCurrentView()}
       </div>
