@@ -88,50 +88,52 @@ export default function RecommendClient() {
     };
   }, [photoId]);
 
-  // === 2) 추천 가져오기 (분위기 무시하고 /random 호출) ===
+  // 추천 가져오기 (by-photo → 실패/대기 시 random 폴백)
   useEffect(() => {
     let mounted = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
-    const fetchRandom = async () => {
+    const fetchRecs = async () => {
       try {
-        // 필요하면 선호 장르 전달: ?preferred=POP,ROCK 등
-        const r = await fetch(`${API_BASE}/api/recommendations/random`);
+        // 1) by-photo 먼저 시도 (페이지가 구버전으로 빌드되었을 때도 대비)
+        let r = await fetch(`${API_BASE}/api/recommendations/by-photo/${photoId}`);
+        if (r.status === 202 || r.status === 404 || r.status === 409) {
+          // 2) 분석 대기/없음/에러면 랜덤으로 폴백
+          r = await fetch(`${API_BASE}/api/recommendations/random?nocache=${Date.now()}`);
+        }
         if (!r.ok) {
           console.error("추천 API 실패:", r.status, await safeText(r));
           return;
         }
         const data: any = await r.json();
+        const list = Array.isArray(data?.total) && data.total.length
+          ? data.total
+          : [
+              ...(Array.isArray(data?.main_songs) ? data.main_songs : []),
+              ...(Array.isArray(data?.sub_songs) ? data.sub_songs : []),
+              ...(Array.isArray(data?.preferred_songs) ? data.preferred_songs : []),
+            ];
 
-        const list =
-          (Array.isArray(data?.total) && data.total.length > 0)
-            ? data.total
-            : [
-                ...(Array.isArray(data?.main_songs) ? data.main_songs : []),
-                ...(Array.isArray(data?.sub_songs) ? data.sub_songs : []),
-                ...(Array.isArray(data?.preferred_songs) ? data.preferred_songs : []),
-              ];
-
-        // 중복 제거
+        // dedup: id가 없을 때를 대비해 index를 최후 폴백으로 사용
         const seen = new Set();
         const dedup = list.filter((s: any, i: number) => {
-          const id = s.music_id ?? s.id ?? i; // 인덱스까지 최후 fallback
+          const id = s.music_id ?? s.id ?? i;
           if (seen.has(id)) return false;
           seen.add(id);
           return true;
         }).slice(0, 10);
 
         const songs: Song[] = dedup.map((it: any, idx: number) => {
-          const seconds =
-            typeof it.duration === "number" ? it.duration :
-            typeof it.duration_sec === "number" ? it.duration_sec : 180;
-          const mm = Math.floor(seconds / 60);
-          const ss = String(Math.floor(seconds % 60)).padStart(2, "0");
-
+          const sec = typeof it.duration === "number" ? it.duration
+                    : typeof it.duration_sec === "number" ? it.duration_sec
+                    : 180;
+          const mm = Math.floor(sec / 60);
+          const ss = String(sec % 60).padStart(2, "0");
           return {
             id: it.music_id ?? it.id ?? idx,
             title: it.title ?? "Unknown Title",
             artist: it.artist ?? "Unknown Artist",
-            genre: it.genre ?? it.genre_code ?? it.label ?? "UNKNOWN",
+            genre: it.genre ?? it.label ?? "UNKNOWN",
             duration: `${mm}:${ss}`,
             image: uploadedImage ?? "/placeholder.svg",
           };
@@ -147,11 +149,13 @@ export default function RecommendClient() {
       }
     };
 
-    fetchRandom();
+    if (photoId) fetchRecs();
     return () => {
       mounted = false;
+      if (timer) clearTimeout(timer);
     };
-  }, [uploadedImage]); // photoId는 이미지용이라 추천엔 영향 X
+  }, [photoId, uploadedImage]);
+
 
   // === 3) 플레이 타이머 ===
   useEffect(() => {
