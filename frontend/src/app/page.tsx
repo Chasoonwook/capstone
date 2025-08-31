@@ -372,7 +372,7 @@ export default function MusicRecommendationApp() {
           </div>
         </div>
 
-        {/* 사용자 추억 히스토리(표시용) */}
+        {/* 사용자 추억 히스토리 */}
         <div className="mb-16">
           <div className="flex items-center mb-10">
             <div className="flex items-center space-x-4">
@@ -391,6 +391,13 @@ export default function MusicRecommendationApp() {
               <Button variant="ghost" className="text-gray-500 hover:text-purple-600 font-light">
                 전체보기
               </Button>
+            </div>
+          </div>
+
+          {/* ✅ 하드코딩된 음악 그리드 제거 → 안내 문구만 표시 */}
+          <div className="w-full">
+            <div className="text-center text-gray-500 bg-white/70 backdrop-blur-sm border border-gray-100 rounded-2xl py-14">
+              아직 추억이 없습니다.
             </div>
           </div>
         </div>
