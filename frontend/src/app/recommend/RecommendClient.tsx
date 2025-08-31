@@ -113,8 +113,8 @@ export default function RecommendClient() {
 
         // 중복 제거
         const seen = new Set();
-        const dedup = list.filter((s: any) => {
-          const id = s.music_id ?? s.id;
+        const dedup = list.filter((s: any, i: number) => {
+          const id = s.music_id ?? s.id ?? i; // 인덱스까지 최후 fallback
           if (seen.has(id)) return false;
           seen.add(id);
           return true;
