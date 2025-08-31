@@ -1,3 +1,4 @@
+// src/app/page.tsx
 "use client"
 
 import type React from "react"
@@ -17,7 +18,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { User, Settings, LogOut, CreditCard, History, UserCircle } from "lucide-react"
 import { useRouter } from "next/navigation"
-import { API_BASE, authHeaders } from "@/lib/api" // ✅ 로그인 페이지와 동일한 유틸 사용
+import { API_BASE } from "@/lib/api" // ✅ DB 업로드 형식에서는 API_BASE만 사용
 
 const musicGenres = ["팝", "재즈", "운동", "휴식", "집중", "평온", "슬픔", "파티", "로맨스", "출퇴근"]
 
@@ -44,15 +45,15 @@ const memoryColors = [
   "from-red-400/20 to-pink-500/20",
 ]
 
-// 서버 응답 타입(유연 파싱)
-type PhotoUploadResponse =
-  | { id: string | number; url?: string }
-  | { photo: { id: string | number; url?: string } }
-  | Record<string, any>
+// 서버 응답 타입(멀터 업로드 형식)
+type UploadResp = { photo_id?: string | number }
 
+/* =========================
+ * 페이지 컴포넌트
+ * ========================= */
 export default function MusicRecommendationApp() {
   const [uploadedImage, setUploadedImage] = useState<string | null>(null) // 미리보기
-  const [uploadedPhotoId, setUploadedPhotoId] = useState<string | null>(null) // ✅ DB 저장된 photo id
+  const [uploadedPhotoId, setUploadedPhotoId] = useState<string | null>(null) // ✅ DB 저장된 photo_id
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedGenres, setSelectedGenres] = useState<string[]>([])
 
@@ -98,65 +99,63 @@ export default function MusicRecommendationApp() {
     router.push("/login")
   }
 
-  // ✅ 업로드 → DB 저장
+  /* -------------------------
+   * (그대로) 업로드 → DB 저장
+   *  - multer.single("photo")
+   *  - POST `${API_BASE}/api/photos/upload`
+   *  - 응답 { photo_id }
+   * ------------------------- */
+  async function uploadPhotoToBackend(file: File): Promise<{ photoId: string } | null> {
+    const form = new FormData()
+    form.append("photo", file)         // ✅ 필드명: photo
+    form.append("filename", file.name) // 선택 메타데이터
+
+    const url = `${API_BASE}/api/photos/upload`
+    try {
+      const res = await fetch(url, { method: "POST", body: form }) // ❗ Content-Type 자동 설정
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "")
+        console.error("[upload] 실패:", res.status, txt)
+        return null
+      }
+      const json = (await res.json()) as UploadResp
+      const photoId = json?.photo_id != null ? String(json.photo_id) : null
+      if (!photoId) {
+        console.error("[upload] 응답에 photo_id 없음:", json)
+        return null
+      }
+      return { photoId }
+    } catch (e) {
+      console.error("[upload] 요청 오류:", e)
+      return null
+    }
+  }
+
+  /* -------------------------
+   * 이미지 업로드(미리보기 + DB 저장)
+   * ------------------------- */
   const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
 
-    // 1) 프리뷰 먼저
+    // 1) 미리보기
     const reader = new FileReader()
     reader.onload = (e) => setUploadedImage(e.target?.result as string)
     reader.readAsDataURL(file)
 
-    // 2) 서버 업로드
+    // 2) DB 저장 (위의 형식 그대로)
     setIsUploading(true)
-    try {
-      const fd = new FormData()
-      fd.append("file", file)                // 백엔드에서 file 필드로 받는다고 가정
-      // 선택: 메타데이터
-      // fd.append("title", file.name)
-      // fd.append("source", "main_page")
+    const result = await uploadPhotoToBackend(file)
+    setIsUploading(false)
 
-      // 인증 헤더 구성
-      const uid = localStorage.getItem("uid") || ""
-      const baseHeaders = (authHeaders?.() as HeadersInit) || {}
-      // FormData 전송 시 Content-Type은 브라우저가 자동 설정(경계 포함) → 직접 지정 금지
-      const res = await fetch(`${API_BASE}/api/photos`, {
-        method: "POST",
-        headers: {
-          ...(uid ? { "X-User-Id": uid } : {}),
-          ...baseHeaders,
-        },
-        body: fd,
-      })
-
-      if (!res.ok) {
-        let msg = "사진 업로드에 실패했습니다."
-        try {
-          const j = (await res.json()) as { error?: string }
-          if (j?.error) msg = j.error
-        } catch {}
-        throw new Error(msg)
-      }
-
-      const data = (await res.json()) as PhotoUploadResponse
-      const id =
-        (data as any)?.id ??
-        (data as any)?.photo?.id ??
-        (typeof (data as any)?.data?.id !== "undefined" ? (data as any).data.id : null)
-
-      if (!id) throw new Error("업로드 응답에 photo id가 없습니다.")
-      setUploadedPhotoId(String(id))
-
-      // 필요하면 로컬 저장(다음 페이지에서 사용)
-      localStorage.setItem("lastPhotoId", String(id))
-    } catch (err) {
-      console.error(err)
-      // 사용자에게 보여주고 싶다면 토스트/알림 컴포넌트로 처리
-      alert(err instanceof Error ? err.message : "사진 업로드 중 오류가 발생했습니다.")
+    if (result?.photoId) {
+      setUploadedPhotoId(result.photoId)
+      localStorage.setItem("lastPhotoId", result.photoId)
+      console.log("[upload] 저장 성공 photo_id =", result.photoId)
+    } else {
       setUploadedPhotoId(null)
-    } finally {
-      setIsUploading(false)
+      console.warn("[upload] 저장 실패")
+      alert("사진 업로드에 실패했습니다.")
     }
   }
 
@@ -169,7 +168,6 @@ export default function MusicRecommendationApp() {
     if (uploadedPhotoId) {
       router.push(`/recommend?photoId=${encodeURIComponent(uploadedPhotoId)}`)
     } else {
-      // 사진 없이 장르만 선택해서 가는 플로우도 허용하려면 쿼리에 genres 포함
       const genres = selectedGenres.join(",")
       router.push(genres ? `/recommend?genres=${encodeURIComponent(genres)}` : "/recommend")
     }
