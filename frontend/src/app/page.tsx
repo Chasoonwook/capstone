@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { User, Settings, LogOut, CreditCard, History, UserCircle } from "lucide-react"
 import { useRouter } from "next/navigation"
-import { API_BASE } from "@/lib/api" // ✅ DB 업로드 형식에서는 API_BASE만 사용
+import { API_BASE } from "@/lib/api" // DB 업로드에 사용
 
 const musicGenres = ["팝", "재즈", "운동", "휴식", "집중", "평온", "슬픔", "파티", "로맨스", "출퇴근"]
 
@@ -48,42 +48,48 @@ const memoryColors = [
 // 서버 응답 타입(멀터 업로드 형식)
 type UploadResp = { photo_id?: string | number }
 
-/* =========================
- * 페이지 컴포넌트
- * ========================= */
+/**
+ * ⚠️ 라우팅 전제
+ * - /app/recommend/RecommendClient.tsx: 클라이언트 컴포넌트
+ * - /app/recommend/page.tsx: 아래처럼 RecommendClient를 렌더링
+ *   export default function Page() { return <RecommendClient/> }
+ */
 export default function MusicRecommendationApp() {
+  // 프리뷰 & 업로드 상태
   const [uploadedImage, setUploadedImage] = useState<string | null>(null) // 미리보기
-  const [uploadedPhotoId, setUploadedPhotoId] = useState<string | null>(null) // ✅ DB 저장된 photo_id
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)     // ✅ 실제 업로드할 파일 (버튼 눌렀을 때 업로드)
+  const [uploadedPhotoId, setUploadedPhotoId] = useState<string | null>(null) // 업로드 성공 시 저장
+  const [isUploading, setIsUploading] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false) // 추천 버튼 처리 중
+
+  // 검색/장르
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedGenres, setSelectedGenres] = useState<string[]>([])
 
-  // 로그인 상태/유저
+  // 로그인 상태/유저 (초기값은 빈 객체)
   const [isLoggedIn, setIsLoggedIn] = useState(false)
-  const [user, setUser] = useState({
-    name: "진영",
-    email: "almond-v6w@gmail.com",
-    avatar: "/placeholder.svg?height=32&width=32",
-  })
+  const [user, setUser] = useState<{ name?: string; email?: string; avatar?: string }>({})
 
   const router = useRouter()
-  const [isUploading, setIsUploading] = useState(false)
 
-  // 로그인 정보 복원
+  // 로그인 정보 복원 (하드코딩 제거)
   useEffect(() => {
     try {
       const token = localStorage.getItem("token")
-      const name = localStorage.getItem("name")
-      const email = localStorage.getItem("email")
-      const avatar = localStorage.getItem("avatar") || "/placeholder.svg?height=32&width=32"
+      const name = localStorage.getItem("name") || undefined
+      const email = localStorage.getItem("email") || undefined
+      const avatar = (localStorage.getItem("avatar") || "/placeholder.svg?height=32&width=32") as string
 
       if (token && name && email) {
-        setUser((prev) => ({ ...prev, name, email, avatar: prev.avatar || avatar }))
+        setUser({ name, email, avatar })
         setIsLoggedIn(true)
       } else {
         setIsLoggedIn(false)
+        setUser({})
       }
     } catch {
       setIsLoggedIn(false)
+      setUser({})
     }
   }, [])
 
@@ -96,11 +102,12 @@ export default function MusicRecommendationApp() {
       localStorage.removeItem("avatar")
     } catch {}
     setIsLoggedIn(false)
+    setUser({})
     router.push("/login")
   }
 
   /* -------------------------
-   * (그대로) 업로드 → DB 저장
+   * 업로드 → DB 저장 (버튼 클릭 시 호출)
    *  - multer.single("photo")
    *  - POST `${API_BASE}/api/photos/upload`
    *  - 응답 { photo_id }
@@ -112,7 +119,7 @@ export default function MusicRecommendationApp() {
 
     const url = `${API_BASE}/api/photos/upload`
     try {
-      const res = await fetch(url, { method: "POST", body: form }) // ❗ Content-Type 자동 설정
+      const res = await fetch(url, { method: "POST", body: form }) // Content-Type 자동 설정
       if (!res.ok) {
         const txt = await res.text().catch(() => "")
         console.error("[upload] 실패:", res.status, txt)
@@ -132,47 +139,67 @@ export default function MusicRecommendationApp() {
   }
 
   /* -------------------------
-   * 이미지 업로드(미리보기 + DB 저장 + 이동)
+   * 이미지 선택: 미리보기만 (DB 저장 X)
    * ------------------------- */
-  const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
 
-    // 1) 미리보기
+    // 1) 미리보기만
     const reader = new FileReader()
     reader.onload = (e) => setUploadedImage(e.target?.result as string)
     reader.readAsDataURL(file)
 
-    // 2) DB 저장 (위의 형식 그대로)
-    setIsUploading(true)
-    const result = await uploadPhotoToBackend(file)
-    setIsUploading(false)
-
-    if (result?.photoId) {
-      setUploadedPhotoId(result.photoId)
-      localStorage.setItem("lastPhotoId", result.photoId)
-      console.log("[upload] 저장 성공 photo_id =", result.photoId)
-
-      // ✅ 업로드 성공 즉시 RecommendClient.tsx 라우트로 이동
-      router.push(`/recommend-client?photoId=${encodeURIComponent(result.photoId)}`)
-    } else {
-      setUploadedPhotoId(null)
-      console.warn("[upload] 저장 실패")
-      alert("사진 업로드에 실패했습니다.")
-    }
+    // 2) 파일 보관 (추천 버튼에서 업로드)
+    setSelectedFile(file)
+    setUploadedPhotoId(null)
   }
 
   const toggleGenre = (genre: string) => {
     setSelectedGenres((prev) => (prev.includes(genre) ? prev.filter((g) => g !== genre) : [...prev, genre]))
   }
 
-  // (버튼으로 이동하는 경우도 /recommend-client 사용)
-  const goRecommend = () => {
-    if (uploadedPhotoId) {
-      router.push(`/recommend-client?photoId=${encodeURIComponent(uploadedPhotoId)}`)
-    } else {
+  /* -------------------------
+   * "음악 추천받기" 버튼:
+   *  - 이미지가 있으면 지금 업로드 → 성공 시 /recommend 로 이동
+   *  - 이미지가 없고 장르만 있으면 장르 쿼리로 /recommend 이동
+   * ------------------------- */
+  const goRecommend = async () => {
+    if (!isLoggedIn) {
+      alert("로그인이 필요합니다.")
+      router.push("/login")
+      return
+    }
+
+    setIsSubmitting(true)
+
+    try {
+      if (selectedFile) {
+        // 1) 파일 업로드
+        const result = await uploadPhotoToBackend(selectedFile)
+        if (!result?.photoId) {
+          alert("사진 업로드에 실패했습니다.")
+          setIsSubmitting(false)
+          return
+        }
+        setUploadedPhotoId(result.photoId)
+        localStorage.setItem("lastPhotoId", result.photoId)
+
+        // 2) 업로드 성공 → RecommendClient로 (recommend/page.tsx가 RecommendClient 렌더링)
+        router.push(`/recommend?photoId=${encodeURIComponent(result.photoId)}`)
+        return
+      }
+
+      // 파일이 없으면 장르로만 이동
       const genres = selectedGenres.join(",")
-      router.push(genres ? `/recommend-client?genres=${encodeURIComponent(genres)}` : "/recommend-client")
+      if (!genres) {
+        alert("사진을 업로드하거나 장르를 선택해주세요.")
+        setIsSubmitting(false)
+        return
+      }
+      router.push(`/recommend?genres=${encodeURIComponent(genres)}`)
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
@@ -201,7 +228,7 @@ export default function MusicRecommendationApp() {
               <div className="w-10 h-10 bg-purple-600 rounded-xl flex items-center justify-center">
                 <Music className="h-6 w-6 text-white" />
               </div>
-              {/* ← 원하는 이름으로 자유롭게 바꾸세요 */}
+              {/* 프로젝트명 */}
               <h1 className="text-xl font-medium text-gray-900">Photo_Music</h1>
             </div>
             {isLoggedIn ? (
@@ -209,20 +236,24 @@ export default function MusicRecommendationApp() {
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" className="relative h-10 w-10 rounded-full">
                     <Avatar className="h-10 w-10">
-                      <AvatarImage src={user.avatar || "/placeholder.svg"} alt={user.name} />
-                      <AvatarFallback className="bg-purple-600 text-white">{user.name.charAt(0)}</AvatarFallback>
+                      <AvatarImage src={user.avatar || "/placeholder.svg"} alt={user.name || "user"} />
+                      <AvatarFallback className="bg-purple-600 text-white">
+                        {(user.name?.[0] || "U").toUpperCase()}
+                      </AvatarFallback>
                     </Avatar>
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent className="w-64" align="end" forceMount>
                   <div className="flex items-center justify-start gap-2 p-2">
                     <Avatar className="h-10 w-10">
-                      <AvatarImage src={user.avatar || "/placeholder.svg"} alt={user.name} />
-                      <AvatarFallback className="bg-purple-600 text-white">{user.name.charAt(0)}</AvatarFallback>
+                      <AvatarImage src={user.avatar || "/placeholder.svg"} alt={user.name || "user"} />
+                      <AvatarFallback className="bg-purple-600 text-white">
+                        {(user.name?.[0] || "U").toUpperCase()}
+                      </AvatarFallback>
                     </Avatar>
                     <div className="flex flex-col space-y-1 leading-none">
-                      <p className="font-medium">{user.name}</p>
-                      <p className="text-xs text-muted-foreground">{user.email}</p>
+                      <p className="font-medium">{user.name || "사용자"}</p>
+                      <p className="text-xs text-muted-foreground">{user.email || ""}</p>
                     </div>
                   </div>
                   <DropdownMenuSeparator />
@@ -260,17 +291,24 @@ export default function MusicRecommendationApp() {
 
           <div className="flex justify-center mb-8">
             <label className="cursor-pointer group">
-              <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" disabled={isUploading} />
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleImageSelect}
+                className="hidden"
+                disabled={isUploading || isSubmitting}
+              />
               <div className="border-2 border-dashed border-transparent bg-gradient-to-r from-purple-200 via-pink-200 to-blue-200 p-0.5 rounded-3xl hover:from-purple-300 hover:via-pink-300 hover:to-blue-300 transition-all duration-300">
                 <div className="bg-white/80 backdrop-blur-sm rounded-3xl p-16 hover:bg-white/90 transition-all">
-                  {isUploading ? (
-                    <div className="text-center">
-                      <div className="animate-spin h-8 w-8 border-2 border-purple-600 border-t-transparent rounded-full mx-auto mb-4"></div>
-                      <p className="text-gray-600 font-light">업로드 중...</p>
-                    </div>
-                  ) : uploadedImage ? (
+                  {uploadedImage ? (
                     <div className="relative">
-                      <Image src={uploadedImage || "/placeholder.svg"} alt="업로드된 사진" width={240} height={160} className="rounded-2xl object-cover mx-auto" />
+                      <Image
+                        src={uploadedImage || "/placeholder.svg"}
+                        alt="업로드된 사진"
+                        width={240}
+                        height={160}
+                        className="rounded-2xl object-cover mx-auto"
+                      />
                       {uploadedPhotoId && (
                         <p className="mt-3 text-sm text-gray-500">저장됨 • Photo ID: {uploadedPhotoId}</p>
                       )}
@@ -280,7 +318,7 @@ export default function MusicRecommendationApp() {
                       <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4 group-hover:bg-purple-100 transition-colors">
                         <Upload className="h-8 w-8 text-gray-400 group-hover:text-purple-500" />
                       </div>
-                      <p className="text-gray-600 font-light">사진을 업로드하세요</p>
+                      <p className="text-gray-600 font-light">사진을 업로드하세요 (버튼 클릭 시 저장됩니다)</p>
                     </div>
                   )}
                 </div>
@@ -288,14 +326,14 @@ export default function MusicRecommendationApp() {
             </label>
           </div>
 
-          {/* (선택) 버튼으로도 이동 가능: /recommend-client */}
+          {/* /recommend로 이동 (photoId/genres 전달) — 클릭 시 업로드 수행 */}
           <Button
             onClick={goRecommend}
             size="lg"
-            disabled={!uploadedImage && selectedGenres.length === 0}
+            disabled={isSubmitting || (!uploadedImage && selectedGenres.length === 0)}
             className="bg-gradient-to-r from-purple-600 via-pink-600 to-blue-600 hover:from-purple-700 hover:via-pink-700 hover:to-blue-700 text-white px-12 py-3 rounded-full font-light disabled:opacity-50 shadow-lg hover:shadow-xl transition-all"
           >
-            음악 추천받기
+            {isSubmitting ? "처리 중..." : "음악 추천받기"}
           </Button>
         </div>
 
@@ -339,11 +377,13 @@ export default function MusicRecommendationApp() {
           <div className="flex items-center mb-10">
             <div className="flex items-center space-x-4">
               <Avatar className="h-12 w-12">
-                <AvatarImage src={user.avatar || "/placeholder.svg"} alt={user.name} />
-                <AvatarFallback className="bg-purple-600 text-white">{user.name.charAt(0)}</AvatarFallback>
+                <AvatarImage src={user.avatar || "/placeholder.svg"} alt={user.name || "user"} />
+                <AvatarFallback className="bg-purple-600 text-white">
+                  {(user.name?.[0] || "U").toUpperCase()}
+                </AvatarFallback>
               </Avatar>
               <div>
-                <h3 className="text-2xl font-light text-gray-900">{user.name}님의 추억</h3>
+                <h3 className="text-2xl font-light text-gray-900">{(user.name || "사용자")}님의 추억</h3>
                 <p className="text-gray-500 font-light">최근에 들었던 음악들</p>
               </div>
             </div>
