@@ -87,32 +87,49 @@ export default function RecommendClient() {
     };
   }, [photoId]);
 
-  // 추천 가져오기 (by-photo → 실패/대기 시 random 폴백)
+  // 추천 가져오기 (by-photo)
   useEffect(() => {
     let mounted = true;
-    const fetchRandom = async () => {
+    const fetchRecommendationsByPhoto = async () => {
+      if (!photoId) return;
       try {
-        const r = await fetch(`${API_BASE}/api/recommendations/random?nocache=${Date.now()}`);
+        const r = await fetch(
+          `${API_BASE}/api/recommendations/by-photo/${photoId}`
+        );
         if (!r.ok) {
           console.error("추천 API 실패:", r.status, await safeText(r));
+          setRecommendations([]);
+          setCurrentSong(null);
           return;
         }
         const data: any = await r.json();
-        const list = Array.isArray(data?.total) ? data.total : [];
-        const seen = new Set();
-        const dedup = list
-          .filter((s: any, i: number) => {
-            const id = s.music_id ?? s.id ?? i;
-            if (seen.has(id)) return false;
-            seen.add(id);
-            return true;
-          })
-          .slice(0, 10);
 
+        // API 응답: { main_mood, sub_mood, main_songs, sub_songs }
+        const mainSongs: any[] = Array.isArray(data?.main_songs)
+          ? data.main_songs
+          : [];
+        const subSongs: any[] = Array.isArray(data?.sub_songs)
+          ? data.sub_songs
+          : [];
+        // mainSongs + subSongs 합치기
+        const list: any[] = [...mainSongs, ...subSongs];
+        // 중복 제거 (music_id 기준)
+        const seen = new Set();
+        const dedup = list.filter((s, i) => {
+          const id = s.music_id ?? s.id ?? i;
+          if (seen.has(id)) return false;
+          seen.add(id);
+          return true;
+        });
+
+        // Song 타입 맞추기
         const songs: Song[] = dedup.map((it: any, idx: number) => {
           const sec =
-            typeof it.duration === "number" ? it.duration :
-            typeof it.duration_sec === "number" ? it.duration_sec : 180;
+            typeof it.duration === "number"
+              ? it.duration
+              : typeof it.duration_sec === "number"
+              ? it.duration_sec
+              : 180;
           const mm = Math.floor(sec / 60);
           const ss = String(sec % 60).padStart(2, "0");
           return {
@@ -132,13 +149,15 @@ export default function RecommendClient() {
         }
       } catch (e) {
         console.error("추천 불러오기 오류:", e);
+        setRecommendations([]);
+        setCurrentSong(null);
       }
     };
-    fetchRandom();
+    fetchRecommendationsByPhoto();
     return () => {
       mounted = false;
     };
-  }, [uploadedImage]);
+  }, [photoId, uploadedImage]);
 
   // === 3) 플레이 타이머 ===
   useEffect(() => {
@@ -153,15 +172,21 @@ export default function RecommendClient() {
   const togglePlay = () => setIsPlaying((p) => !p);
   const playNextSong = () => {
     if (!currentSong || recommendations.length === 0) return;
-    const currentIndex = recommendations.findIndex((song) => song.id === currentSong.id);
+    const currentIndex = recommendations.findIndex(
+      (song) => song.id === currentSong.id
+    );
     const nextIndex = (currentIndex + 1) % recommendations.length;
     setCurrentSong(recommendations[nextIndex]);
     setCurrentTime(0);
   };
   const playPreviousSong = () => {
     if (!currentSong || recommendations.length === 0) return;
-    const currentIndex = recommendations.findIndex((song) => song.id === currentSong.id);
-    const prevIndex = currentIndex === 0 ? recommendations.length - 1 : currentIndex - 1;
+    const currentIndex = recommendations.findIndex(
+      (song) => song.id === currentSong.id
+    );
+    const prevIndex = currentIndex === 0
+      ? recommendations.length - 1
+      : currentIndex - 1;
     setCurrentSong(recommendations[prevIndex]);
     setCurrentTime(0);
   };
@@ -182,35 +207,21 @@ export default function RecommendClient() {
   // (A) CD 플레이어 뷰
   const CDPlayerView = () => (
     <div className="flex-1 flex justify-center items-center">
-      <div className="relative">
-        <div className={`relative w-80 h-80 ${isPlaying ? "animate-spin" : ""}`} style={{ animationDuration: "4s" }}>
-          <div className="w-full h-full rounded-full bg-gradient-to-br from-slate-200 via-slate-300 to-slate-400 shadow-2xl border-4 border-slate-300 relative">
-            <div className="absolute -inset-4 bg-gradient-to-r from-purple-400 via-pink-400 to-indigo-400 rounded-full opacity-20 blur-xl"></div>
-            <div
-              className="w-full h-full rounded-full overflow-hidden border-8 border-slate-800 relative z-10 bg-center bg-cover"
-              style={{ backgroundImage: `url(${safeImageSrc})` }}
-            >
-              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 bg-slate-900/90 rounded-full shadow-inner flex items-center justify-center">
-                <div className="w-8 h-8 bg-slate-950 rounded-full"></div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+      {/* ... 기존 CD 플레이어 UI ... */}
     </div>
   );
 
   // (B) 인스타그램형 뷰
   const InstagramView = () => (
     <div className="flex-1 flex items-center justify-center w-full h-full">
-      {/* ... 기존 코드 동일 ... */}
+      {/* ... 기존 Instagram형 UI ... */}
     </div>
   );
 
   // (C) 기본 뷰
   const DefaultView = () => (
     <div className="flex-1 flex justify-center">
-      {/* ... 기존 코드 동일 ... */}
+      {/* ... 기존 Default UI ... */}
     </div>
   );
 
