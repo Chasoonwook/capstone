@@ -2,11 +2,23 @@
 "use client"
 
 import type React from "react"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Upload, Search, Music, Play } from "lucide-react"
+import {
+  Upload,
+  Search,
+  Music,
+  ChevronLeft,
+  ChevronRight,
+  User,
+  Settings,
+  LogOut,
+  CreditCard,
+  History,
+  UserCircle,
+} from "lucide-react"
 import Image from "next/image"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import {
@@ -16,13 +28,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { User, Settings, LogOut, CreditCard, History, UserCircle } from "lucide-react"
 import { useRouter } from "next/navigation"
-import { API_BASE } from "@/lib/api" // DB 업로드에 사용
+import { API_BASE } from "@/lib/api"
 
 const musicGenres = ["팝", "재즈", "운동", "휴식", "집중", "평온", "슬픔", "파티", "로맨스", "출퇴근"]
 
-// 색감 팔레트
 const genreColors: Record<string, string> = {
   팝: "bg-gradient-to-r from-pink-500 to-rose-500 text-white",
   재즈: "bg-gradient-to-r from-blue-500 to-indigo-500 text-white",
@@ -36,43 +46,47 @@ const genreColors: Record<string, string> = {
   출퇴근: "bg-gradient-to-r from-teal-500 to-cyan-500 text-white",
 }
 
-const memoryColors = [
-  "from-pink-400/20 to-purple-500/20",
-  "from-blue-400/20 to-cyan-500/20",
-  "from-green-400/20 to-emerald-500/20",
-  "from-yellow-400/20 to-orange-500/20",
-  "from-purple-400/20 to-indigo-500/20",
-  "from-red-400/20 to-pink-500/20",
-]
-
-// 서버 응답 타입(멀터 업로드 형식)
 type UploadResp = { photo_id?: string | number }
 
-/**
- * ⚠️ 라우팅 전제
- * - /app/recommend/RecommendClient.tsx: 클라이언트 컴포넌트
- * - /app/recommend/page.tsx: 아래처럼 RecommendClient를 렌더링
- *   export default function Page() { return <RecommendClient/> }
- */
+type HistoryItem = {
+  id: string | number
+  title: string
+  artist?: string
+  image?: string | null
+  playedAt?: string
+  musicId?: string | number
+  photoId?: string | number
+  selectedFrom?: string | null
+  genre?: string | null
+  label?: string | null
+}
+
 export default function MusicRecommendationApp() {
-  // 프리뷰 & 업로드 상태
-  const [uploadedImage, setUploadedImage] = useState<string | null>(null) // 미리보기
-  const [selectedFile, setSelectedFile] = useState<File | null>(null)     // ✅ 실제 업로드할 파일 (버튼 눌렀을 때 업로드)
-  const [uploadedPhotoId, setUploadedPhotoId] = useState<string | null>(null) // 업로드 성공 시 저장
-  const [isUploading, setIsUploading] = useState(false)
-  const [isSubmitting, setIsSubmitting] = useState(false) // 추천 버튼 처리 중
+  // 업로드 상태
+  const [uploadedImage, setUploadedImage] = useState<string | null>(null)
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [uploadedPhotoId, setUploadedPhotoId] = useState<string | null>(null)
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
   // 검색/장르
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedGenres, setSelectedGenres] = useState<string[]>([])
 
-  // 로그인 상태/유저 (초기값은 빈 객체)
+  // 로그인/유저
   const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [user, setUser] = useState<{ name?: string; email?: string; avatar?: string }>({})
 
+  // 히스토리
+  const [historyList, setHistoryList] = useState<HistoryItem[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState<string | null>(null)
+
   const router = useRouter()
 
-  // 로그인 정보 복원 (하드코딩 제거)
+  // ✅ 캐러셀 ref — 이 선언만 유지 (중복 금지)
+  const historyScrollRef = useRef<HTMLDivElement | null>(null)
+
+  // 로그인 정보 복원
   useEffect(() => {
     try {
       const token = localStorage.getItem("token")
@@ -93,6 +107,68 @@ export default function MusicRecommendationApp() {
     }
   }, [])
 
+  // ✅ 백엔드 스펙에 맞춘 히스토리 불러오기: GET /api/history?user_id=123
+  useEffect(() => {
+    const fetchHistory = async () => {
+      if (!isLoggedIn) {
+        setHistoryList([])
+        return
+      }
+      setHistoryLoading(true)
+      setHistoryError(null)
+      try {
+        const uid = localStorage.getItem("uid")
+        if (!uid) {
+          setHistoryList([])
+          setHistoryLoading(false)
+          return
+        }
+
+        const url = `${API_BASE}/api/history?user_id=${encodeURIComponent(uid)}`
+        const res = await fetch(url, { credentials: "include" })
+        if (!res.ok) {
+          const txt = await res.text().catch(() => "")
+          throw new Error(txt || `HTTP ${res.status}`)
+        }
+
+        const rows = (await res.json()) as Array<{
+          history_id: number | string
+          music_id?: number | string
+          photo_id?: number | string
+          title: string
+          artist?: string
+          genre?: string | null
+          label?: string | null
+          selected_from?: string | null
+          created_at?: string
+        }>
+
+        const mapped: HistoryItem[] = rows.map((r) => ({
+          id: r.history_id,
+          musicId: r.music_id,
+          photoId: r.photo_id,
+          title: r.title,
+          artist: r.artist,
+          genre: r.genre ?? null,
+          label: r.label ?? null,
+          selectedFrom: r.selected_from ?? null,
+          playedAt: r.created_at,
+          image: null, // 백엔드에서 이미지 URL을 안 주므로 플레이스홀더
+        }))
+
+        setHistoryList(mapped)
+      } catch (err: any) {
+        console.error("[history] load failed:", err)
+        setHistoryError("히스토리를 불러오지 못했습니다.")
+        setHistoryList([])
+      } finally {
+        setHistoryLoading(false)
+      }
+    }
+
+    fetchHistory()
+  }, [isLoggedIn])
+
   const handleLogout = () => {
     try {
       localStorage.removeItem("token")
@@ -106,20 +182,15 @@ export default function MusicRecommendationApp() {
     router.push("/login")
   }
 
-  /* -------------------------
-   * 업로드 → DB 저장 (버튼 클릭 시 호출)
-   *  - multer.single("photo")
-   *  - POST `${API_BASE}/api/photos/upload`
-   *  - 응답 { photo_id }
-   * ------------------------- */
+  // 업로드 → DB 저장
   async function uploadPhotoToBackend(file: File): Promise<{ photoId: string } | null> {
     const form = new FormData()
-    form.append("photo", file)         // ✅ 필드명: photo
-    form.append("filename", file.name) // 선택 메타데이터
+    form.append("photo", file)
+    form.append("filename", file.name)
 
     const url = `${API_BASE}/api/photos/upload`
     try {
-      const res = await fetch(url, { method: "POST", body: form }) // Content-Type 자동 설정
+      const res = await fetch(url, { method: "POST", body: form })
       if (!res.ok) {
         const txt = await res.text().catch(() => "")
         console.error("[upload] 실패:", res.status, txt)
@@ -138,19 +209,15 @@ export default function MusicRecommendationApp() {
     }
   }
 
-  /* -------------------------
-   * 이미지 선택: 미리보기만 (DB 저장 X)
-   * ------------------------- */
+  // 이미지 선택(미리보기)
   const handleImageSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
 
-    // 1) 미리보기만
     const reader = new FileReader()
     reader.onload = (e) => setUploadedImage(e.target?.result as string)
     reader.readAsDataURL(file)
 
-    // 2) 파일 보관 (추천 버튼에서 업로드)
     setSelectedFile(file)
     setUploadedPhotoId(null)
   }
@@ -159,11 +226,7 @@ export default function MusicRecommendationApp() {
     setSelectedGenres((prev) => (prev.includes(genre) ? prev.filter((g) => g !== genre) : [...prev, genre]))
   }
 
-  /* -------------------------
-   * "음악 추천받기" 버튼:
-   *  - 이미지가 있으면 지금 업로드 → 성공 시 /recommend 로 이동
-   *  - 이미지가 없고 장르만 있으면 장르 쿼리로 /recommend 이동
-   * ------------------------- */
+  // 추천 버튼
   const goRecommend = async () => {
     if (!isLoggedIn) {
       alert("로그인이 필요합니다.")
@@ -172,10 +235,8 @@ export default function MusicRecommendationApp() {
     }
 
     setIsSubmitting(true)
-
     try {
       if (selectedFile) {
-        // 1) 파일 업로드
         const result = await uploadPhotoToBackend(selectedFile)
         if (!result?.photoId) {
           alert("사진 업로드에 실패했습니다.")
@@ -184,13 +245,10 @@ export default function MusicRecommendationApp() {
         }
         setUploadedPhotoId(result.photoId)
         localStorage.setItem("lastPhotoId", result.photoId)
-
-        // 2) 업로드 성공 → RecommendClient로 (recommend/page.tsx가 RecommendClient 렌더링)
         router.push(`/recommend?photoId=${encodeURIComponent(result.photoId)}`)
         return
       }
 
-      // 파일이 없으면 장르로만 이동
       const genres = selectedGenres.join(",")
       if (!genres) {
         alert("사진을 업로드하거나 장르를 선택해주세요.")
@@ -203,9 +261,17 @@ export default function MusicRecommendationApp() {
     }
   }
 
+  // 캐러셀 스크롤
+  const scrollHistory = (dir: "left" | "right") => {
+    const el = historyScrollRef.current
+    if (!el) return
+    const step = Math.round(el.clientWidth * 0.9)
+    el.scrollBy({ left: dir === "left" ? -step : step, behavior: "smooth" })
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-100 via-pink-100 to-blue-100 relative overflow-hidden">
-      {/* 배경 색감 요소 */}
+      {/* 배경 */}
       <div className="absolute inset-0 opacity-20">
         <div className="absolute inset-0 bg-gradient-to-br from-purple-200/50 to-pink-200/50"></div>
         <div
@@ -228,7 +294,6 @@ export default function MusicRecommendationApp() {
               <div className="w-10 h-10 bg-purple-600 rounded-xl flex items-center justify-center">
                 <Music className="h-6 w-6 text-white" />
               </div>
-              {/* 프로젝트명 */}
               <h1 className="text-xl font-medium text-gray-900">Photo_Music</h1>
             </div>
             {isLoggedIn ? (
@@ -282,8 +347,103 @@ export default function MusicRecommendationApp() {
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-16 relative z-10">
-        {/* 업로드 영역 */}
-        <div className="text-center mb-20">
+        {/* ====== 히스토리 캐러셀 (DB 연동) ====== */}
+        <section className="mb-16">
+          <div className="flex items-center mb-6">
+            <div className="flex items-center space-x-4">
+              <Avatar className="h-12 w-12">
+                <AvatarImage src={user.avatar || "/placeholder.svg"} alt={user.name || "user"} />
+                <AvatarFallback className="bg-purple-600 text-white">
+                  {(user.name?.[0] || "U").toUpperCase()}
+                </AvatarFallback>
+              </Avatar>
+              <div>
+                <h3 className="text-2xl font-light text-gray-900">{(user.name || "사용자")}님의 추억</h3>
+                <p className="text-gray-500 font-light">최근에 들었던 음악들</p>
+              </div>
+            </div>
+            <div className="ml-auto hidden sm:block">
+              <div className="flex gap-2">
+                <Button variant="ghost" className="rounded-full" onClick={() => scrollHistory("left")} aria-label="왼쪽으로 이동">
+                  <ChevronLeft className="h-5 w-5" />
+                </Button>
+                <Button variant="ghost" className="rounded-full" onClick={() => scrollHistory("right")} aria-label="오른쪽으로 이동">
+                  <ChevronRight className="h-5 w-5" />
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {historyLoading ? (
+            <div className="text-center text-gray-500 py-16 border border-dashed rounded-lg bg-white/60">불러오는 중…</div>
+          ) : historyError ? (
+            <div className="text-center text-red-500 py-16 border border-dashed rounded-lg bg-white/60">{historyError}</div>
+          ) : historyList.length === 0 ? (
+            <div className="text-center text-gray-500 py-16 border border-dashed rounded-lg bg-white/60">
+              아직 추억이 없습니다.
+            </div>
+          ) : (
+            <div className="relative">
+              <div className="hidden sm:block">
+                <Button
+                  variant="ghost"
+                  className="absolute -left-3 top-1/2 -translate-y-1/2 z-10 rounded-full shadow"
+                  onClick={() => scrollHistory("left")}
+                  aria-label="왼쪽으로 이동"
+                >
+                  <ChevronLeft className="h-5 w-5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  className="absolute -right-3 top-1/2 -translate-y-1/2 z-10 rounded-full shadow"
+                  onClick={() => scrollHistory("right")}
+                  aria-label="오른쪽으로 이동"
+                >
+                  <ChevronRight className="h-5 w-5" />
+                </Button>
+              </div>
+
+              <div
+                ref={historyScrollRef}
+                className="flex gap-4 overflow-x-auto scroll-smooth snap-x snap-mandatory pb-2
+                           [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              >
+                {historyList.map((item) => (
+                  <button
+                    key={item.id}
+                    className="min-w-[180px] sm:min-w-[200px] max-w-[220px] snap-start
+                               bg-white/80 backdrop-blur-sm rounded-2xl shadow-sm hover:shadow
+                               transition-all p-3 text-left"
+                    onClick={() => router.push(`/recommend?picked=${encodeURIComponent(String(item.musicId ?? item.id))}`)}
+                    aria-label={`${item.title} 재생`}
+                  >
+                    <div className="relative w-full h-36 overflow-hidden rounded-xl">
+                      <Image
+                        src={item.image || "/placeholder.svg"}
+                        alt={item.title}
+                        fill
+                        className="object-cover"
+                        sizes="220px"
+                      />
+                    </div>
+                    <div className="mt-3">
+                      <p className="text-sm font-medium line-clamp-1">{item.title}</p>
+                      {item.artist && (
+                        <p className="text-xs text-gray-500 line-clamp-1">{item.artist}</p>
+                      )}
+                      {item.playedAt && (
+                        <p className="text-[10px] text-gray-400 mt-1">{item.playedAt}</p>
+                      )}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* ====== 업로드 영역 ====== */}
+        <section className="text-center mb-20">
           <h2 className="text-4xl font-light text-gray-900 mb-4">사진으로 음악을 찾아보세요</h2>
           <p className="text-gray-500 mb-12 text-lg font-light max-w-2xl mx-auto">
             사진을 업로드하면 그 순간에 어울리는 음악을 추천해드립니다
@@ -296,7 +456,7 @@ export default function MusicRecommendationApp() {
                 accept="image/*"
                 onChange={handleImageSelect}
                 className="hidden"
-                disabled={isUploading || isSubmitting}
+                disabled={isSubmitting}
               />
               <div className="border-2 border-dashed border-transparent bg-gradient-to-r from-purple-200 via-pink-200 to-blue-200 p-0.5 rounded-3xl hover:from-purple-300 hover:via-pink-300 hover:to-blue-300 transition-all duration-300">
                 <div className="bg-white/80 backdrop-blur-sm rounded-3xl p-16 hover:bg-white/90 transition-all">
@@ -326,7 +486,6 @@ export default function MusicRecommendationApp() {
             </label>
           </div>
 
-          {/* /recommend로 이동 (photoId/genres 전달) — 클릭 시 업로드 수행 */}
           <Button
             onClick={goRecommend}
             size="lg"
@@ -335,10 +494,10 @@ export default function MusicRecommendationApp() {
           >
             {isSubmitting ? "처리 중..." : "음악 추천받기"}
           </Button>
-        </div>
+        </section>
 
         {/* 검색 */}
-        <div className="mb-16">
+        <section className="mb-16">
           <div className="max-w-xl mx-auto relative">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 h-5 w-5" />
             <Input
@@ -349,10 +508,10 @@ export default function MusicRecommendationApp() {
               className="pl-12 pr-4 py-4 text-base border-gray-200 focus:border-purple-300 rounded-2xl bg-white/80 backdrop-blur-sm"
             />
           </div>
-        </div>
+        </section>
 
         {/* 기분 선택 */}
-        <div className="mb-20">
+        <section className="mb-4">
           <h3 className="text-xl font-light text-gray-900 mb-8 text-center">오늘의 기분</h3>
           <div className="flex flex-wrap justify-center gap-3 max-w-2xl mx-auto">
             {musicGenres.map((genre) => (
@@ -370,36 +529,7 @@ export default function MusicRecommendationApp() {
               </Badge>
             ))}
           </div>
-        </div>
-
-        {/* 사용자 추억 히스토리 */}
-        <div className="mb-16">
-          <div className="flex items-center mb-10">
-            <div className="flex items-center space-x-4">
-              <Avatar className="h-12 w-12">
-                <AvatarImage src={user.avatar || "/placeholder.svg"} alt={user.name || "user"} />
-                <AvatarFallback className="bg-purple-600 text-white">
-                  {(user.name?.[0] || "U").toUpperCase()}
-                </AvatarFallback>
-              </Avatar>
-              <div>
-                <h3 className="text-2xl font-light text-gray-900">{(user.name || "사용자")}님의 추억</h3>
-                <p className="text-gray-500 font-light">최근에 들었던 음악들</p>
-              </div>
-            </div>
-            <div className="ml-auto">
-              <Button variant="ghost" className="text-gray-500 hover:text-purple-600 font-light">
-                전체보기
-              </Button>
-            </div>
-          </div>
-
-          {/* ✅ 하드코딩된 음악 그리드 제거 → 안내 문구만 표시 */}
-           {/* 음악 리스트 대신 메시지 출력 */}
-            <div className="text-center text-gray-500 py-20 border border-dashed rounded-lg">
-              아직 추억이 없습니다.
-            </div>
-          </div>
+        </section>
       </main>
     </div>
   )
