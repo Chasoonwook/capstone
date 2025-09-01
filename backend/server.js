@@ -15,29 +15,55 @@ app.set("trust proxy", 1);
    우선순위: .env의 CORS_ORIGIN(콤마로 여러 개) → 기본값(로컬 + 배포 프론트)
    예: CORS_ORIGIN=https://capstone-front-tau.vercel.app,http://localhost:3000
 */
-const raw = process.env.CORS_ORIGIN || "";
+// [Fixed] 실제 .env 키는 CORS_ORIGINS 로 사용하도록 변경
+const raw = process.env.CORS_ORIGINS || "";
+
+// [Added] 끝 슬래시를 제거해 비교 시 혼선을 방지
+const normalize = (s) => s.replace(/\/+$/, "");
+
 const envAllow = raw
   .split(",")
   .map((s) => s.trim())
-  .filter(Boolean);
+  .filter(Boolean)
+  .map(normalize);
+
 const defaultAllow = [
   "http://localhost:3000",
+  "http://127.0.0.1:3000",
   "https://capstone-front-tau.vercel.app",
 ];
 const allowList = envAllow.length ? envAllow : defaultAllow;
 
-app.use(
-  cors({
-    origin(origin, cb) {
-      // 서버-서버 호출(curl/healthcheck) 등 Origin 없는 요청 허용
-      if (!origin) return cb(null, true);
-      if (allowList.includes(origin)) return cb(null, true);
-      return cb(new Error(`Not allowed by CORS: ${origin}`));
-    },
-    credentials: true,
-    optionsSuccessStatus: 204,
-  })
-);
+// [Added] 프리뷰 도메인(*.vercel.app) / localhost 패턴 허용 함수
+function isAllowedOrigin(origin) {
+  if (!origin) return true; // 서버-서버 호출(curl/healthcheck) 등 Origin 없는 요청 허용
+  try {
+    const url = new URL(origin);
+    const norm = normalize(origin);
+    if (allowList.includes(norm)) return true;                // .env/기본 화이트리스트
+    if (url.hostname.endsWith(".vercel.app")) return true;    // ✅ Vercel Preview 모든 서브도메인 허용
+    if (url.hostname === "localhost" || url.hostname === "127.0.0.1") return true;
+  } catch (_) {}
+  return false;
+}
+
+const corsOptions = {
+  origin(origin, cb) {
+    if (isAllowedOrigin(origin)) return cb(null, true);
+    return cb(new Error(`Not allowed by CORS: ${origin}`));
+  },
+  credentials: true,
+  optionsSuccessStatus: 204,
+  // [Added] preflight에서 허용 메서드/헤더 명시
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "x-user-id"],
+};
+
+app.use(cors(corsOptions));
+
+// [Fixed] Express 5에서는 '*' 대신 '(.*)' 패턴으로 preflight(OPTIONS) 허용
+app.options(/.*/, cors(corsOptions));
+
 console.log("[CORS allow list]", allowList);
 
 /* ── Body Parser ── */
@@ -83,7 +109,7 @@ const imageRoutes = safeRequire("./routes/images");
 const aiRoutes = safeRequire("./routes/ai");
 const authRoutes = safeRequire("./routes/auth");
 const onboardingRoutes = safeRequire("./routes/onboarding");
-const historyRoutes = safeRequire('./routes/history'); //사용자 기록 0901
+const historyRoutes = safeRequire("./routes/history"); //사용자 기록 0901
 
 if (userRoutes) app.use("/api/users", userRoutes);
 if (photoRoutes) app.use("/api/photos", photoRoutes);
@@ -93,7 +119,7 @@ if (imageRoutes) app.use("/api/images", imageRoutes);
 if (aiRoutes) app.use("/api/ai", aiRoutes);
 if (authRoutes) app.use("/api/auth", authRoutes);
 if (onboardingRoutes) app.use("/api", onboardingRoutes);
-if (historyRoutes) app.use('/api/history', historyRoutes); //0901
+if (historyRoutes) app.use("/api/history", historyRoutes); //0901
 
 /* ────────────────────────────────────────────────────────────────
  * 업로드/AI/추천 기본 핸들러
