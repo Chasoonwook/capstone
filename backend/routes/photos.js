@@ -1,3 +1,4 @@
+// routes/photos.js
 const express = require("express");
 const pool = require("../db");
 const multer = require("multer");
@@ -96,7 +97,7 @@ if (USE_ASYNC) {
         ORDER BY p.created_at ASC
         LIMIT 50
       `;
-      const { rows } = await pool.query(sql);
+    const { rows } = await pool.query(sql);
       res.json(rows);
     } catch (err) {
       console.error("Pending error:", err);
@@ -176,7 +177,7 @@ router.delete("/:id", async (req, res) => {
 });
 
 /* ────────────────────────────────────────────────────────────────
- * D) 동기 Push: 업로드 → AI → 매핑저장 → 추천 반환 (메인 7 + 서브 3)
+ * D) mood 매핑/추천 유틸 + 업로드 동기 분석 (기존 구현)
  * ──────────────────────────────────────────────────────────────── */
 async function resolveMood(client, timeLabel, background, emotion, provided) {
   if (provided?.main_mood) {
@@ -230,6 +231,7 @@ async function getRecommendations(client, mainMood, subMood) {
   return [...mainRows, ...subRows];
 }
 
+/** 업로드 → AI → 저장 → 추천 (기존) */
 router.post("/analyze", upload.single("file"), async (req, res) => {
   const client = await pool.connect();
   try {
@@ -240,7 +242,7 @@ router.post("/analyze", upload.single("file"), async (req, res) => {
 
     await client.query("BEGIN");
 
-    // 1) photos 저장 (sha256 앞 8자리 temp_name)
+    // 1) photos 저장
     const tempName = crypto.createHash("sha256").update(buffer).digest("hex").slice(0, 8);
     const { rows: ins } = await client.query(
       `INSERT INTO photos (temp_name, original_name, mime_type, content, created_at)
@@ -257,19 +259,16 @@ router.post("/analyze", upload.single("file"), async (req, res) => {
       [photoId, userId, originalname]
     );
 
-    // 2) 이미지 서명 URL (JWT)
+    // 2) 서명 URL
     const token = jwt.sign({ id: String(photoId) }, process.env.IMG_TOKEN_SECRET, {
       expiresIn: IMG_TOKEN_TTL,
     });
-
-    // NOTE: 로컬 개발에서 아래 fallback은 AI가 로컬에 접근 불가하면 실패합니다.
     const publicApiBase =
       process.env.PUBLIC_API_BASE ||
       `${req.protocol}://${req.get("host")}/api`;
-
     const imageUrl = `${publicApiBase}/images/${photoId}?token=${token}`;
 
-    // 3) AI 동기 호출
+    // 3) AI 호출
     const { data: ai } = await axios.post(
       `${process.env.AI_BASE_URL}/predict`,
       { image_url: imageUrl, photo_id: photoId, user_id: userId },
@@ -319,6 +318,78 @@ router.post("/analyze", upload.single("file"), async (req, res) => {
     await client.query("ROLLBACK");
     console.error("[analyze]", err?.response?.data || err.message);
     res.status(500).json({ error: "analyze failed" });
+  } finally {
+    client.release();
+  }
+});
+
+/* ────────────────────────────────────────────────────────────────
+ * E) ✅ 추가: DB에 이미 있는 사진을 by-id로 분석
+ *    POST /api/photos/:photoId/analyze
+ * ──────────────────────────────────────────────────────────────── */
+router.post("/:photoId/analyze", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { photoId } = req.params;
+    const userId = req.body.userId || "00000000-0000-0000-0000-000000000000";
+
+    // 사진 존재 확인
+    const { rows: pRows } = await client.query(
+      "SELECT 1 FROM photos WHERE photo_id = $1",
+      [photoId]
+    );
+    if (!pRows.length) return res.status(404).json({ error: "photo not found" });
+
+    await client.query("BEGIN");
+
+    // 1) 서명 URL
+    const token = jwt.sign({ id: String(photoId) }, process.env.IMG_TOKEN_SECRET, {
+      expiresIn: IMG_TOKEN_TTL,
+    });
+    const publicApiBase =
+      process.env.PUBLIC_API_BASE ||
+      `${req.protocol}://${req.get("host")}/api`;
+    const imageUrl = `${publicApiBase}/images/${photoId}?token=${token}`;
+
+    // 2) AI 호출
+    const { data: ai } = await axios.post(
+      `${process.env.AI_BASE_URL}/predict`,
+      { image_url: imageUrl, photo_id: Number(photoId), user_id: userId },
+      { timeout: AI_TIMEOUT }
+    );
+
+    const timeLabel = ai.time_label || ai.time || null;
+    const background = ai.background || ai.scene || null;
+    const emotion = ai.emotion || ai.face_emotion || null;
+
+    // 3) mood 매핑
+    const { main_mood, sub_mood } = await resolveMood(
+      client,
+      timeLabel,
+      background,
+      emotion,
+      { main_mood: ai.mood || ai.mood_main, sub_mood: ai.mood_sub }
+    );
+
+    // 4) 분석 저장(멱등)
+    await client.query("DELETE FROM photo_analysis WHERE photo_id = $1", [photoId]);
+    await client.query(
+      `INSERT INTO photo_analysis
+         (photo_id, time_label, background, emotion, main_mood, sub_mood, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6, now())`,
+      [photoId, timeLabel, background, emotion, main_mood, sub_mood]
+    );
+
+    await client.query("COMMIT");
+    return res.json({
+      ok: true,
+      photo_id: Number(photoId),
+      analysis: { time_label: timeLabel, background, emotion, main_mood, sub_mood },
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("[analyze by id]", err?.response?.data || err.message);
+    res.status(500).json({ error: "analyze by id failed" });
   } finally {
     client.release();
   }
