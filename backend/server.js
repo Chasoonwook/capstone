@@ -83,6 +83,7 @@ const imageRoutes = safeRequire("./routes/images");
 const aiRoutes = safeRequire("./routes/ai");
 const authRoutes = safeRequire("./routes/auth");
 const onboardingRoutes = safeRequire("./routes/onboarding");
+const historyRoutes = safeRequire('./routes/history'); //사용자 기록 0901
 
 if (userRoutes) app.use("/api/users", userRoutes);
 if (photoRoutes) app.use("/api/photos", photoRoutes);
@@ -92,6 +93,7 @@ if (imageRoutes) app.use("/api/images", imageRoutes);
 if (aiRoutes) app.use("/api/ai", aiRoutes);
 if (authRoutes) app.use("/api/auth", authRoutes);
 if (onboardingRoutes) app.use("/api", onboardingRoutes);
+if (historyRoutes) app.use('/api/history', historyRoutes); //0901
 
 /* ────────────────────────────────────────────────────────────────
  * 업로드/AI/추천 기본 핸들러

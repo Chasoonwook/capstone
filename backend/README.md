@@ -34,15 +34,50 @@ POST /api/ai/results → 분석 결과를 업로드 >> results로 DB형식에 �
 
  ### API 명세 
 
- 사진 업로드: POST /api/photos/upload
+사진 업로드: POST /api/photos/upload
 
- AI 서버: GET /api/photos/pending
+AI 서버: GET /api/photos/pending
 
- AI 서버: GET /api/photos/:id/binary
+AI 서버: GET /api/photos/:id/binary
 
- AI 결과 업로드: POST /api/ai/results
+AI 결과 업로드: POST /api/ai/results
 
- 사용자: GET /api/recommendations/by-photo/:photoId
+사용자: GET /api/recommendations/by-photo/:photoId
 
+사용자 history : POST /api/history
 ### 설치해야 할 패키지
 npm i express cors dotenv pg multer jsonwebtoken axios bcrypt
+
+
+### histoty.js 라우터 추가 ( 0901 )
+
+사용자가 리스트에서 한 곡을 선택 > API 호출
+반응형으로 만들어서 post 호출하면 해당 music정보와 사진정보가 같이 history에 저장되어 확인 가능
+
+* 프론트에서 호출 예시
+await fetch(`${API_BASE}/api/history`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    user_id: currentUserId,
+    photo_id: currentPhotoId,
+    music_id: selected.music_id,
+    selected_from: selected.isMain ? 'main' : 'sub'
+  })
+});
+
+misic_id 로 메타데이터 가지고 hisory테이블에 스냅샷 형식으로 저장됨.
+
+* 조회 결과 
+{
+  "history_id": 15,
+  "user_id": 42,
+  "photo_id": 101,
+  "music_id": 55,
+  "title_snapshot": "Blue Bird",
+  "artist_snapshot": "Ikimono Gakari",
+  "genre_snapshot": "J-Pop",
+  "label_snapshot": "희망적",
+  "selected_from": "main",
+  "created_at": "2025-09-01T23:15:30.456Z"
+}
