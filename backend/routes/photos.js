@@ -9,17 +9,17 @@ const axios = require("axios");
 const router = express.Router();
 
 // === ENV ===
-const USE_ASYNC = process.env.ASYNC_MODE === "1";                   // 업로드/대기목록 라우트 토글
-const AI_TIMEOUT = Number(process.env.AI_FETCH_TIMEOUT || 60000);   // AI 호출 타임아웃(ms)
-const IMG_TOKEN_TTL = String(process.env.IMG_TOKEN_TTL || "180s");  // 이미지 토큰 TTL
+const USE_ASYNC = process.env.ASYNC_MODE === "1";
+const AI_TIMEOUT = Number(process.env.AI_FETCH_TIMEOUT || 60000);
+const IMG_TOKEN_TTL = String(process.env.IMG_TOKEN_TTL || "180s");
 
-// 업로드(메모리) — 20MB 제한
+// upload: memory storage (20MB)
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024 },
 });
 
-// 부트 시 photo_temp_name_seq 없으면 생성
+// optional: ensure sequence for temp_name (safe no-op if exists)
 async function ensurePhotoTempNameSeq() {
   try {
     await pool.query(`
@@ -44,7 +44,6 @@ ensurePhotoTempNameSeq();
  * A) (옵션) 비동기 업로드/대기목록 — ASYNC_MODE=1 일 때만 활성화
  * ──────────────────────────────────────────────────────────────── */
 if (USE_ASYNC) {
-  // POST /api/photos/upload : 사진만 저장
   router.post("/upload", upload.single("photo"), async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ error: "No file" });
@@ -52,7 +51,6 @@ if (USE_ASYNC) {
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
-
         const { rows: seqRows } = await client.query(
           "SELECT nextval('photo_temp_name_seq') AS n"
         );
@@ -86,7 +84,6 @@ if (USE_ASYNC) {
     }
   });
 
-  // GET /api/photos/pending : 아직 분석 안 된 목록
   router.get("/pending", async (_req, res) => {
     try {
       const sql = `
@@ -97,7 +94,7 @@ if (USE_ASYNC) {
         ORDER BY p.created_at ASC
         LIMIT 50
       `;
-    const { rows } = await pool.query(sql);
+      const { rows } = await pool.query(sql);
       res.json(rows);
     } catch (err) {
       console.error("Pending error:", err);
@@ -107,7 +104,7 @@ if (USE_ASYNC) {
 }
 
 /* ────────────────────────────────────────────────────────────────
- * B) 바이너리 제공 (동기/비동기 공용)
+ * B) 바이너리 제공 (디버그)
  * ──────────────────────────────────────────────────────────────── */
 router.get("/:photoId/binary", async (req, res) => {
   try {
@@ -126,7 +123,7 @@ router.get("/:photoId/binary", async (req, res) => {
 });
 
 /* ────────────────────────────────────────────────────────────────
- * C) photo_history CRUD
+ * C) photo_history 샘플
  * ──────────────────────────────────────────────────────────────── */
 router.get("/", async (_req, res) => {
   try {
@@ -166,18 +163,8 @@ router.post("/", async (req, res) => {
   }
 });
 
-router.delete("/:id", async (req, res) => {
-  const { id } = req.params;
-  try {
-    await pool.query("DELETE FROM photo_history WHERE photo_id = $1", [id]);
-    res.send("Photo deleted");
-  } catch (err) {
-    res.status(500).send(err.message);
-  }
-});
-
 /* ────────────────────────────────────────────────────────────────
- * D) mood 매핑/추천 유틸 + 업로드 동기 분석 (기존 구현)
+ * D) mood 매핑/추천 유틸
  * ──────────────────────────────────────────────────────────────── */
 async function resolveMood(client, timeLabel, background, emotion, provided) {
   if (provided?.main_mood) {
@@ -231,7 +218,9 @@ async function getRecommendations(client, mainMood, subMood) {
   return [...mainRows, ...subRows];
 }
 
-/** 업로드 → AI → 저장 → 추천 (기존) */
+/* ────────────────────────────────────────────────────────────────
+ * E) 업로드 → AI → 저장 → 추천  (동기 플로우)
+ * ──────────────────────────────────────────────────────────────── */
 router.post("/analyze", upload.single("file"), async (req, res) => {
   const client = await pool.connect();
   try {
@@ -259,13 +248,12 @@ router.post("/analyze", upload.single("file"), async (req, res) => {
       [photoId, userId, originalname]
     );
 
-    // 2) 서명 URL
+    // 2) 서명 URL (JWT)
     const token = jwt.sign({ id: String(photoId) }, process.env.IMG_TOKEN_SECRET, {
       expiresIn: IMG_TOKEN_TTL,
     });
     const publicApiBase =
-      process.env.PUBLIC_API_BASE ||
-      `${req.protocol}://${req.get("host")}/api`;
+      process.env.PUBLIC_API_BASE || `${req.protocol}://${req.get("host")}/api`;
     const imageUrl = `${publicApiBase}/images/${photoId}?token=${token}`;
 
     // 3) AI 호출
@@ -287,24 +275,17 @@ router.post("/analyze", upload.single("file"), async (req, res) => {
       { main_mood: ai.mood || ai.mood_main, sub_mood: ai.mood_sub }
     );
 
-    // 4) 분석 저장(멱등)
+    // 4) 분석 저장(멱등)  ⚠️ analyzed_at 사용
     await client.query("DELETE FROM photo_analysis WHERE photo_id = $1", [photoId]);
     await client.query(
       `INSERT INTO photo_analysis
-         (photo_id, time_label, background, emotion, main_mood, sub_mood, created_at)
+         (photo_id, time_label, background, emotion, main_mood, sub_mood, analyzed_at)
        VALUES ($1,$2,$3,$4,$5,$6, now())`,
       [photoId, timeLabel, background, emotion, main_mood, sub_mood]
     );
 
     // 5) 추천 7 + 3
     const recs = await getRecommendations(client, main_mood, sub_mood);
-
-    // (옵션) 추천 로그
-    await client.query(
-      `INSERT INTO recommendations (photo_id, user_id, result, created_at)
-       VALUES ($1,$2,$3, now())`,
-      [photoId, userId, JSON.stringify(recs)]
-    );
 
     await client.query("COMMIT");
 
@@ -324,7 +305,7 @@ router.post("/analyze", upload.single("file"), async (req, res) => {
 });
 
 /* ────────────────────────────────────────────────────────────────
- * E) ✅ 추가: DB에 이미 있는 사진을 by-id로 분석
+ * F) ✅ 이미 DB에 있는 사진을 by-id로 분석
  *    POST /api/photos/:photoId/analyze
  * ──────────────────────────────────────────────────────────────── */
 router.post("/:photoId/analyze", async (req, res) => {
@@ -333,7 +314,6 @@ router.post("/:photoId/analyze", async (req, res) => {
     const { photoId } = req.params;
     const userId = req.body.userId || "00000000-0000-0000-0000-000000000000";
 
-    // 사진 존재 확인
     const { rows: pRows } = await client.query(
       "SELECT 1 FROM photos WHERE photo_id = $1",
       [photoId]
@@ -342,16 +322,13 @@ router.post("/:photoId/analyze", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // 1) 서명 URL
     const token = jwt.sign({ id: String(photoId) }, process.env.IMG_TOKEN_SECRET, {
       expiresIn: IMG_TOKEN_TTL,
     });
     const publicApiBase =
-      process.env.PUBLIC_API_BASE ||
-      `${req.protocol}://${req.get("host")}/api`;
+      process.env.PUBLIC_API_BASE || `${req.protocol}://${req.get("host")}/api`;
     const imageUrl = `${publicApiBase}/images/${photoId}?token=${token}`;
 
-    // 2) AI 호출
     const { data: ai } = await axios.post(
       `${process.env.AI_BASE_URL}/predict`,
       { image_url: imageUrl, photo_id: Number(photoId), user_id: userId },
@@ -362,7 +339,6 @@ router.post("/:photoId/analyze", async (req, res) => {
     const background = ai.background || ai.scene || null;
     const emotion = ai.emotion || ai.face_emotion || null;
 
-    // 3) mood 매핑
     const { main_mood, sub_mood } = await resolveMood(
       client,
       timeLabel,
@@ -371,11 +347,10 @@ router.post("/:photoId/analyze", async (req, res) => {
       { main_mood: ai.mood || ai.mood_main, sub_mood: ai.mood_sub }
     );
 
-    // 4) 분석 저장(멱등)
     await client.query("DELETE FROM photo_analysis WHERE photo_id = $1", [photoId]);
     await client.query(
       `INSERT INTO photo_analysis
-         (photo_id, time_label, background, emotion, main_mood, sub_mood, created_at)
+         (photo_id, time_label, background, emotion, main_mood, sub_mood, analyzed_at)
        VALUES ($1,$2,$3,$4,$5,$6, now())`,
       [photoId, timeLabel, background, emotion, main_mood, sub_mood]
     );
