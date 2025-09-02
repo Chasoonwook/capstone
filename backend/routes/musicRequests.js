@@ -1,102 +1,103 @@
-// Backend/routes/musicRequests.js
-const express = require('express');
-const pool = require('../db');
-
+const express = require("express");
 const router = express.Router();
+const pool = require("../db");
 
-/**
- * POST /api/music-requests
- * body: { title: string, artist: string, requested_by?: string }
- * 동작: (norm_title, norm_artist) 유니크 키로 UPSERT → 중복이면 request_count 증가
- */
-router.post('/', async (req, res) => {
-  try {
-    const rawTitle = String(req.body?.title || '').trim();
-    const rawArtist = String(req.body?.artist || '').trim();
-    const requested_by = req.body?.requested_by ? String(req.body.requested_by).trim() : null;
+// POST /api/music-requests  { user_id, title, artist }
+router.post("/", async (req, res) => {
+   const client = await pool.connect();
+   try {
+     const { user_id, title, artist } = req.body || {};
+     if (!user_id || !title) return res.status(400).json({ error: "user_id and title are required" });
 
-    if (!rawTitle || !rawArtist) {
-      return res.status(400).json({ error: 'title and artist are required' });
-    }
+     await client.query("BEGIN");
 
-    const norm_title = rawTitle.toLowerCase();
-    const norm_artist = rawArtist.toLowerCase();
+     const { rows: k } = await client.query(
+       "SELECT song_key_of($1,$2) AS song_key",
+       [title, artist || null]
+     );
+     const song_key = k[0].song_key;
 
-    const upsertSql = `
-      INSERT INTO music_requests
-        (title, artist, requested_by, request_count, last_requested_at, norm_title, norm_artist)
-      VALUES ($1, $2, $3, 1, now(), $4, $5)
-      ON CONFLICT (norm_title, norm_artist)
-      DO UPDATE SET
-        request_count     = music_requests.request_count + 1,
-        last_requested_at = now(),
-        -- 최신 원본 텍스트로 덮어쓰고 싶으면 유지, 아니면 주석 처리
-        title             = EXCLUDED.title,
-        artist            = EXCLUDED.artist,
-        requested_by      = COALESCE(EXCLUDED.requested_by, music_requests.requested_by)
-      RETURNING request_id, title, artist, requested_by, status, request_count, last_requested_at, created_at
-    `;
+     const { rows } = await client.query(
+       `INSERT INTO user_song_requests (user_id, song_key, title, artist)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (user_id, song_key) DO NOTHING
+        RETURNING id`,
+       [user_id, song_key, title, artist || null]
+     );
 
-    const { rows } = await pool.query(upsertSql, [
-      rawTitle,
-      rawArtist,
-      requested_by,
-      norm_title,
-      norm_artist,
-    ]);
+     if (rows.length === 0) {
+       await client.query("ROLLBACK");
+       return res.status(409).json({ error: "already_requested" });
+     }
 
-    return res.status(201).json(rows[0]);
-  } catch (err) {
-    console.error('[music-requests][create]', err);
-    return res.status(500).json({ error: 'Failed to create music request' });
-  }
-});
+     const { rows: c } = await client.query(
+       `SELECT request_count FROM music_requests WHERE song_key=$1`,
+       [song_key]
+     );
 
-/**
- * GET /api/music-requests
- * (관리자용) 최근/인기 요청 보기 (요청 수 내림차순 → 최신순)
- */
-router.get('/', async (_req, res) => {
-  try {
-    const { rows } = await pool.query(
-      `SELECT request_id, title, artist, requested_by, status,
-              request_count, last_requested_at, created_at
-         FROM music_requests
-        ORDER BY request_count DESC, last_requested_at DESC
-        LIMIT 200`
-    );
-    return res.json(rows);
-  } catch (err) {
-    console.error('[music-requests][list]', err);
-    return res.status(500).json({ error: 'Failed to fetch music requests' });
-  }
-});
+     await client.query("COMMIT");
+     return res.status(201).json({
+       ok: true,
+       song_key,
+       request_count: c[0]?.request_count ?? 1
+     });
+   } catch (err) {
+     await pool.query("ROLLBACK");
+     console.error("[music-requests] error:", err);
+     return res.status(500).json({ error: "internal_error" });
+   } finally {
+     client.release();
+   }
+ });
 
-router.get('/count', async (req, res) => {
-  try {
-    const rawTitle = String(req.query.title || '').trim();
-    const rawArtist = String(req.query.artist || '').trim();
-    if (!rawTitle || !rawArtist) {
-      return res.status(400).json({ error: 'title and artist are required' });
-    }
+ // GET /api/music-requests/count?title=...&artist=...
+ router.get("/count", async (req, res) => {
+   try {
+     const { title, artist } = req.query;
+     if (!title) return res.status(400).json({ error: "title required" });
 
-    const norm_title = rawTitle.toLowerCase();
-    const norm_artist = rawArtist.toLowerCase();
+     const { rows: k } = await pool.query(
+       "SELECT song_key_of($1,$2) AS song_key",
+       [title, artist || null]
+     );
+     const song_key = k[0].song_key;
 
-    const { rows } = await pool.query(
-      `SELECT request_count
-         FROM music_requests
-        WHERE norm_title = $1 AND norm_artist = $2
-        LIMIT 1`,
-      [norm_title, norm_artist]
-    );
+     const { rows } = await pool.query(
+       "SELECT COALESCE(request_count,0) AS count FROM music_requests WHERE song_key=$1",
+       [song_key]
+     );
+     return res.json({ count: rows[0]?.count ?? 0 });
+   } catch (err) {
+     console.error("[music-requests/count] error:", err);
+     return res.status(500).json({ error: "internal_error" });
+   }
+ });
 
-    const count = rows[0]?.request_count ?? 0;
-    return res.json({ request_count: count });
-  } catch (err) {
-    console.error('[music-requests][count]', err);
-    return res.status(500).json({ error: 'Failed to fetch request count' });
-  }
-});
+// (선택) 요청 취소
+// DELETE /api/music-requests?user_id=1&title=...&artist=...
+router.delete("/", async (req, res) => {
+   const client = await pool.connect();
+   try {
+     const { user_id, title, artist } = req.query;
+     if (!user_id || !title) return res.status(400).json({ error: "user_id and title required" });
+
+     const { rows: k } = await client.query(
+       "SELECT song_key_of($1,$2) AS song_key",
+       [title, artist || null]
+     );
+     const song_key = k[0].song_key;
+
+     await client.query(
+       "DELETE FROM user_song_requests WHERE user_id=$1 AND song_key=$2",
+       [user_id, song_key]
+     );
+     return res.status(204).end();
+   } catch (err) {
+     console.error("[music-requests DELETE] error:", err);
+     return res.status(500).json({ error: "internal_error" });
+   } finally {
+     client.release();
+   }
+ });
 
 module.exports = router;
