@@ -8,219 +8,76 @@ const axios = require("axios");
 
 const router = express.Router();
 
-// === ENV ===
 const USE_ASYNC = process.env.ASYNC_MODE === "1";
 const AI_TIMEOUT = Number(process.env.AI_FETCH_TIMEOUT || 60000);
 const IMG_TOKEN_TTL = String(process.env.IMG_TOKEN_TTL || "180s");
 
-// upload: memory storage (20MB)
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 },
-});
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
-// optional: ensure sequence for temp_name (safe no-op if exists)
-async function ensurePhotoTempNameSeq() {
-  try {
-    await pool.query(`
-      DO $$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM pg_class c
-          JOIN pg_namespace n ON n.oid = c.relnamespace
-          WHERE c.relkind = 'S' AND c.relname = 'photo_temp_name_seq'
-        ) THEN
-          CREATE SEQUENCE photo_temp_name_seq START 1;
-        END IF;
-      END$$;
-    `);
-  } catch (e) {
-    console.warn("[photos] ensurePhotoTempNameSeq skipped:", e.message);
-  }
-}
-ensurePhotoTempNameSeq();
-
-/* ────────────────────────────────────────────────────────────────
- * A) (옵션) 비동기 업로드/대기목록 — ASYNC_MODE=1 일 때만 활성화
- * ──────────────────────────────────────────────────────────────── */
+/* (선택) 비동기 업로드 라우트 — 필요 없으면 생략 가능 */
 if (USE_ASYNC) {
   router.post("/upload", upload.single("photo"), async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: "No file" });
+    const client = await pool.connect();
     try {
-      if (!req.file) return res.status(400).json({ error: "No file" });
-
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        const { rows: seqRows } = await client.query(
-          "SELECT nextval('photo_temp_name_seq') AS n"
-        );
-        const tempName = seqRows[0].n;
-
-        const insertSql = `
-          INSERT INTO photos (temp_name, original_name, mime_type, content, created_at)
-          VALUES ($1, $2, $3, $4, now())
-          RETURNING photo_id, temp_name, original_name, mime_type, created_at
-        `;
-        const vals = [
-          tempName,
-          req.file.originalname,
-          req.file.mimetype,
-          req.file.buffer,
-        ];
-        const { rows } = await client.query(insertSql, vals);
-
-        await client.query("COMMIT");
-        return res.json(rows[0]);
-      } catch (e) {
-        await client.query("ROLLBACK");
-        console.error("Upload error:", e);
-        return res.status(500).json({ error: "Upload failed" });
-      } finally {
-        client.release();
-      }
-    } catch (err) {
-      console.error("Upload outer error:", err);
-      return res.status(500).json({ error: "Server error" });
-    }
-  });
-
-  router.get("/pending", async (_req, res) => {
-    try {
-      const sql = `
-        SELECT p.photo_id, p.temp_name, p.original_name, p.mime_type, p.created_at
-        FROM photos p
-        LEFT JOIN photo_analysis a ON a.photo_id = p.photo_id
-        WHERE a.photo_id IS NULL
-        ORDER BY p.created_at ASC
-        LIMIT 50
-      `;
-      const { rows } = await pool.query(sql);
-      res.json(rows);
-    } catch (err) {
-      console.error("Pending error:", err);
-      res.status(500).json({ error: "Error fetching pending photos" });
-    }
+      await client.query("BEGIN");
+      const tempName = Date.now().toString();
+      const { rows } = await client.query(
+        `INSERT INTO photos (temp_name, original_name, mime_type, content, created_at)
+         VALUES ($1,$2,$3,$4, now()) RETURNING photo_id`,
+        [tempName, req.file.originalname, req.file.mimetype, req.file.buffer]
+      );
+      await client.query("COMMIT");
+      res.json({ photo_id: rows[0].photo_id });
+    } catch (e) {
+      await client.query("ROLLBACK");
+      res.status(500).json({ error: "upload failed", detail: e.message });
+    } finally { client.release(); }
   });
 }
 
-/* ────────────────────────────────────────────────────────────────
- * B) 바이너리 제공 (디버그)
- * ──────────────────────────────────────────────────────────────── */
+/* 디버그용 바이너리 응답 */
 router.get("/:photoId/binary", async (req, res) => {
-  try {
-    const { photoId } = req.params;
-    const { rows } = await pool.query(
-      "SELECT mime_type, content FROM photos WHERE photo_id = $1",
-      [photoId]
-    );
-    if (!rows[0]) return res.status(404).send("Not found");
-    res.set("Content-Type", rows[0].mime_type || "application/octet-stream");
-    res.send(rows[0].content);
-  } catch (err) {
-    console.error("Binary error:", err);
-    res.status(500).send("Error");
-  }
+  const { photoId } = req.params;
+  const { rows } = await pool.query("SELECT mime_type, content FROM photos WHERE photo_id=$1", [photoId]);
+  if (!rows.length) return res.status(404).send("Not found");
+  res.set("Content-Type", rows[0].mime_type || "application/octet-stream");
+  res.send(rows[0].content);
 });
 
-/* ────────────────────────────────────────────────────────────────
- * C) photo_history 샘플
- * ──────────────────────────────────────────────────────────────── */
-router.get("/", async (_req, res) => {
-  try {
-    const result = await pool.query(
-      "SELECT * FROM photo_history ORDER BY created_at DESC"
-    );
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).send(err.message);
-  }
-});
-
-router.get("/user/:user_id", async (req, res) => {
-  const { user_id } = req.params;
-  try {
-    const result = await pool.query(
-      "SELECT * FROM photo_history WHERE user_id = $1",
-      [user_id]
-    );
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).send(err.message);
-  }
-});
-
-router.post("/", async (req, res) => {
-  const { user_id, file_path, file_name, labels, parameters, feedback } =
-    req.body;
-  try {
-    const result = await pool.query(
-      "INSERT INTO photo_history (user_id, file_path, file_name, labels, parameters, feedback) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *",
-      [user_id, file_path, file_name, labels, parameters, feedback]
-    );
-    res.status(201).json(result.rows[0]);
-  } catch (err) {
-    res.status(500).send(err.message);
-  }
-});
-
-/* ────────────────────────────────────────────────────────────────
- * D) mood 매핑/추천 유틸
- * ──────────────────────────────────────────────────────────────── */
+/* 공통: mood 매핑/추천 */
 async function resolveMood(client, timeLabel, background, emotion, provided) {
-  if (provided?.main_mood) {
-    return {
-      main_mood: provided.main_mood,
-      sub_mood: provided.sub_mood || provided.mood_sub || null,
-    };
-  }
-  const { rows } = await client.query(
-    `SELECT main_mood, sub_mood
-       FROM mood_mapping
-      WHERE time_label = $1 AND background = $2 AND emotion = $3
-      LIMIT 1`,
+  if (provided?.main_mood) return { main_mood: provided.main_mood, sub_mood: provided.sub_mood || null };
+  const q1 = await client.query(
+    `SELECT main_mood, sub_mood FROM mood_mapping
+     WHERE time_label=$1 AND background=$2 AND emotion=$3 LIMIT 1`,
     [timeLabel, background, emotion]
   );
-  if (rows[0]) return rows[0];
-
-  const alt = await client.query(
-    `SELECT main_mood, sub_mood
-       FROM mood_mapping
-      WHERE time_label = $1
-      LIMIT 1`,
+  if (q1.rows[0]) return q1.rows[0];
+  const q2 = await client.query(
+    `SELECT main_mood, sub_mood FROM mood_mapping
+     WHERE time_label=$1 LIMIT 1`,
     [timeLabel]
   );
-  return alt.rows[0] || { main_mood: null, sub_mood: null };
+  return q2.rows[0] || { main_mood: null, sub_mood: null };
 }
 
 async function getRecommendations(client, mainMood, subMood) {
-  const { rows: mainRows } = await client.query(
+  const main = await client.query(
     `SELECT music_id, title, artist, label, genre
-       FROM music
-      WHERE label = $1
-      ORDER BY created_at DESC
-      LIMIT 7`,
-    [mainMood]
+     FROM music WHERE label=$1 ORDER BY created_at DESC LIMIT 7`, [mainMood]
   );
-  const { rows: subRows } = await client.query(
+  const sub = await client.query(
     `SELECT music_id, title, artist, label, genre
-       FROM music
-      WHERE label = $1
-        AND music_id NOT IN (
-          SELECT music_id FROM music
-           WHERE label = $2
-           ORDER BY created_at DESC
-           LIMIT 7
-        )
-      ORDER BY created_at DESC
-      LIMIT 3`,
-    [subMood, mainMood]
+     FROM music WHERE label=$1 AND music_id NOT IN (
+       SELECT music_id FROM music WHERE label=$2 ORDER BY created_at DESC LIMIT 7
+     )
+     ORDER BY created_at DESC LIMIT 3`, [subMood, mainMood]
   );
-  return [...mainRows, ...subRows];
+  return [...main.rows, ...sub.rows];
 }
 
-/* ────────────────────────────────────────────────────────────────
- * E) 업로드 → AI → 저장 → 추천  (동기 플로우)
- * ──────────────────────────────────────────────────────────────── */
+/* 업로드 → AI → 저장 → 추천  */
 router.post("/analyze", upload.single("file"), async (req, res) => {
   const client = await pool.connect();
   try {
@@ -231,52 +88,39 @@ router.post("/analyze", upload.single("file"), async (req, res) => {
 
     await client.query("BEGIN");
 
-    // 1) photos 저장
+    // 1) 사진 저장
     const tempName = crypto.createHash("sha256").update(buffer).digest("hex").slice(0, 8);
-    const { rows: ins } = await client.query(
+    const ins = await client.query(
       `INSERT INTO photos (temp_name, original_name, mime_type, content, created_at)
-       VALUES ($1,$2,$3,$4, now())
-       RETURNING photo_id`,
+       VALUES ($1,$2,$3,$4, now()) RETURNING photo_id`,
       [tempName, originalname, mimetype, buffer]
     );
-    const photoId = ins[0].photo_id;
+    const photoId = ins.rows[0].photo_id;
 
-    // (옵션) history 기록
-    await client.query(
-      `INSERT INTO photo_history (photo_id, user_id, file_name, labels, parameters, feedback, created_at)
-       VALUES ($1,$2,$3,NULL,NULL,NULL, now())`,
-      [photoId, userId, originalname]
-    );
-
-    // 2) 서명 URL (JWT)
-    const token = jwt.sign({ id: String(photoId) }, process.env.IMG_TOKEN_SECRET, {
-      expiresIn: IMG_TOKEN_TTL,
-    });
-    const publicApiBase =
-      process.env.PUBLIC_API_BASE || `${req.protocol}://${req.get("host")}/api`;
+    // 2) 서명 URL
+    const token = jwt.sign({ id: String(photoId) }, process.env.IMG_TOKEN_SECRET, { expiresIn: IMG_TOKEN_TTL });
+    const publicApiBase = process.env.PUBLIC_API_BASE || `${req.protocol}://${req.get("host")}/api`;
     const imageUrl = `${publicApiBase}/images/${photoId}?token=${token}`;
 
     // 3) AI 호출
-    const { data: ai } = await axios.post(
+    const aiResp = await axios.post(
       `${process.env.AI_BASE_URL}/predict`,
       { image_url: imageUrl, photo_id: photoId, user_id: userId },
       { timeout: AI_TIMEOUT }
     );
+    const ai = aiResp.data;
 
     const timeLabel = ai.time_label || ai.time || null;
     const background = ai.background || ai.scene || null;
-    const emotion = ai.emotion || ai.face_emotion || null;
+    const emotion   = ai.emotion   || ai.face_emotion || null;
 
     const { main_mood, sub_mood } = await resolveMood(
-      client,
-      timeLabel,
-      background,
-      emotion,
+      client, timeLabel, background, emotion,
       { main_mood: ai.mood || ai.mood_main, sub_mood: ai.mood_sub }
     );
 
-    // 4) 분석 저장(멱등)  ⚠️ analyzed_at 사용
-    await client.query("DELETE FROM photo_analysis WHERE photo_id = $1", [photoId]);
+    // 4) 분석 저장 (analyzed_at!)
+    await client.query("DELETE FROM photo_analysis WHERE photo_id=$1", [photoId]);
     await client.query(
       `INSERT INTO photo_analysis
          (photo_id, time_label, background, emotion, main_mood, sub_mood, analyzed_at)
@@ -284,70 +128,53 @@ router.post("/analyze", upload.single("file"), async (req, res) => {
       [photoId, timeLabel, background, emotion, main_mood, sub_mood]
     );
 
-    // 5) 추천 7 + 3
+    // 5) 추천
     const recs = await getRecommendations(client, main_mood, sub_mood);
 
     await client.query("COMMIT");
-
-    console.log("[AI]", { photoId, timeLabel, background, emotion, main_mood, sub_mood });
-    return res.json({
-      photoId,
-      analysis: { time_label: timeLabel, background, emotion, main_mood, sub_mood },
-      recommendations: recs,
-    });
+    return res.json({ photoId, analysis: { time_label: timeLabel, background, emotion, main_mood, sub_mood }, recommendations: recs });
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("[analyze]", err?.response?.data || err.message);
-    res.status(500).json({ error: "analyze failed" });
-  } finally {
-    client.release();
-  }
+    // ❗원인 파악을 위해 상세 에러 그대로 노출(배포 시엔 로그로만!)
+    const detail = err?.response?.data || err.message || String(err);
+    console.error("[analyze]", detail);
+    return res.status(500).json({ error: "analyze failed", detail });
+  } finally { client.release(); }
 });
 
-/* ────────────────────────────────────────────────────────────────
- * F) ✅ 이미 DB에 있는 사진을 by-id로 분석
- *    POST /api/photos/:photoId/analyze
- * ──────────────────────────────────────────────────────────────── */
+/* ✅ DB에 이미 있는 사진을 by-id로 분석 */
 router.post("/:photoId/analyze", async (req, res) => {
   const client = await pool.connect();
   try {
     const { photoId } = req.params;
     const userId = req.body.userId || "00000000-0000-0000-0000-000000000000";
 
-    const { rows: pRows } = await client.query(
-      "SELECT 1 FROM photos WHERE photo_id = $1",
-      [photoId]
-    );
-    if (!pRows.length) return res.status(404).json({ error: "photo not found" });
+    const exists = await client.query("SELECT 1 FROM photos WHERE photo_id=$1", [photoId]);
+    if (!exists.rows.length) return res.status(404).json({ error: "photo not found" });
 
     await client.query("BEGIN");
 
-    const token = jwt.sign({ id: String(photoId) }, process.env.IMG_TOKEN_SECRET, {
-      expiresIn: IMG_TOKEN_TTL,
-    });
-    const publicApiBase =
-      process.env.PUBLIC_API_BASE || `${req.protocol}://${req.get("host")}/api`;
+    const token = jwt.sign({ id: String(photoId) }, process.env.IMG_TOKEN_SECRET, { expiresIn: IMG_TOKEN_TTL });
+    const publicApiBase = process.env.PUBLIC_API_BASE || `${req.protocol}://${req.get("host")}/api`;
     const imageUrl = `${publicApiBase}/images/${photoId}?token=${token}`;
 
-    const { data: ai } = await axios.post(
+    const aiResp = await axios.post(
       `${process.env.AI_BASE_URL}/predict`,
       { image_url: imageUrl, photo_id: Number(photoId), user_id: userId },
       { timeout: AI_TIMEOUT }
     );
+    const ai = aiResp.data;
 
     const timeLabel = ai.time_label || ai.time || null;
     const background = ai.background || ai.scene || null;
-    const emotion = ai.emotion || ai.face_emotion || null;
+    const emotion   = ai.emotion   || ai.face_emotion || null;
 
     const { main_mood, sub_mood } = await resolveMood(
-      client,
-      timeLabel,
-      background,
-      emotion,
+      client, timeLabel, background, emotion,
       { main_mood: ai.mood || ai.mood_main, sub_mood: ai.mood_sub }
     );
 
-    await client.query("DELETE FROM photo_analysis WHERE photo_id = $1", [photoId]);
+    await client.query("DELETE FROM photo_analysis WHERE photo_id=$1", [photoId]);
     await client.query(
       `INSERT INTO photo_analysis
          (photo_id, time_label, background, emotion, main_mood, sub_mood, analyzed_at)
@@ -356,17 +183,12 @@ router.post("/:photoId/analyze", async (req, res) => {
     );
 
     await client.query("COMMIT");
-    return res.json({
-      ok: true,
-      photo_id: Number(photoId),
-      analysis: { time_label: timeLabel, background, emotion, main_mood, sub_mood },
-    });
+    return res.json({ ok: true, photo_id: Number(photoId), analysis: { time_label: timeLabel, background, emotion, main_mood, sub_mood } });
   } catch (err) {
-    await client.query("ROLLBACK");
-    console.error("[analyze by id]", err?.response?.data || err.message);
-    res.status(500).json({ error: "analyze by id failed" });
-  } finally {
-    client.release();
+  await client.query("ROLLBACK");
+  const detail = err?.response?.data || err.message || String(err);
+  console.error("[analyze]", detail);
+  res.status(500).json({ error: "analyze failed", detail });
   }
 });
 
