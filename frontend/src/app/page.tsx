@@ -103,14 +103,12 @@ export default function MusicRecommendationApp() {
   const [reqDoneMsg, setReqDoneMsg] = useState<string | null>(null)
   const [reqError, setReqError] = useState<string | null>(null)
 
-  // ✅ 특정 곡(현재 폼 값)에 대한 요청 카운트 상태
+  // 특정 곡(현재 폼 값)에 대한 요청 카운트 상태
   const [reqCount, setReqCount] = useState<number | null>(null)
   const [reqCountLoading, setReqCountLoading] = useState(false)
   const countAbortRef = useRef<AbortController | null>(null)
 
   const router = useRouter()
-
-  // ✅ 캐러셀 ref — 이 선언만 유지 (중복 금지)
   const historyScrollRef = useRef<HTMLDivElement | null>(null)
 
   // 로그인 정보 복원
@@ -134,7 +132,7 @@ export default function MusicRecommendationApp() {
     }
   }, [])
 
-  // ✅ 백엔드 스펙에 맞춘 히스토리 불러오기: GET /api/history?user_id=123
+  // 히스토리 불러오기: GET /api/history?user_id=123
   useEffect(() => {
     const fetchHistory = async () => {
       if (!isLoggedIn) {
@@ -180,7 +178,7 @@ export default function MusicRecommendationApp() {
           label: r.label ?? null,
           selectedFrom: r.selected_from ?? null,
           playedAt: r.created_at,
-          image: null, // 백엔드에서 이미지 URL을 안 주므로 플레이스홀더
+          image: null,
         }))
 
         setHistoryList(mapped)
@@ -197,7 +195,7 @@ export default function MusicRecommendationApp() {
     fetchHistory()
   }, [isLoggedIn])
 
-  // ✅ 음악 목록 1회 로드: GET /api/musics
+  // 음악 목록 1회 로드: GET /api/musics
   useEffect(() => {
     const fetchMusics = async () => {
       setMusicsLoading(true)
@@ -329,22 +327,18 @@ export default function MusicRecommendationApp() {
       .slice(0, 30)
   }, [searchQuery, musics])
 
-  // ✅ 검색 결과 0개일 때만, 현재 입력(제목+가수)에 대한 "요청 수"를 조회
-  // - reqTitle/reqArtist가 비어있으면 reqTitle에 검색어를 기본값으로 채움(사용자 입력을 덮지 않음)
+  // 결과 0개일 때만 현재 입력(제목+가수)에 대한 "요청 수" 조회
   useEffect(() => {
-    // 결과가 있으면 카운트 UI 숨김
     if (filteredMusics.length > 0) {
       setReqCount(null)
       setReqCountLoading(false)
       return
     }
 
-    // 검색어가 있는데 제목 입력이 비어있으면 기본값으로 채워주기(초기 UX)
     if (searchQuery.trim() && !reqTitle) {
       setReqTitle(searchQuery.trim())
     }
 
-    // 제목과 가수가 모두 있어야 카운트 조회
     const title = (reqTitle || "").trim()
     const artist = (reqArtist || "").trim()
     if (!title || !artist) {
@@ -353,7 +347,6 @@ export default function MusicRecommendationApp() {
       return
     }
 
-    // 이전 요청 취소
     if (countAbortRef.current) {
       countAbortRef.current.abort()
       countAbortRef.current = null
@@ -369,12 +362,13 @@ export default function MusicRecommendationApp() {
           `${API_BASE}/api/music-requests/count?title=` +
           encodeURIComponent(title) +
           `&artist=` +
-          encodeURIComponent(artist)
+          encodeURIComponent(artist ?? "")
 
         const res = await fetch(url, { signal: controller.signal })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = (await res.json()) as { request_count?: number }
-        setReqCount(typeof data.request_count === "number" ? data.request_count : 0)
+
+        const data = (await res.json()) as { count?: number }
+        setReqCount(typeof data.count === "number" ? data.count : 0)
       } catch (err: unknown) {
         if ((err as { name?: string }).name === "AbortError") return
         console.error("[request-count] error:", err)
@@ -382,7 +376,7 @@ export default function MusicRecommendationApp() {
       } finally {
         setReqCountLoading(false)
       }
-    }, 300) // 300ms 디바운스
+    }, 300)
 
     return () => {
       clearTimeout(t)
@@ -404,30 +398,46 @@ export default function MusicRecommendationApp() {
         return
       }
 
+      // ✅ user_id 확보(정수). 없으면 가드
+      const uidStr = localStorage.getItem("uid")
+      const userId = uidStr ? Number(uidStr) : NaN
+      if (!userId || Number.isNaN(userId)) {
+        setReqError("로그인 정보가 없습니다. 다시 로그인해 주세요.")
+        setReqSubmitting(false)
+        return
+      }
+
       const res = await fetch(`${API_BASE}/api/music-requests`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          user_id: userId, // ✅ 백엔드 스펙: user_id, title, artist
           title,
           artist,
-          // requested_by: user.email || localStorage.getItem("uid") || undefined,
         }),
       })
+
+      if (res.status === 409) {
+        setReqError("이미 이 곡을 요청하셨습니다.")
+        setReqSubmitting(false)
+        return
+      }
       if (!res.ok) {
         const txt = await res.text().catch(() => "")
         throw new Error(txt || `HTTP ${res.status}`)
       }
-      const saved = (await res.json()) as { request_count?: number; title: string; artist: string }
 
-      // ✅ 동일 곡에 대한 최신 카운트 표시(서버 응답의 request_count 사용)
-      setReqCount(typeof saved.request_count === "number" ? saved.request_count : (reqCount ?? 0) + 1)
+      const saved = (await res.json()) as { request_count?: number; title?: string; artist?: string }
 
-      setReqDoneMsg(
-        `요청이 접수되었습니다${saved.request_count ? ` (현재 ${saved.request_count}명이 요청 중)` : ""}.`
-      )
-      // 입력은 유지해도 되지만, 초기화가 UX에 좋다면 아래 주석 해제
-      // setReqTitle("")
-      // setReqArtist("")
+      // 성공 메시지 + 카운트 갱신
+      const latestCount =
+        typeof saved.request_count === "number"
+          ? saved.request_count
+          : (reqCount ?? 0) + 1
+
+      setReqCount(latestCount)
+      setReqDoneMsg(`요청이 접수되었습니다${latestCount ? ` (현재 ${latestCount}명이 요청 중)` : ""}.`)
+      setReqError(null)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "요청 중 오류가 발생했습니다."
       console.error("[request] create failed:", msg)
@@ -758,7 +768,6 @@ export default function MusicRecommendationApp() {
                       variant="ghost"
                       size="sm"
                       onClick={() => {
-                        // 다음 단계: 상세/재생/추천 연동
                         console.log("[pick] music", m.music_id)
                       }}
                     >
