@@ -17,7 +17,7 @@ router.get('/label/:label', async (req, res) => {
   const { label } = req.params;
   try {
     const result = await pool.query('SELECT * FROM music WHERE label = $1', [label]);
-    res.json(result.rows);
+    res.json(result.rows);ㅌ
   } catch (err) {
     res.status(500).send(err.message);
   }

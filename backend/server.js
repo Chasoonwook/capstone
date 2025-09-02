@@ -60,6 +60,7 @@ const musicRoutes = safeRequire("./routes/musics");
 const authRoutes = safeRequire("./routes/auth");
 const onboardingRoutes = safeRequire("./routes/onboarding");
 const historyRoutes = safeRequire("./routes/history");
+const musicRequestRoutes = safeRequire("./routes/musicRequests");
 
 // ⚠️ 라우터는 전부 여기서만 마운트 (server.js에 개별 엔드포인트 절대 X)
 if (photoRoutes) app.use("/api/photos", photoRoutes);
@@ -70,6 +71,7 @@ if (musicRoutes) app.use("/api/musics", musicRoutes);
 if (authRoutes) app.use("/api/auth", authRoutes);
 if (onboardingRoutes) app.use("/api", onboardingRoutes);
 if (historyRoutes) app.use("/api/history", historyRoutes);
+if (musicRequestRoutes) app.use("/api/music-requests", musicRequestRoutes);
 
 // ----- 🔎 디버그: 등록 라우트 전체 나열 -----
 function collectRoutes(layer, prefix = "") {
