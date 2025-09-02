@@ -186,7 +186,7 @@ router.post("/analyze", upload.single("file"), async (req, res) => {
     // 필요 시 디버깅
     // console.log("[debug:imageUrl]", imageUrl);
 
-    // 3) AI 호출 (/predict)  ← AI는 image_url을 받아 다운/검증/분석 후 JSON 반환
+    // 3) AI 호출 (/predict)
     const { data: ai } = await axios.post(
       `${process.env.AI_BASE_URL}/predict`,
       { image_url: imageUrl, photo_id: photoId, user_id: userId },
@@ -224,7 +224,7 @@ router.post("/analyze", upload.single("file"), async (req, res) => {
     });
   } catch (err) {
     await client.query("ROLLBACK");
-    // 🔎 원인 보기 패치: AI 응답 본문/메시지를 그대로 detail로 노출
+    // 🔎 원인 보기 패치: AI 응답 본문/메시지를 detail로 그대로 노출
     const detail = err?.response?.data || err.message || String(err);
     console.error("[analyze]", detail);
     res.status(500).json({ error: "analyze failed", detail });
