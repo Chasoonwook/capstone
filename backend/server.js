@@ -186,6 +186,36 @@ app.get("/api/photos/:photoId/binary", async (req, res) => {
   }
 });
 
+app.get('/api/history', async (req, res) => {
+  try {
+    const userId = req.query.user_id;
+    if (!userId) return res.status(400).json({ error: 'user_id required' });
+
+    const { rows } = await pool.query(
+      `SELECT 
+         h.id AS history_id,
+         h.music_id,
+         h.photo_id,
+         h.selected_from,
+         h.created_at,
+         COALESCE(m.title,'')  AS title,
+         COALESCE(m.artist,'') AS artist,
+         m.genre,
+         m.label
+       FROM history h
+       LEFT JOIN music m ON m.id = h.music_id
+       WHERE h.user_id = $1
+       ORDER BY h.created_at DESC
+       LIMIT 200`,
+      [userId]
+    );
+    res.json(rows);
+  } catch (e) {
+    console.error('[GET /api/history] error', e);
+    res.status(500).json({ error: 'server error' });
+  }
+});
+
 /** [4] AI 결과 수신: POST /api/ai/results */
 app.post("/api/ai/results", async (req, res) => {
   const client = await pool.connect();
