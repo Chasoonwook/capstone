@@ -35,9 +35,10 @@ const corsOptions = {
   methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
   allowedHeaders: ["Content-Type","Authorization","X-Requested-With","x-user-id"],
 };
+app.use(express.json({ limit: "5mb" }));
+app.use(express.urlencoded({ extended: true}));
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
-app.use(express.json({ limit: "20mb" }));
 
 // ----- Health -----
 app.get("/", (_req, res) => res.send("정상작동"));
