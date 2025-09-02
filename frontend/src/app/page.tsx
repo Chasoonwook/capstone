@@ -157,7 +157,7 @@ export default function MusicRecommendationApp() {
         }))
 
         setHistoryList(mapped)
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error("[history] load failed:", err)
         setHistoryError("히스토리를 불러오지 못했습니다.")
         setHistoryList([])
