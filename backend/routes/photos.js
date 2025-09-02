@@ -100,7 +100,7 @@ router.post("/analyze", upload.single("file"), async (req, res) => {
     // 2) 서명 URL
     const token = jwt.sign({ id: String(photoId) }, process.env.IMG_TOKEN_SECRET, { expiresIn: IMG_TOKEN_TTL });
     const publicApiBase = process.env.PUBLIC_API_BASE || `${req.protocol}://${req.get("host")}/api`;
-    const imageUrl = `${publicApiBase}/images/${photoId}?token=${token}`;
+    const imageUrl = `${publicApiBase}/photos/${photoId}/binary`;
 
     // 3) AI 호출
     const aiResp = await axios.post(
