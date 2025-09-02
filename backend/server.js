@@ -3,30 +3,16 @@ const express = require("express");
 const cors = require("cors");
 require("dotenv").config({ debug: true });
 const pool = require("./db");
-const multer = require("multer");
-const crypto = require("crypto");
 
 const app = express();
 
-/* ── Proxy/HTTPS 환경 ── */
+/* ── Proxy/HTTPS ── */
 app.set("trust proxy", 1);
 
-/* ── CORS ──
-   우선순위: .env의 CORS_ORIGIN(콤마로 여러 개) → 기본값(로컬 + 배포 프론트)
-   예: CORS_ORIGIN=https://capstone-front-tau.vercel.app,http://localhost:3000
-*/
-// [Fixed] 실제 .env 키는 CORS_ORIGINS 로 사용하도록 변경
+/* ── CORS ── */
 const raw = process.env.CORS_ORIGINS || "";
-
-// [Added] 끝 슬래시를 제거해 비교 시 혼선을 방지
 const normalize = (s) => s.replace(/\/+$/, "");
-
-const envAllow = raw
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean)
-  .map(normalize);
-
+const envAllow = raw.split(",").map(s => s.trim()).filter(Boolean).map(normalize);
 const defaultAllow = [
   "http://localhost:3000",
   "http://127.0.0.1:3000",
@@ -34,14 +20,13 @@ const defaultAllow = [
 ];
 const allowList = envAllow.length ? envAllow : defaultAllow;
 
-// [Added] 프리뷰 도메인(*.vercel.app) / localhost 패턴 허용 함수
 function isAllowedOrigin(origin) {
-  if (!origin) return true; // 서버-서버 호출(curl/healthcheck) 등 Origin 없는 요청 허용
+  if (!origin) return true;
   try {
     const url = new URL(origin);
     const norm = normalize(origin);
-    if (allowList.includes(norm)) return true;                // .env/기본 화이트리스트
-    if (url.hostname.endsWith(".vercel.app")) return true;    // ✅ Vercel Preview 모든 서브도메인 허용
+    if (allowList.includes(norm)) return true;
+    if (url.hostname.endsWith(".vercel.app")) return true;
     if (url.hostname === "localhost" || url.hostname === "127.0.0.1") return true;
   } catch (_) {}
   return false;
@@ -54,27 +39,19 @@ const corsOptions = {
   },
   credentials: true,
   optionsSuccessStatus: 204,
-  // [Added] preflight에서 허용 메서드/헤더 명시
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "x-user-id"],
 };
 
 app.use(cors(corsOptions));
-
-// [Fixed] Express 5에서는 '*' 대신 '(.*)' 패턴으로 preflight(OPTIONS) 허용
 app.options(/.*/, cors(corsOptions));
-
 console.log("[CORS allow list]", allowList);
 
 /* ── Body Parser ── */
 app.use(express.json({ limit: "20mb" }));
-// app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 
-/* ── 루트/헬스체크 ── */
-app.get("/", (_req, res) => {
-  res.send("정상작동");
-});
-
+/* ── 루트/헬스 ── */
+app.get("/", (_req, res) => res.send("정상작동"));
 app.get("/health", async (_req, res) => {
   try {
     await pool.query("SELECT 1");
@@ -85,7 +62,7 @@ app.get("/health", async (_req, res) => {
   }
 });
 
-/* ── 라우터 로더(파일 없으면 건너뜀 + 로딩 로그) ── */
+/* ── 라우터 로더 ── */
 function safeRequire(path) {
   try {
     const mod = require(path);
@@ -109,7 +86,7 @@ const imageRoutes = safeRequire("./routes/images");
 const aiRoutes = safeRequire("./routes/ai");
 const authRoutes = safeRequire("./routes/auth");
 const onboardingRoutes = safeRequire("./routes/onboarding");
-const historyRoutes = safeRequire("./routes/history"); //사용자 기록 0901
+const historyRoutes = safeRequire("./routes/history");
 
 if (userRoutes) app.use("/api/users", userRoutes);
 if (photoRoutes) app.use("/api/photos", photoRoutes);
@@ -119,223 +96,13 @@ if (imageRoutes) app.use("/api/images", imageRoutes);
 if (aiRoutes) app.use("/api/ai", aiRoutes);
 if (authRoutes) app.use("/api/auth", authRoutes);
 if (onboardingRoutes) app.use("/api", onboardingRoutes);
-if (historyRoutes) app.use("/api/history", historyRoutes); //0901
+if (historyRoutes) app.use("/api/history", historyRoutes);
 
-/* ────────────────────────────────────────────────────────────────
- * 업로드/AI/추천 기본 핸들러
- * ──────────────────────────────────────────────────────────────── */
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
-});
-
-/** [1] 업로드: POST /api/photos/upload */
-app.post("/api/photos/upload", upload.single("photo"), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: "no file" });
-
-    const { buffer, originalname, mimetype } = req.file;
-    const tempName = crypto.randomUUID();
-
-    const { rows } = await pool.query(
-      `INSERT INTO photos (temp_name, original_name, mime_type, content, created_at)
-       VALUES ($1,$2,$3,$4, now())
-       RETURNING photo_id`,
-      [tempName, originalname, mimetype, buffer]
-    );
-
-    return res.json({ photo_id: rows[0].photo_id });
-  } catch (e) {
-    console.error("upload error:", e);
-    return res.status(500).json({ error: "upload failed" });
-  }
-});
-
-/** [2] 미분석 목록: GET /api/photos/pending */
-app.get("/api/photos/pending", async (_req, res) => {
-  try {
-    const { rows } = await pool.query(
-      `SELECT p.photo_id, p.temp_name, p.original_name, p.mime_type, p.created_at
-         FROM photos p
-         LEFT JOIN photo_analysis a ON a.photo_id = p.photo_id
-        WHERE a.photo_id IS NULL
-        ORDER BY p.created_at ASC
-        LIMIT 50`
-    );
-    res.json(rows);
-  } catch (err) {
-    console.error("[pending]", err.message);
-    res.status(500).json({ error: "pending failed" });
-  }
-});
-
-/** [3] 바이너리 제공: GET /api/photos/:photoId/binary */
-app.get("/api/photos/:photoId/binary", async (req, res) => {
-  try {
-    const { photoId } = req.params;
-    const { rows } = await pool.query(
-      "SELECT mime_type, content FROM photos WHERE photo_id = $1",
-      [photoId]
-    );
-    if (!rows[0]) return res.status(404).send("Not found");
-    res.set("Content-Type", rows[0].mime_type || "application/octet-stream");
-    res.send(rows[0].content);
-  } catch (err) {
-    console.error("[binary]", err.message);
-    res.status(500).send("Error");
-  }
-});
-
-app.get('/api/history', async (req, res) => {
-  try {
-    const userId = req.query.user_id;
-    if (!userId) return res.status(400).json({ error: 'user_id required' });
-
-    const { rows } = await pool.query(
-      `SELECT 
-         h.id AS history_id,
-         h.music_id,
-         h.photo_id,
-         h.selected_from,
-         h.created_at,
-         COALESCE(m.title,'')  AS title,
-         COALESCE(m.artist,'') AS artist,
-         m.genre,
-         m.label
-       FROM history h
-       LEFT JOIN music m ON m.id = h.music_id
-       WHERE h.user_id = $1
-       ORDER BY h.created_at DESC
-       LIMIT 200`,
-      [userId]
-    );
-    res.json(rows);
-  } catch (e) {
-    console.error('[GET /api/history] error', e);
-    res.status(500).json({ error: 'server error' });
-  }
-});
-
-/** [4] AI 결과 수신: POST /api/ai/results */
-app.post("/api/ai/results", async (req, res) => {
-  const client = await pool.connect();
-  try {
-    const {
-      photo_id,
-      user_id = "00000000-0000-0000-0000-000000000000",
-      time_label = null,
-      background = null,
-      emotion = null,
-      main_mood = null,
-      sub_mood = null,
-    } = req.body || {};
-
-    if (!photo_id) return res.status(400).json({ error: "photo_id required" });
-
-    await client.query("BEGIN");
-
-    let finalMain = main_mood;
-    let finalSub = sub_mood;
-
-    if (!finalMain) {
-      const { rows } = await client.query(
-        `SELECT main_mood, sub_mood
-           FROM mood_mapping
-          WHERE ($1::text IS NULL OR time_label = $1)
-            AND ($2::text IS NULL OR background = $2)
-            AND ($3::text IS NULL OR emotion = $3)
-          LIMIT 1`,
-        [time_label, background, emotion]
-      );
-      if (rows[0]) {
-        finalMain = rows[0].main_mood;
-        finalSub = rows[0].sub_mood;
-      }
-    }
-
-    await client.query(`DELETE FROM photo_analysis WHERE photo_id = $1`, [photo_id]);
-    await client.query(
-      `INSERT INTO photo_analysis
-         (photo_id, time_label, background, emotion, main_mood, sub_mood, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6, now())`,
-      [photo_id, time_label, background, emotion, finalMain, finalSub]
-    );
-
-    await client.query("COMMIT");
-    res.json({ ok: true, photo_id, main_mood: finalMain, sub_mood: finalSub });
-  } catch (err) {
-    await client.query("ROLLBACK");
-    console.error("[ai/results]", err.message);
-    res.status(500).json({ error: "ai results failed" });
-  } finally {
-    client.release();
-  }
-});
-
-/** [5] 사진기반 추천: GET /api/recommendations/by-photo/:photoId */
-app.get("/api/recommendations/by-photo/:photoId", async (req, res) => {
-  const { photoId } = req.params;
-  try {
-    const { rows: aRows } = await pool.query(
-      `SELECT main_mood, sub_mood
-         FROM photo_analysis
-        WHERE photo_id = $1
-        LIMIT 1`,
-      [photoId]
-    );
-
-    if (aRows.length === 0) {
-      return res.status(202).json({ pending: true, photo_id: Number(photoId) });
-    }
-
-    const { main_mood, sub_mood } = aRows[0];
-    if (!main_mood && !sub_mood) {
-      return res.status(409).json({ error: "Mood mapping missing" });
-    }
-
-    const { rows: mainSongs } = await pool.query(
-      `SELECT music_id, title, artist, label AS genre
-         FROM music
-        WHERE label = $1
-        ORDER BY created_at DESC
-        LIMIT 7`,
-      [main_mood]
-    );
-
-    const { rows: subSongs } = await pool.query(
-      `SELECT music_id, title, artist, label AS genre
-         FROM music
-        WHERE label = $1
-          AND music_id NOT IN (
-            SELECT music_id FROM music
-             WHERE label = $2
-             ORDER BY created_at DESC
-             LIMIT 7
-          )
-        ORDER BY created_at DESC
-        LIMIT 3`,
-      [sub_mood || main_mood, main_mood]
-    );
-
-    return res.json({
-      main_mood,
-      sub_mood,
-      main_songs: mainSongs,
-      sub_songs: subSongs,
-    });
-  } catch (err) {
-    console.error("[recommend/by-photo]", err.message);
-    res.status(500).json({ error: "recommendation failed" });
-  }
-});
-
-/* ── 404 JSON (HTML 대신 JSON으로 통일) ── */
+/* ── 404/에러 핸들러 ── */
 app.use((req, res, next) => {
   if (res.headersSent) return next();
   return res.status(404).json({ error: "not found", path: req.originalUrl });
 });
-
-/* ── 공통 에러 핸들러 ── */
 app.use((err, _req, res, _next) => {
   console.error("[error]", err);
   res.status(500).json({ error: "internal error" });

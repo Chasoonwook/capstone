@@ -27,15 +27,12 @@ const upload = multer({
    Helpers
 ======================= */
 async function resolveMood(client, timeLabel, background, emotion, provided) {
-  // AI가 이미 mood를 계산해주면 그대로 사용
   if (provided?.main_mood) {
     return {
       main_mood: provided.main_mood,
       sub_mood: provided.sub_mood || provided.mood_sub || null,
     };
   }
-
-  // 1) 완전 일치
   const q1 = await client.query(
     `SELECT main_mood, sub_mood
        FROM mood_mapping
@@ -45,7 +42,6 @@ async function resolveMood(client, timeLabel, background, emotion, provided) {
   );
   if (q1.rows[0]) return q1.rows[0];
 
-  // 2) time_label만 일치 (fallback)
   const q2 = await client.query(
     `SELECT main_mood, sub_mood
        FROM mood_mapping
@@ -83,12 +79,15 @@ async function getRecommendations(client, mainMood, subMood) {
 }
 
 function buildPublicApiBase(req) {
-  // 배포 환경에서는 반드시 /api 포함
-  return (
-    process.env.PUBLIC_API_BASE ||
-    `${req.protocol}://${req.get("host")}/api`
-  );
+  return process.env.PUBLIC_API_BASE || `${req.protocol}://${req.get("host")}/api`;
 }
+
+/* =======================
+   디버그: 이 라우터가 응답하는지 확인
+======================= */
+router.get("/_who", (req, res) => {
+  res.json({ from: "routes/photos.js", analyzePath: "/api/photos/analyze" });
+});
 
 /* =======================
    (옵션) 비동기 업로드 목록
@@ -153,7 +152,7 @@ router.get("/:photoId/binary", async (req, res) => {
 });
 
 /* =======================
-   업로드 → AI → 저장 → 추천 (동기)
+   업로드 → AI → 저장 → 추천
    POST /api/photos/analyze
 ======================= */
 router.post("/analyze", upload.single("file"), async (req, res) => {
@@ -176,24 +175,21 @@ router.post("/analyze", upload.single("file"), async (req, res) => {
     );
     const photoId = ins[0].photo_id;
 
-    // 2) 서명 URL 생성 (AI는 이 URL로 이미지를 읽음)
+    // 2) 서명 URL
     const token = jwt.sign({ id: String(photoId) }, process.env.IMG_TOKEN_SECRET, {
       expiresIn: IMG_TOKEN_TTL,
     });
     const publicApiBase = buildPublicApiBase(req);
     const imageUrl = `${publicApiBase}/images/${photoId}?token=${token}`;
 
-    // 필요 시 디버깅
-    // console.log("[debug:imageUrl]", imageUrl);
-
-    // 3) AI 호출 (/predict)
+    // 3) AI 호출
     const { data: ai } = await axios.post(
       `${process.env.AI_BASE_URL}/predict`,
       { image_url: imageUrl, photo_id: photoId, user_id: userId },
       { timeout: AI_TIMEOUT }
     );
 
-    // 4) 최소 파싱 (AI가 주는 다양한 키를 호환)
+    // 4) 파싱(호환)
     const timeLabel = ai.time_label || ai.time || null;
     const background = ai.background || ai.scene || ai.category || null;
     const emotion   = ai.emotion   || ai.final_emotion || ai.rule_emotion || null;
@@ -204,7 +200,7 @@ router.post("/analyze", upload.single("file"), async (req, res) => {
       { main_mood: ai.mood || ai.mood_main, sub_mood: ai.mood_sub }
     );
 
-    // 6) 분석 저장 (멱등) — ⚠️ analyzed_at 사용
+    // 6) 분석 저장 (멱등, analyzed_at 사용)
     await client.query("DELETE FROM photo_analysis WHERE photo_id=$1", [photoId]);
     await client.query(
       `INSERT INTO photo_analysis
@@ -224,17 +220,18 @@ router.post("/analyze", upload.single("file"), async (req, res) => {
     });
   } catch (err) {
     await client.query("ROLLBACK");
-    // 🔎 원인 보기 패치: AI 응답 본문/메시지를 detail로 그대로 노출
-    const detail = err?.response?.data || err.message || String(err);
-    console.error("[analyze]", detail);
-    res.status(500).json({ error: "analyze failed", detail });
+    // 🔎 에러 원인 노출
+    const raw = (err && err.response && err.response.data) ?? err?.message ?? err?.toString() ?? "unknown error";
+    const detail = typeof raw === "string" ? raw : JSON.stringify(raw);
+    console.error("[analyze FAILED]", { detail, ai_url: `${process.env.AI_BASE_URL}/predict` });
+    return res.status(500).json({ error: "analyze failed", detail, from: "routes/photos.js#analyze" });
   } finally {
     client.release();
   }
 });
 
 /* =======================
-   DB에 이미 있는 사진을 by-id로 분석
+   DB 사진 by-id 분석
    POST /api/photos/:photoId/analyze
 ======================= */
 router.post("/:photoId/analyze", async (req, res) => {
@@ -285,9 +282,10 @@ router.post("/:photoId/analyze", async (req, res) => {
     });
   } catch (err) {
     await client.query("ROLLBACK");
-    const detail = err?.response?.data || err.message || String(err);
-    console.error("[analyze by id]", detail);
-    res.status(500).json({ error: "analyze by id failed", detail });
+    const raw = (err && err.response && err.response.data) ?? err?.message ?? err?.toString() ?? "unknown error";
+    const detail = typeof raw === "string" ? raw : JSON.stringify(raw);
+    console.error("[analyze by id FAILED]", { detail, ai_url: `${process.env.AI_BASE_URL}/predict` });
+    return res.status(500).json({ error: "analyze by id failed", detail, from: "routes/photos.js#byId" });
   } finally {
     client.release();
   }
