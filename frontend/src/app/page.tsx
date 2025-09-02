@@ -2,7 +2,7 @@
 "use client"
 
 import type React from "react"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -16,7 +16,7 @@ import {
   Settings,
   LogOut,
   CreditCard,
-  History,
+  History as HistoryIcon,
   UserCircle,
 } from "lucide-react"
 import Image from "next/image"
@@ -61,6 +61,16 @@ type HistoryItem = {
   label?: string | null
 }
 
+type MusicItem = {
+  music_id: number | string
+  title: string
+  artist?: string | null
+  genre?: string | null
+  label?: string | null
+  image_url?: string | null
+  created_at?: string | null
+}
+
 export default function MusicRecommendationApp() {
   // 업로드 상태
   const [uploadedImage, setUploadedImage] = useState<string | null>(null)
@@ -80,6 +90,23 @@ export default function MusicRecommendationApp() {
   const [historyList, setHistoryList] = useState<HistoryItem[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState<string | null>(null)
+
+  // 음악 목록 (DB에서 1회 로드) 및 상태
+  const [musics, setMusics] = useState<MusicItem[]>([])
+  const [musicsLoading, setMusicsLoading] = useState(false)
+  const [musicsError, setMusicsError] = useState<string | null>(null)
+
+  // 요청 폼 상태
+  const [reqTitle, setReqTitle] = useState<string>("")
+  const [reqArtist, setReqArtist] = useState<string>("")
+  const [reqSubmitting, setReqSubmitting] = useState(false)
+  const [reqDoneMsg, setReqDoneMsg] = useState<string | null>(null)
+  const [reqError, setReqError] = useState<string | null>(null)
+
+  // ✅ 특정 곡(현재 폼 값)에 대한 요청 카운트 상태
+  const [reqCount, setReqCount] = useState<number | null>(null)
+  const [reqCountLoading, setReqCountLoading] = useState(false)
+  const countAbortRef = useRef<AbortController | null>(null)
 
   const router = useRouter()
 
@@ -158,7 +185,8 @@ export default function MusicRecommendationApp() {
 
         setHistoryList(mapped)
       } catch (err: unknown) {
-        console.error("[history] load failed:", err)
+        const msg = err instanceof Error ? err.message : "히스토리를 불러오지 못했습니다."
+        console.error("[history] load failed:", msg)
         setHistoryError("히스토리를 불러오지 못했습니다.")
         setHistoryList([])
       } finally {
@@ -168,6 +196,28 @@ export default function MusicRecommendationApp() {
 
     fetchHistory()
   }, [isLoggedIn])
+
+  // ✅ 음악 목록 1회 로드: GET /api/musics
+  useEffect(() => {
+    const fetchMusics = async () => {
+      setMusicsLoading(true)
+      setMusicsError(null)
+      try {
+        const res = await fetch(`${API_BASE}/api/musics`)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const data = (await res.json()) as MusicItem[]
+        setMusics(data)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "음악 목록을 불러오지 못했습니다."
+        console.error("[musics] load failed:", msg)
+        setMusicsError("음악 목록을 불러오지 못했습니다.")
+      } finally {
+        setMusicsLoading(false)
+      }
+    }
+
+    fetchMusics()
+  }, [])
 
   const handleLogout = () => {
     try {
@@ -215,7 +265,12 @@ export default function MusicRecommendationApp() {
     if (!file) return
 
     const reader = new FileReader()
-    reader.onload = (e) => setUploadedImage(e.target?.result as string)
+    reader.onload = (e: ProgressEvent<FileReader>) => {
+      const result = e.target?.result
+      if (typeof result === "string") {
+        setUploadedImage(result)
+      }
+    }
     reader.readAsDataURL(file)
 
     setSelectedFile(file)
@@ -258,6 +313,127 @@ export default function MusicRecommendationApp() {
       router.push(`/recommend?genres=${encodeURIComponent(genres)}`)
     } finally {
       setIsSubmitting(false)
+    }
+  }
+
+  // 🔎 검색 결과 메모 (제목/가수만 매칭)
+  const filteredMusics = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) return []
+    return musics
+      .filter((m) => {
+        const t = m.title?.toLowerCase() ?? ""
+        const a = m.artist?.toLowerCase() ?? ""
+        return t.includes(q) || a.includes(q)
+      })
+      .slice(0, 30)
+  }, [searchQuery, musics])
+
+  // ✅ 검색 결과 0개일 때만, 현재 입력(제목+가수)에 대한 "요청 수"를 조회
+  // - reqTitle/reqArtist가 비어있으면 reqTitle에 검색어를 기본값으로 채움(사용자 입력을 덮지 않음)
+  useEffect(() => {
+    // 결과가 있으면 카운트 UI 숨김
+    if (filteredMusics.length > 0) {
+      setReqCount(null)
+      setReqCountLoading(false)
+      return
+    }
+
+    // 검색어가 있는데 제목 입력이 비어있으면 기본값으로 채워주기(초기 UX)
+    if (searchQuery.trim() && !reqTitle) {
+      setReqTitle(searchQuery.trim())
+    }
+
+    // 제목과 가수가 모두 있어야 카운트 조회
+    const title = (reqTitle || "").trim()
+    const artist = (reqArtist || "").trim()
+    if (!title || !artist) {
+      setReqCount(null)
+      setReqCountLoading(false)
+      return
+    }
+
+    // 이전 요청 취소
+    if (countAbortRef.current) {
+      countAbortRef.current.abort()
+      countAbortRef.current = null
+    }
+
+    const controller = new AbortController()
+    countAbortRef.current = controller
+    setReqCountLoading(true)
+
+    const t = setTimeout(async () => {
+      try {
+        const url =
+          `${API_BASE}/api/music-requests/count?title=` +
+          encodeURIComponent(title) +
+          `&artist=` +
+          encodeURIComponent(artist)
+
+        const res = await fetch(url, { signal: controller.signal })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const data = (await res.json()) as { request_count?: number }
+        setReqCount(typeof data.request_count === "number" ? data.request_count : 0)
+      } catch (err: unknown) {
+        if ((err as { name?: string }).name === "AbortError") return
+        console.error("[request-count] error:", err)
+        setReqCount(null)
+      } finally {
+        setReqCountLoading(false)
+      }
+    }, 300) // 300ms 디바운스
+
+    return () => {
+      clearTimeout(t)
+      controller.abort()
+    }
+  }, [searchQuery, reqTitle, reqArtist, filteredMusics.length])
+
+  // 🎫 노래 요청 전송
+  const submitRequest = async () => {
+    setReqSubmitting(true)
+    setReqDoneMsg(null)
+    setReqError(null)
+    try {
+      const title = reqTitle.trim()
+      const artist = reqArtist.trim()
+      if (!title || !artist) {
+        setReqError("가수와 제목을 모두 입력하세요.")
+        setReqSubmitting(false)
+        return
+      }
+
+      const res = await fetch(`${API_BASE}/api/music-requests`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          artist,
+          // requested_by: user.email || localStorage.getItem("uid") || undefined,
+        }),
+      })
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "")
+        throw new Error(txt || `HTTP ${res.status}`)
+      }
+      const saved = (await res.json()) as { request_count?: number; title: string; artist: string }
+
+      // ✅ 동일 곡에 대한 최신 카운트 표시(서버 응답의 request_count 사용)
+      setReqCount(typeof saved.request_count === "number" ? saved.request_count : (reqCount ?? 0) + 1)
+
+      setReqDoneMsg(
+        `요청이 접수되었습니다${saved.request_count ? ` (현재 ${saved.request_count}명이 요청 중)` : ""}.`
+      )
+      // 입력은 유지해도 되지만, 초기화가 UX에 좋다면 아래 주석 해제
+      // setReqTitle("")
+      // setReqArtist("")
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "요청 중 오류가 발생했습니다."
+      console.error("[request] create failed:", msg)
+      setReqError("요청에 실패했습니다. 잠시 후 다시 시도해 주세요.")
+    } finally {
+      setReqSubmitting(false)
     }
   }
 
@@ -325,7 +501,7 @@ export default function MusicRecommendationApp() {
                   <DropdownMenuItem><UserCircle className="mr-2 h-4 w-4" /><span>내 채널</span></DropdownMenuItem>
                   <DropdownMenuItem><CreditCard className="mr-2 h-4 w-4" /><span>유료 멤버십</span></DropdownMenuItem>
                   <DropdownMenuItem><User className="mr-2 h-4 w-4" /><span>개인 정보</span></DropdownMenuItem>
-                  <DropdownMenuItem><History className="mr-2 h-4 w-4" /><span>시청 기록</span></DropdownMenuItem>
+                  <DropdownMenuItem><HistoryIcon className="mr-2 h-4 w-4" /><span>시청 기록</span></DropdownMenuItem>
                   <DropdownMenuItem><Settings className="mr-2 h-4 w-4" /><span>설정</span></DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={handleLogout}>
@@ -496,17 +672,102 @@ export default function MusicRecommendationApp() {
           </Button>
         </section>
 
-        {/* 검색 */}
+        {/* ====== 검색 (DB 연동 + 곡별 요청수) ====== */}
         <section className="mb-16">
           <div className="max-w-xl mx-auto relative">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 h-5 w-5" />
             <Input
               type="text"
-              placeholder="노래 제목, 아티스트명 검색"
+              placeholder="노래 제목 또는 가수 검색"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-12 pr-4 py-4 text-base border-gray-200 focus:border-purple-300 rounded-2xl bg-white/80 backdrop-blur-sm"
             />
+          </div>
+
+          <div className="max-w-2xl mx-auto mt-6">
+            {musicsLoading ? (
+              <div className="text-center text-gray-500 py-8 bg-white/70 rounded-xl border">음악 목록 불러오는 중…</div>
+            ) : musicsError ? (
+              <div className="text-center text-red-500 py-8 bg-white/70 rounded-xl border">{musicsError}</div>
+            ) : searchQuery.trim().length === 0 ? (
+              <div className="text-center text-gray-400 py-4 text-sm">검색어를 입력하면 결과가 표시됩니다.</div>
+            ) : filteredMusics.length === 0 ? (
+              // 결과 0개일 때: 노래 요청 폼 + 현재 '그 곡'의 요청 수만 표시
+              <div className="max-w-xl mx-auto bg-white/80 rounded-2xl border p-5">
+                <p className="text-sm text-gray-700 mb-4">
+                  검색 결과가 없습니다. 원하시는 노래를 요청해 주세요.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <Input
+                    placeholder="노래 제목"
+                    value={reqTitle}
+                    onChange={(e) => setReqTitle(e.target.value)}
+                  />
+                  <Input
+                    placeholder="가수 이름"
+                    value={reqArtist}
+                    onChange={(e) => setReqArtist(e.target.value)}
+                  />
+                </div>
+
+                {/* 현재 곡의 요청수 안내 (이 곡만) */}
+                <div className="mt-3 text-xs text-gray-600">
+                  {reqCountLoading ? (
+                    <span>요청 수 확인 중…</span>
+                  ) : reqTitle.trim() && reqArtist.trim() ? (
+                    typeof reqCount === "number" ? (
+                      reqCount > 0 ? (
+                        <span>현재 <b>{reqCount}</b>명이 요청 중이에요.</span>
+                      ) : (
+                        <span>아직 요청이 없습니다. 첫 요청을 남겨보세요!</span>
+                      )
+                    ) : (
+                      <span>요청 수를 불러오지 못했습니다.</span>
+                    )
+                  ) : (
+                    <span>제목과 가수를 입력하면 현재 요청 수를 보여드려요.</span>
+                  )}
+                </div>
+
+                <div className="mt-4 flex items-center gap-3">
+                  <Button onClick={submitRequest} disabled={reqSubmitting}>
+                    {reqSubmitting ? "요청 중…" : "노래 요청 보내기"}
+                  </Button>
+                  {reqDoneMsg && <span className="text-sm text-green-600">{reqDoneMsg}</span>}
+                  {reqError && <span className="text-sm text-red-600">{reqError}</span>}
+                </div>
+
+                <p className="mt-3 text-xs text-gray-500">
+                  요청은 관리자 검토 후 음악 목록에 추가됩니다.
+                </p>
+              </div>
+            ) : (
+              <ul className="mt-2 space-y-2">
+                {filteredMusics.map((m) => (
+                  <li
+                    key={m.music_id}
+                    className="bg-white/80 rounded-xl border p-3 flex items-center justify-between gap-3 hover:shadow-sm transition"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">{m.title}</p>
+                      <p className="text-xs text-gray-500 truncate">{m.artist || "Unknown"}</p>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        // 다음 단계: 상세/재생/추천 연동
+                        console.log("[pick] music", m.music_id)
+                      }}
+                    >
+                      선택
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </section>
 
