@@ -42,11 +42,19 @@ router.post("/", async (req, res) => {
        request_count: c[0]?.request_count ?? 1
      });
    } catch (err) {
-     await pool.query("ROLLBACK");
-     console.error("[music-requests] error:", err);
-     return res.status(500).json({ error: "internal_error" });
-   } finally {
-     client.release();
+     try { await client.query("ROLLBACK"); } catch {}
+     // 🔎 에러 코드 매핑: FK/중복 등
+     if (err && err.code === "23503") { // foreign_key_violation
+        // users(user_id) 가 없는 경우
+        return res.status(400).json({ error: "unknown_user_id" });
+    }
+    if (err && err.code === "23505") { // unique_violation (이론상 ON CONFLICT로 안옴)
+        return res.status(409).json({ error: "already_requested" });
+    }
+    console.error("[music-requests POST] error:", err);
+    return res.status(500).json({ error: "internal_error" });
+    } finally {
+        client.release();
    }
  });
 
@@ -60,7 +68,11 @@ router.post("/", async (req, res) => {
        "SELECT song_key_of($1,$2) AS song_key",
        [title, artist || null]
      );
-     const song_key = k[0].song_key;
+     const song_key = k?.[0]?.song_key;
+     if (!song_key) {
+        console.error("[count] song_key_of returned null:", { title, artist });
+        return res.status(500).json({ error: "song_key_failed" });
+     }
 
      const { rows } = await pool.query(
        "SELECT COALESCE(request_count,0) AS count FROM music_requests WHERE song_key=$1",
