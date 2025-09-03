@@ -70,7 +70,8 @@ router.post("/analyze", upload.single("file"), async (req,res)=>{
     const imageUrl=`${base(req)}/images/${photoId}?token=${token}`;
 
     const {data:ai}=await axios.post(`${process.env.AI_BASE_URL}/predict`,
-      {image_url:imageUrl, photo_id:photoId, user_id:userId},{timeout:AI_TIMEOUT});
+  { image_url:imageUrl, photo_id:String(photoId), user_id:String(userId) }, // ✅ 문자열로!
+  { timeout:AI_TIMEOUT });
 
     const time=ai.time_label||ai.time||null;
     const back=ai.background||ai.scene||ai.category||null;
@@ -111,7 +112,8 @@ router.post("/:photoId/analyze", async (req,res)=>{
     const imageUrl=`${base(req)}/images/${photoId}?token=${token}`;
 
     const {data:ai}=await axios.post(`${process.env.AI_BASE_URL}/predict`,
-      {image_url:imageUrl, photo_id:Number(photoId), user_id:userId},{timeout:AI_TIMEOUT});
+  { image_url:imageUrl, photo_id:String(photoId), user_id:String(userId) }, // ✅ 문자열로!
+  { timeout:AI_TIMEOUT });
 
     const time=ai.time_label||ai.time||null;
     const back=ai.background||ai.scene||ai.category||null;
