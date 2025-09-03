@@ -46,8 +46,6 @@ const genreColors: Record<string, string> = {
   출퇴근: "bg-gradient-to-r from-teal-500 to-cyan-500 text-white",
 }
 
-type UploadResp = { photo_id?: string | number }
-
 type HistoryItem = {
   id: string | number
   title: string
@@ -230,30 +228,33 @@ export default function MusicRecommendationApp() {
     router.push("/login")
   }
 
-  // 업로드 → DB 저장
+  // 업로드 → (백엔드가 DB 저장 + AI 분석까지) 한 번에 처리
   async function uploadPhotoToBackend(file: File): Promise<{ photoId: string } | null> {
-    const form = new FormData()
-    form.append("photo", file)
-    form.append("filename", file.name)
+    const form = new FormData();
+    form.append("file", file); // ✅ 서버는 'file' 키를 받음
+    const uid = localStorage.getItem("uid");
+    if (uid) form.append("userId", uid); // 선택(있으면 넣기)
 
-    const url = `${API_BASE}/api/photos/upload`
+    const url = `${API_BASE}/api/photos/analyze`; // ✅ 실제 라우트
     try {
-      const res = await fetch(url, { method: "POST", body: form })
+      const res = await fetch(url, { method: "POST", body: form });
       if (!res.ok) {
-        const txt = await res.text().catch(() => "")
-        console.error("[upload] 실패:", res.status, txt)
-        return null
+        const txt = await res.text().catch(() => "");
+        console.error("[upload] 실패:", res.status, txt);
+        return null;
       }
-      const json = (await res.json()) as UploadResp
-      const photoId = json?.photo_id != null ? String(json.photo_id) : null
+
+      // 백엔드 응답: { photoId, analysis, recommendations }
+      const json = await res.json() as { photoId?: string | number };
+      const photoId = json?.photoId != null ? String(json.photoId) : null; // ✅ camelCase
       if (!photoId) {
-        console.error("[upload] 응답에 photo_id 없음:", json)
-        return null
+        console.error("[upload] 응답에 photoId 없음:", json);
+        return null;
       }
-      return { photoId }
+      return { photoId };
     } catch (e) {
-      console.error("[upload] 요청 오류:", e)
-      return null
+      console.error("[upload] 요청 오류:", e);
+      return null;
     }
   }
 
