@@ -50,7 +50,7 @@ export function useHistory(isLoggedIn: boolean) {
           image: null,
         }))
         if (mounted) setHistory(mapped)
-      } catch (e: any) {
+      } catch { // ✅ 변수 미사용이면 이름도 생략
         if (mounted) {
           setError("히스토리를 불러오지 못했습니다.")
           setHistory([])

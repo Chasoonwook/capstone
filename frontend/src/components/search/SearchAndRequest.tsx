@@ -56,8 +56,9 @@ export default function SearchAndRequest({ musics, loading, error }: Props) {
       const data = await res.json() as { request_count?: number }
       const latest = typeof data.request_count === "number" ? data.request_count : (count ?? 0) + 1
       setDoneMsg(`요청이 접수되었습니다${latest ? ` (현재 ${latest}명이 요청 중)` : ""}.`)
-    } catch (e: any) {
-      setErrMsg(e?.message || "요청 실패")
+    } catch (err: unknown) { // ✅ any 금지
+      const message = err instanceof Error ? err.message : "요청 실패"
+      setErrMsg(message)
     } finally {
       setSubmitting(false)
     }

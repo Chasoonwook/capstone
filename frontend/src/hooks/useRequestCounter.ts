@@ -25,8 +25,10 @@ export function useRequestCounter(title: string, artist: string, enable: boolean
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const data = (await res.json()) as { count?: number }
         setCount(typeof data.count === "number" ? data.count : 0)
-      } catch (e: any) {
-        if (e?.name !== "AbortError") setCount(null)
+      } catch (err: unknown) { // ✅ any 금지
+        // Abort 시에는 조용히 무시
+        if (err instanceof Error && err.name === "AbortError") return
+        setCount(null)
       } finally {
         setLoading(false)
       }

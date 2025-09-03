@@ -18,8 +18,11 @@ export function useMusics() {
         const res = await apiFetch(`${API_BASE}/api/musics`)
         const data = (await res.json()) as MusicItem[]
         if (mounted) setMusics(data)
-      } catch (e: any) {
-        if (mounted) setError(e?.message || "음악 목록을 불러오지 못했습니다.")
+      } catch (err: unknown) { // ✅ any 금지
+        if (mounted) {
+          const msg = err instanceof Error ? err.message : "음악 목록을 불러오지 못했습니다."
+          setError(msg)
+        }
       } finally {
         if (mounted) setLoading(false)
       }
