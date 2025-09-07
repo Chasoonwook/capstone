@@ -48,4 +48,21 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// GET /api/musics/by-mood?label=희망적 분위기&limit=7
+router.get("/by-mood", async (req, res) => {
+  const label = String(req.query.label || "");
+  const limit = Number(req.query.limit || 7);
+  if (!label) return res.status(400).json({ error: "label required" });
+  const { rows } = await pool.query(
+    `SELECT id as music_id, title, artist, label, genre, duration
+     FROM musics
+     WHERE label = $1
+     ORDER BY RANDOM()
+     LIMIT $2`,
+    [label, limit]
+  );
+  res.json(rows);
+});
+
+
 module.exports = router;

@@ -152,6 +152,23 @@ async function waitImageVisible(imageUrl) {
   return false;
 }
 
+// GET /api/photo-analysis/:photoId
+router.get("/photo-analysis/:photoId", async (req, res) => {
+  const photoId = Number(req.params.photoId);
+  if (!Number.isFinite(photoId)) return res.status(400).json({ error: "bad id" });
+  const { rows } = await pool.query(
+    `SELECT time_label, background, emotion, main_mood, sub_mood
+     FROM photo_analysis
+     WHERE photo_id = $1
+     ORDER BY analyzed_at DESC
+     LIMIT 1`,
+    [photoId]
+  );
+  if (!rows.length) return res.status(404).json({ error: "not found" });
+  res.json(rows[0]);
+});
+
+
 /* 업로드 + 즉시 분석 (두 단계 COMMIT) */
 router.post("/analyze", upload.single("file"), async (req,res)=>{
   let imageUrl;
