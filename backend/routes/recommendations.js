@@ -21,7 +21,6 @@ function buildLabelCandidates(label) {
   return Array.from(set);
 }
 
-
 // 선호 장르(쿼리→헤더)
 async function getPreferredGenres(req) {
   if (typeof req.query.genres === "string") {
@@ -36,19 +35,20 @@ async function getPreferredGenres(req) {
   return [];
 }
 
-// 후보 라벨(+선호장르)로 랜덤 N곡  ✅ ANY($n::text[]) 캐스팅, id/music_id 호환
+// 후보 라벨(+선호장르)로 랜덤 N곡  ✅ ANY($n::text[]) 캐스팅 + id/music_id 호환
 async function fetchRandomByLabels({ candidates, limit, genres }) {
   if (!candidates?.length || !limit) return [];
-  const normCands = candidates.map((x) => x.trim().toLowerCase());
+  const normCands = candidates.map(lowTrim);
+
   const params = [];
   let idx = 1;
 
-  let where = `lower(trim(label)) = ANY($${idx++}::text[])`;   // ✅ ::text[] 캐스팅
+  let where = `lower(trim(label)) = ANY($${idx++}::text[])`;     // ⚠️ 반드시 ::text[]
   params.push(normCands);
 
   if (Array.isArray(genres) && genres.length) {
-    where += ` AND lower(trim(genre)) = ANY($${idx++}::text[])`; // ✅ ::text[] 캐스팅
-    params.push(genres.map((g) => g.trim().toLowerCase()));
+    where += ` AND lower(trim(genre)) = ANY($${idx++}::text[])`; // ⚠️ 반드시 ::text[]
+    params.push(genres.map(lowTrim));
   }
 
   params.push(limit);
@@ -65,12 +65,14 @@ async function fetchRandomByLabels({ candidates, limit, genres }) {
   return rows;
 }
 
-
 // 아무 조건 없이 랜덤 N곡 (폴백용)
 async function fetchRandomAny(limit) {
   const { rows } = await pool.query(
     `SELECT COALESCE(music_id, id) AS music_id, title, artist, label, genre
-     FROM music ORDER BY RANDOM() LIMIT $1`, [limit]
+     FROM music
+     ORDER BY RANDOM()
+     LIMIT $1`,
+    [limit]
   );
   return rows;
 }
@@ -105,7 +107,12 @@ async function countByLabels({ candidates, genres }) {
   return out;
 }
 
-/* ---------- route ---------- */
+/* ---------- 핑: 새 코드가 배포됐는지 확인용 ---------- */
+router.get("/__ping", (_req, res) => {
+  res.json({ ok: true, from: "routes/recommendations.js", version: "recs-v3", now: new Date().toISOString() });
+});
+
+/* ---------- 메인 라우트 ---------- */
 // 사진ID 기반 추천 10곡: 메인5 + 서브2 + (선호장르)3, 모자라면 전체 랜덤으로 보충
 router.get("/by-photo/:photoId", async (req, res) => {
   const debug = String(req.query.debug || "") === "1";
@@ -154,21 +161,24 @@ router.get("/by-photo/:photoId", async (req, res) => {
       if (seen.has(id)) return false;
       seen.add(id); arr.push(item); return true;
     };
-
     [main_songs, sub_songs, preferred_songs] = [main_songs, sub_songs, preferred_songs].map((lst) => {
       const out = []; lst.forEach((it) => dedupPush(out, it)); return out;
     });
-
     const fill = async (arr, count) => {
       if (arr.length >= count) return arr;
       const extra = await fetchRandomAny(count - arr.length);
       extra.forEach((it) => dedupPush(arr, it));
       return arr;
     };
+    main_songs = await fill(main_songs, need.main);
+    sub_songs = await fill(sub_songs, need.sub);
+    preferred_songs = await fill(preferred_songs, need.preferred);
 
-main_songs = await fill(main_songs, need.main);
-sub_songs = await fill(sub_songs, need.sub);
-preferred_songs = await fill(preferred_songs, need.preferred);
+    const payload = {
+      main_mood, sub_mood, preferred_genres,
+      main_songs, sub_songs, preferred_songs,
+    };
+
     if (debug) {
       const [mCnt, sCnt, pCnt] = await Promise.all([
         countByLabels({ candidates: mainCands }),
