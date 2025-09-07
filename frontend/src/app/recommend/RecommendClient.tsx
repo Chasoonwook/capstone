@@ -1,176 +1,194 @@
-"use client"
+"use client";
 
-import type React from "react"
-
-import { useEffect, useMemo, useState } from "react"
-import { useSearchParams, useRouter } from "next/navigation"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { Play, Pause, SkipBack, SkipForward, X, ChevronLeft, ChevronRight } from "lucide-react"
-import { API_BASE } from "@/lib/api"
+import type React from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Play, Pause, SkipBack, SkipForward, X, ChevronLeft, ChevronRight } from "lucide-react";
+import { API_BASE } from "@/lib/api";
 
 /** ---------- 타입 ---------- */
 type Song = {
-  id: number | string
-  title: string
-  artist: string
-  genre: string
-  duration?: string // "mm:ss"
-  image?: string | null
-}
+  id: number | string;
+  title: string;
+  artist: string;
+  genre: string;
+  duration?: string; // "mm:ss"
+  image?: string | null;
+};
 
 type BackendSong = {
-  id?: number | string
-  music_id?: number | string
-  title?: string
-  artist?: string
-  label?: string
-  genre?: string
-  genre_code?: string
-  duration?: number
-  duration_sec?: number
-}
+  music_id?: number | string;
+  id?: number | string;
+  title?: string;
+  artist?: string;
+  label?: string;
+  genre?: string;
+  duration?: number;      // 초 단위일 수도 있음
+  duration_sec?: number;  // 초 단위
+};
 
 type ByPhotoResponse = {
-  main_songs?: BackendSong[]
-  sub_songs?: BackendSong[]
-}
+  main_mood?: string | null;
+  sub_mood?: string | null;
+  main_songs?: BackendSong[];
+  sub_songs?: BackendSong[];
+  preferred_songs?: BackendSong[];
+  preferred_genres?: string[];
+};
 
 /** ---------- 유틸 ---------- */
-const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v)
+const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
 const isBackendSong = (v: unknown): v is BackendSong => {
-  if (!isRecord(v)) return false
-  const { id, music_id, title, artist, label, genre, duration, duration_sec } = v
-  const isOptStrOrNum = (x: unknown) => typeof x === "string" || typeof x === "number" || typeof x === "undefined"
-  const isOptNum = (x: unknown) => typeof x === "number" || typeof x === "undefined"
+  if (!isRecord(v)) return false;
+  const { music_id, id, title, artist, label, genre, duration, duration_sec } = v as Record<string, unknown>;
+  const isOptStr = (x: unknown) => typeof x === "string" || typeof x === "undefined";
+  const isOptStrOrNum = (x: unknown) => typeof x === "string" || typeof x === "number" || typeof x === "undefined";
+  const isOptNum = (x: unknown) => typeof x === "number" || typeof x === "undefined";
   return (
-    isOptStrOrNum(id) &&
     isOptStrOrNum(music_id) &&
-    (typeof title === "string" || typeof title === "undefined") &&
-    (typeof artist === "string" || typeof artist === "undefined") &&
-    (typeof label === "string" || typeof label === "undefined") &&
-    (typeof genre === "string" || typeof genre === "undefined") &&
+    isOptStrOrNum(id) &&
+    isOptStr(title) &&
+    isOptStr(artist) &&
+    isOptStr(label) &&
+    isOptStr(genre) &&
     isOptNum(duration) &&
     isOptNum(duration_sec)
-  )
+  );
+};
+
+const toBackendSongArray = (v: unknown): BackendSong[] => (Array.isArray(v) ? v.filter(isBackendSong) : []);
+
+function formatTime(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  const mins = Math.floor(s / 60);
+  const secs = s % 60;
+  return `${mins}:${String(secs).padStart(2, "0")}`;
 }
 
-const toBackendSongArray = (v: unknown): BackendSong[] => (Array.isArray(v) ? v.filter(isBackendSong) : [])
-
-async function safeText(res: Response) {
-  try {
-    return await res.text()
-  } catch {
-    return ""
-  }
+function parseDurationToSec(d?: string): number {
+  if (!d) return 180;
+  const m = /^(\d+):(\d{2})$/.exec(d);
+  if (!m) return 180;
+  const mins = Number(m[1]);
+  const secs = Number(m[2]);
+  if (Number.isNaN(mins) || Number.isNaN(secs)) return 180;
+  return mins * 60 + secs;
 }
 
 // 업로드 이미지 바이너리 URL 탐색
 async function resolveImageUrl(photoId: string): Promise<string | null> {
-  const candidates = [`${API_BASE}/api/photos/${photoId}/binary`, `${API_BASE}/photos/${photoId}/binary`]
+  const candidates = [`${API_BASE}/api/photos/${photoId}/binary`, `${API_BASE}/photos/${photoId}/binary`];
   for (const url of candidates) {
     try {
-      const r = await fetch(url, { method: "GET" })
-      if (r.ok) return url
+      const r = await fetch(url, { method: "GET" });
+      if (r.ok) return url;
     } catch {
       /* ignore */
     }
   }
-  return null
-}
-
-// "mm:ss" -> seconds
-function parseDurationToSec(d?: string): number {
-  if (!d) return 180
-  const m = /^(\d+):(\d{2})$/.exec(d)
-  if (!m) return 180
-  const mins = Number(m[1])
-  const secs = Number(m[2])
-  if (Number.isNaN(mins) || Number.isNaN(secs)) return 180
-  return mins * 60 + secs
-}
-
-function formatTime(seconds: number): string {
-  const s = Math.max(0, Math.floor(seconds))
-  const mins = Math.floor(s / 60)
-  const secs = s % 60
-  return `${mins}:${String(secs).padStart(2, "0")}`
+  return null;
 }
 
 /** ---------- 컴포넌트 ---------- */
 export default function RecommendClient() {
-  const searchParams = useSearchParams()
-  const router = useRouter()
-  const photoId = searchParams.get("photoId")
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const photoId = searchParams.get("photoId");
 
-  const [uploadedImage, setUploadedImage] = useState<string | null>(null)
-  const [recommendations, setRecommendations] = useState<Song[]>([])
-  const [currentSong, setCurrentSong] = useState<Song | null>(null)
+  const [uploadedImage, setUploadedImage] = useState<string | null>(null);
+  const [recommendations, setRecommendations] = useState<Song[]>([]);
+  const [currentSong, setCurrentSong] = useState<Song | null>(null);
 
-  const [isPlaying, setIsPlaying] = useState(false)
-  const [currentTime, setCurrentTime] = useState(0)
-  const [duration, setDuration] = useState(180)
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(180);
 
-  const [currentViewIndex, setCurrentViewIndex] = useState(0)
+  const [currentViewIndex, setCurrentViewIndex] = useState(0);
 
   /** 1) 업로드 이미지 URL */
   useEffect(() => {
-    let mounted = true
-    ;(async () => {
+    let mounted = true;
+    (async () => {
       if (!photoId) {
-        setUploadedImage(null)
-        return
+        setUploadedImage(null);
+        return;
       }
-      const url = await resolveImageUrl(photoId)
-      if (mounted) setUploadedImage(url ?? "/placeholder.svg")
-      if (!url) console.warn("[binary] 이미지 바이너리 404: photoId =", photoId)
-    })()
+      const url = await resolveImageUrl(photoId);
+      if (mounted) setUploadedImage(url ?? "/placeholder.svg");
+    })();
     return () => {
-      mounted = false
-    }
-  }, [photoId])
+      mounted = false;
+    };
+  }, [photoId]);
 
-  /** 2) 추천(by-photo) */
+  /** 2) 추천(by-photo) — 백엔드 /api/recommendations/by-photo/:photoId 만 호출 */
   useEffect(() => {
-    let mounted = true
+    let mounted = true;
 
     const fetchByPhoto = async () => {
-      if (!photoId) return
+      if (!photoId) return;
       try {
-        const r = await fetch(`${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(photoId)}`)
+        const r = await fetch(`${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(photoId)}`);
         if (!r.ok) {
-          console.error("[by-photo] 실패:", r.status, await safeText(r))
-          setRecommendations([])
-          setCurrentSong(null)
-          return
+          console.error("[by-photo] 실패:", r.status, await r.text());
+          setRecommendations([]);
+          setCurrentSong(null);
+          return;
         }
-        const raw: unknown = await r.json()
-        const resp: ByPhotoResponse = isRecord(raw)
-          ? {
-              main_songs: toBackendSongArray((raw as Record<string, unknown>).main_songs),
-              sub_songs: toBackendSongArray((raw as Record<string, unknown>).sub_songs),
-            }
-          : { main_songs: [], sub_songs: [] }
 
-        const list: BackendSong[] = [...(resp.main_songs ?? []), ...(resp.sub_songs ?? [])]
+        const raw: unknown = await r.json();
+
+        // 응답 파싱
+        let data: ByPhotoResponse;
+
+        const obj =
+          raw && typeof raw === "object" && !Array.isArray(raw)
+            ? (raw as Record<string, unknown>)
+            : null;
+
+        if (obj) {
+          data = {
+            main_mood: typeof obj["main_mood"] === "string" ? (obj["main_mood"] as string) : null,
+            sub_mood:  typeof obj["sub_mood"]  === "string" ? (obj["sub_mood"]  as string) : null,
+            main_songs:       toBackendSongArray(obj["main_songs"]),
+            sub_songs:        toBackendSongArray(obj["sub_songs"]),
+            preferred_songs:  toBackendSongArray(obj["preferred_songs"]),
+          };
+        } else {
+          data = { main_songs: [], sub_songs: [], preferred_songs: [] };
+        }
+
+        // ⬇︎ 순서: 메인(5) → 선호장르(3) → 서브(2)
+        const merged: BackendSong[] = [
+          ...(data.main_songs ?? []),
+          ...(data.preferred_songs ?? []),
+          ...(data.sub_songs ?? []),
+        ];
 
         // dedup by music_id/id
-        const seen = new Set<string | number>()
-        const dedup: BackendSong[] = []
-        list.forEach((s, i) => {
-          const id = (s.music_id ?? s.id ?? i) as string | number
+        const seen = new Set<string | number>();
+        const dedup: BackendSong[] = [];
+        merged.forEach((s, i) => {
+          const id = (s.music_id ?? s.id ?? i) as string | number;
           if (!seen.has(id)) {
-            seen.add(id)
-            dedup.push(s)
+            seen.add(id);
+            dedup.push(s);
           }
-        })
+        });
 
+        // 렌더용 변환
         const songs: Song[] = dedup.map((it, idx) => {
           const sec =
-            typeof it.duration === "number" ? it.duration : typeof it.duration_sec === "number" ? it.duration_sec : 180
-          const mm = Math.floor(sec / 60)
-          const ss = String(sec % 60).padStart(2, "0")
+            typeof it.duration === "number"
+              ? it.duration
+              : typeof it.duration_sec === "number"
+              ? it.duration_sec
+              : 180;
+          const mm = Math.floor(sec / 60);
+          const ss = String(sec % 60).padStart(2, "0");
           return {
             id: it.music_id ?? it.id ?? idx,
             title: it.title ?? "Unknown Title",
@@ -178,72 +196,72 @@ export default function RecommendClient() {
             genre: it.genre ?? it.label ?? "UNKNOWN",
             duration: `${mm}:${ss}`,
             image: uploadedImage ?? "/placeholder.svg",
-          }
-        })
+          };
+        });
 
         if (mounted) {
-          setRecommendations(songs)
-          const first = songs[0] ?? null
-          setCurrentSong(first)
-          setCurrentTime(0)
-          setIsPlaying(false)
-          setDuration(parseDurationToSec(first?.duration))
+          setRecommendations(songs);
+          const first = songs[0] ?? null;
+          setCurrentSong(first);
+          setCurrentTime(0);
+          setIsPlaying(false);
+          setDuration(parseDurationToSec(first?.duration));
         }
       } catch (e) {
-        console.error("추천 불러오기 오류:", e)
-        setRecommendations([])
-        setCurrentSong(null)
+        console.error("추천 불러오기 오류:", e);
+        setRecommendations([]);
+        setCurrentSong(null);
       }
-    }
+    };
 
-    fetchByPhoto()
+    fetchByPhoto();
     return () => {
-      mounted = false
-    }
-  }, [photoId, uploadedImage])
+      mounted = false;
+    };
+  }, [photoId, uploadedImage]);
 
   /** 3) 타이머 */
   useEffect(() => {
-    if (!isPlaying) return
+    if (!isPlaying) return;
     const id = setInterval(() => {
-      setCurrentTime((t) => (t + 1 > duration ? duration : t + 1))
-    }, 1000)
-    return () => clearInterval(id)
-  }, [isPlaying, duration])
+      setCurrentTime((t) => (t + 1 > duration ? duration : t + 1));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [isPlaying, duration]);
 
   /** 4) 컨트롤 */
-  const togglePlay = () => setIsPlaying((p) => !p)
+  const togglePlay = () => setIsPlaying((p) => !p);
 
   const playNextSong = () => {
-    if (!currentSong || recommendations.length === 0) return
-    const currentIndex = recommendations.findIndex((song) => song.id === currentSong.id)
-    const nextIndex = (currentIndex + 1) % recommendations.length
-    const next = recommendations[nextIndex]
-    setCurrentSong(next)
-    setCurrentTime(0)
-    setDuration(parseDurationToSec(next.duration))
-    setIsPlaying(true)
-  }
+    if (!currentSong || recommendations.length === 0) return;
+    const currentIndex = recommendations.findIndex((song) => song.id === currentSong.id);
+    const nextIndex = (currentIndex + 1) % recommendations.length;
+    const next = recommendations[nextIndex];
+    setCurrentSong(next);
+    setCurrentTime(0);
+    setDuration(parseDurationToSec(next.duration));
+    setIsPlaying(true);
+  };
 
   const playPreviousSong = () => {
-    if (!currentSong || recommendations.length === 0) return
-    const currentIndex = recommendations.findIndex((song) => song.id === currentSong.id)
-    const prevIndex = currentIndex === 0 ? recommendations.length - 1 : currentIndex - 1
-    const prev = recommendations[prevIndex]
-    setCurrentSong(prev)
-    setCurrentTime(0)
-    setDuration(parseDurationToSec(prev.duration))
-    setIsPlaying(true)
-  }
+    if (!currentSong || recommendations.length === 0) return;
+    const currentIndex = recommendations.findIndex((song) => song.id === currentSong.id);
+    const prevIndex = currentIndex === 0 ? recommendations.length - 1 : currentIndex - 1;
+    const prev = recommendations[prevIndex];
+    setCurrentSong(prev);
+    setCurrentTime(0);
+    setDuration(parseDurationToSec(prev.duration));
+    setIsPlaying(true);
+  };
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = Number(e.target.value)
-    if (Number.isFinite(val)) setCurrentTime(Math.min(Math.max(val, 0), duration))
-  }
+    const val = Number(e.target.value);
+    if (Number.isFinite(val)) setCurrentTime(Math.min(Math.max(val, 0), duration));
+  };
 
   /** 5) 배경 이미지 */
-  const safeImageSrc = useMemo(() => uploadedImage || "/placeholder.svg", [uploadedImage])
-  const safeBgStyle = useMemo(() => ({ backgroundImage: `url(${safeImageSrc})` }), [safeImageSrc])
+  const safeImageSrc = useMemo(() => uploadedImage || "/placeholder.svg", [uploadedImage]);
+  const safeBgStyle = useMemo(() => ({ backgroundImage: `url(${safeImageSrc})` }), [safeImageSrc]);
 
   /** ---------- 뷰들 ---------- */
   const CDPlayerView = () => (
@@ -321,7 +339,11 @@ export default function RecommendClient() {
               onClick={togglePlay}
               aria-label={isPlaying ? "pause" : "play"}
             >
-              {isPlaying ? <Pause className="h-7 w-7 text-white" /> : <Play className="h-7 w-7 text-white" />}
+              {isPlaying ? (
+                <Pause className="h-7 w-7 text-white" />
+              ) : (
+                <Play className="h-7 w-7 text-white" />
+              )}
             </Button>
 
             <Button
@@ -346,10 +368,10 @@ export default function RecommendClient() {
                   <div
                     key={song.id}
                     onClick={() => {
-                      setCurrentSong(song)
-                      setCurrentTime(0)
-                      setDuration(parseDurationToSec(song.duration))
-                      setIsPlaying(true)
+                      setCurrentSong(song);
+                      setCurrentTime(0);
+                      setDuration(parseDurationToSec(song.duration));
+                      setIsPlaying(true);
                     }}
                     className={`flex items-center p-3 rounded-xl cursor-pointer transition-all duration-200 hover:bg-white/10 ${
                       currentSong?.id === song.id
@@ -359,7 +381,7 @@ export default function RecommendClient() {
                   >
                     <div
                       className="flex-shrink-0 w-12 h-12 rounded-lg overflow-hidden mr-3 border border-white/10 bg-center bg-cover"
-                      style={{ backgroundImage: `url(${song.image ?? safeImageSrc})` }}
+                      style={{ backgroundImage: `url(${song.image ?? uploadedImage ?? "/placeholder.svg"})` }}
                     />
                     <div className="flex-1 min-w-0">
                       <p className="text-white font-medium truncate text-sm">{song.title}</p>
@@ -380,43 +402,43 @@ export default function RecommendClient() {
         </div>
       </div>
     </div>
-  )
+  );
 
   const InstagramView = () => (
     <div className="flex-1 flex items-center justify-center w-full h-full">
       <div className="text-slate-300">Instagram View (준비 중)</div>
     </div>
-  )
+  );
 
   const DefaultView = () => (
     <div className="flex-1 flex justify-center items-center">
       <div className="text-slate-300">Default View (준비 중)</div>
     </div>
-  )
+  );
 
   const renderCurrentView = () => {
-    const views = ["cd", "instagram", "default"] as const
+    const views = ["cd", "instagram", "default"] as const;
     switch (views[currentViewIndex]) {
       case "cd":
-        return <CDPlayerView />
+        return <CDPlayerView />;
       case "instagram":
-        return <InstagramView />
+        return <InstagramView />;
       default:
-        return <DefaultView />
+        return <DefaultView />;
     }
-  }
+  };
 
   /** 네비게이션/뷰 전환 */
   const handleClose = () => {
     try {
-      router.replace("/")
+      router.replace("/");
     } catch {
-      ;(window as unknown as { location: Location }).location.href = "/"
+      (window as unknown as { location: Location }).location.href = "/";
     }
-  }
+  };
 
-  const handlePrevView = () => setCurrentViewIndex((prev) => (prev - 1 + 3) % 3)
-  const handleNextView = () => setCurrentViewIndex((prev) => (prev + 1) % 3)
+  const handlePrevView = () => setCurrentViewIndex((prev) => (prev - 1 + 3) % 3);
+  const handleNextView = () => setCurrentViewIndex((prev) => (prev + 1) % 3);
 
   return (
     <div className="fixed inset-0 z-40 bg-black bg-opacity-95 flex items-center justify-center">
@@ -454,5 +476,5 @@ export default function RecommendClient() {
       {/* 메인 View */}
       <div className="relative z-30 w-full h-full flex items-center justify-center px-20">{renderCurrentView()}</div>
     </div>
-  )
+  );
 }
