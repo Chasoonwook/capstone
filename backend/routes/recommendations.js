@@ -17,13 +17,10 @@ function buildLabelCandidates(label) {
   : base.endsWith("한") ? base.replace(/한$/, "함")
   : null;
 
-  const set = new Set([
-    base,                 // 희망적 / 따뜻함
-    `${base} 분위기`,     // 희망적 분위기 / 따뜻함 분위기
-    ...(alt ? [alt, `${alt} 분위기`] : []), // 따뜻한 / 따뜻한 분위기
-  ]);
+  const set = new Set([base, `${base} 분위기`, ...(alt ? [alt, `${alt} 분위기`] : [])]);
   return Array.from(set);
 }
+
 
 // 선호 장르(쿼리→헤더)
 async function getPreferredGenres(req) {
@@ -42,17 +39,16 @@ async function getPreferredGenres(req) {
 // 후보 라벨(+선호장르)로 랜덤 N곡  ✅ ANY($n::text[]) 캐스팅, id/music_id 호환
 async function fetchRandomByLabels({ candidates, limit, genres }) {
   if (!candidates?.length || !limit) return [];
-  const normCands = candidates.map(lowTrim);
-
+  const normCands = candidates.map((x) => x.trim().toLowerCase());
   const params = [];
   let idx = 1;
 
-  let where = `lower(trim(label)) = ANY($${idx++}::text[])`;
+  let where = `lower(trim(label)) = ANY($${idx++}::text[])`;   // ✅ ::text[] 캐스팅
   params.push(normCands);
 
   if (Array.isArray(genres) && genres.length) {
-    where += ` AND lower(trim(genre)) = ANY($${idx++}::text[])`;
-    params.push(genres.map(lowTrim));
+    where += ` AND lower(trim(genre)) = ANY($${idx++}::text[])`; // ✅ ::text[] 캐스팅
+    params.push(genres.map((g) => g.trim().toLowerCase()));
   }
 
   params.push(limit);
@@ -69,14 +65,12 @@ async function fetchRandomByLabels({ candidates, limit, genres }) {
   return rows;
 }
 
+
 // 아무 조건 없이 랜덤 N곡 (폴백용)
 async function fetchRandomAny(limit) {
   const { rows } = await pool.query(
     `SELECT COALESCE(music_id, id) AS music_id, title, artist, label, genre
-     FROM music
-     ORDER BY RANDOM()
-     LIMIT $1`,
-    [limit]
+     FROM music ORDER BY RANDOM() LIMIT $1`, [limit]
   );
   return rows;
 }
@@ -160,24 +154,21 @@ router.get("/by-photo/:photoId", async (req, res) => {
       if (seen.has(id)) return false;
       seen.add(id); arr.push(item); return true;
     };
+
     [main_songs, sub_songs, preferred_songs] = [main_songs, sub_songs, preferred_songs].map((lst) => {
       const out = []; lst.forEach((it) => dedupPush(out, it)); return out;
     });
+
     const fill = async (arr, count) => {
       if (arr.length >= count) return arr;
       const extra = await fetchRandomAny(count - arr.length);
       extra.forEach((it) => dedupPush(arr, it));
       return arr;
     };
-    main_songs = await fill(main_songs, need.main);
-    sub_songs = await fill(sub_songs, need.sub);
-    preferred_songs = await fill(preferred_songs, need.preferred);
 
-    const payload = {
-      main_mood, sub_mood, preferred_genres,
-      main_songs, sub_songs, preferred_songs,
-    };
-
+main_songs = await fill(main_songs, need.main);
+sub_songs = await fill(sub_songs, need.sub);
+preferred_songs = await fill(preferred_songs, need.preferred);
     if (debug) {
       const [mCnt, sCnt, pCnt] = await Promise.all([
         countByLabels({ candidates: mainCands }),
