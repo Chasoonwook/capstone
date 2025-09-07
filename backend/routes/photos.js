@@ -72,30 +72,6 @@ async function resolveMood(client, timeLabel, background, emotion, prefer) {
   return q.rows[0] || { main_mood:null, sub_mood:null };
 }
 
-/* 추천 7+3 */
-async function fetchRecs(client, main, sub) {
-  const a = (await client.query(
-    `SELECT music_id, title, artist, label, genre
-       FROM music
-      WHERE label=$1
-      ORDER BY created_at DESC
-      LIMIT 7`, [main]
-  )).rows;
-
-  const b = (await client.query(
-    `SELECT music_id, title, artist, label, genre
-       FROM music
-      WHERE label=$1
-        AND music_id NOT IN (
-          SELECT music_id FROM music WHERE label=$2 ORDER BY created_at DESC LIMIT 7
-        )
-      ORDER BY created_at DESC
-      LIMIT 3`, [sub, main]
-  )).rows;
-
-  return [...a, ...b];
-}
-
 /* 디버그 */
 router.get("/_who", (_req,res) =>
   res.json({ from:"routes/photos.js", analyzePath:"/api/photos/analyze" })
@@ -136,23 +112,20 @@ async function waitImageVisible(imageUrl) {
     try {
       const r = await axios.get(imageUrl, {
         responseType: "stream",
-        validateStatus: () => true, // 404 등도 throw하지 않게
+        validateStatus: () => true,
       });
       if (r.status === 200) {
-        // 스트림 닫기 (누수 방지)
         if (r.data && typeof r.data.destroy === "function") r.data.destroy();
         return true;
       }
       if (r.data && typeof r.data.destroy === "function") r.data.destroy();
-    } catch (_) {
-      // 무시하고 재시도
-    }
-    await new Promise(res => setTimeout(res, 80)); // 80ms 간격, 총 5회
+    } catch (_) {}
+    await new Promise(res => setTimeout(res, 80));
   }
   return false;
 }
 
-// GET /api/photo-analysis/:photoId
+// GET /api/photo-analysis/:photoId (프론트 디버깅용)
 router.get("/photo-analysis/:photoId", async (req, res) => {
   const photoId = Number(req.params.photoId);
   if (!Number.isFinite(photoId)) return res.status(400).json({ error: "bad id" });
@@ -168,8 +141,7 @@ router.get("/photo-analysis/:photoId", async (req, res) => {
   res.json(rows[0]);
 });
 
-
-/* 업로드 + 즉시 분석 (두 단계 COMMIT) */
+/* 업로드 + 즉시 분석 (추천은 recommendations 라우터에서 별도로 조회) */
 router.post("/analyze", upload.single("file"), async (req,res)=>{
   let imageUrl;
   const client = await pool.connect();
@@ -178,7 +150,6 @@ router.post("/analyze", upload.single("file"), async (req,res)=>{
     const userId = req.body.userId || "00000000-0000-0000-0000-000000000000";
     const { buffer, originalname, mimetype } = req.file;
 
-    /* 1) 사진 저장 트랜잭션 —> COMMIT 먼저 */
     await client.query("BEGIN");
     const temp = crypto.createHash("sha256").update(buffer).digest("hex").slice(0,8);
     const ins = await client.query(
@@ -188,22 +159,18 @@ router.post("/analyze", upload.single("file"), async (req,res)=>{
       [temp, originalname, mimetype, buffer]
     );
     const photoId = ins.rows[0].photo_id;
-    await client.query("COMMIT");   // ✅ 여기서 커밋해야 /api/images 가 바로 읽힘
+    await client.query("COMMIT");
 
-    /* 2) 서명 URL 생성 후, 가시성 짧게 확인 */
     const token = jwt.sign({ id:String(photoId) }, process.env.IMG_TOKEN_SECRET, { expiresIn: IMG_TOKEN_TTL });
     imageUrl = `${apiBase(req)}/images/${photoId}?token=${token}`;
+    await waitImageVisible(imageUrl);
 
-    await waitImageVisible(imageUrl); // 짧은 리트라이(선택적, 안정성 ↑)
-
-    /* 3) AI 호출 */
     const { data: ai } = await axios.post(
       `${process.env.AI_BASE_URL}/predict`,
       { image_url: imageUrl, photo_id:String(photoId), user_id:String(userId) },
       { timeout: AI_TIMEOUT }
     );
 
-    /* 4) 분석 값 파싱 + mood 매핑 저장 (별도 트랜잭션) */
     const time = ai.time_label || ai.time || null;
     const back = ai.background || ai.scene || ai.category || null;
     const emo  = ai.emotion    || ai.final_emotion || ai.rule_emotion || null;
@@ -221,14 +188,12 @@ router.post("/analyze", upload.single("file"), async (req,res)=>{
        VALUES ($1,$2,$3,$4,$5,$6,now())`,
       [photoId, time, back, emo, main_mood, sub_mood]
     );
-
-    const items = await fetchRecs(client, main_mood, sub_mood);
     await client.query("COMMIT");
 
+    // ✅ 추천은 포함하지 않고, 프론트가 /api/recommendations/by-photo/:photoId 를 호출하도록 유지
     return res.json({
       photoId,
       analysis: { time_label: time, background: back, emotion: emo, main_mood, sub_mood },
-      recommendations: items,
     });
 
   } catch (err) {
@@ -242,7 +207,7 @@ router.post("/analyze", upload.single("file"), async (req,res)=>{
   }
 });
 
-/* 기존 사진 id 재분석 (이 경로도 커밋 후 호출 패턴 유지) */
+/* 기존 사진 id 재분석 */
 router.post("/:photoId/analyze", async (req,res)=>{
   let imageUrl;
   const client = await pool.connect();
