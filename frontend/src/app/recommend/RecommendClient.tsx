@@ -1,7 +1,7 @@
 "use client";
 
 import type React from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -15,7 +15,7 @@ type Song = {
   artist: string;
   genre: string;
   duration?: string; // "mm:ss"
-  image?: string | null;
+  image?: string | null; // 앨범 커버(없으면 업로드 이미지)
 };
 
 type BackendSong = {
@@ -39,7 +39,8 @@ type ByPhotoResponse = {
 };
 
 /** ---------- 유틸 ---------- */
-const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  !!v && typeof v === "object" && !Array.isArray(v);
 
 const isBackendSong = (v: unknown): v is BackendSong => {
   if (!isRecord(v)) return false;
@@ -85,14 +86,67 @@ async function resolveImageUrl(photoId: string): Promise<string | null> {
     try {
       const r = await fetch(url, { method: "GET" });
       if (r.ok) return url;
-    } catch {
-      /* ignore */
-    }
+    } catch {}
   }
   return null;
 }
 
-/** ---------- 컴포넌트 ---------- */
+/* =======================  Spotify 앨범 커버 (Search API 사용)  ======================= */
+type SpotifyImage = { url: string; height: number; width: number };
+type SpotifyTrackItem = { id: string; name: string; album: { id?: string; name?: string; images: SpotifyImage[] } };
+type SpotifySearchResponse = { items: SpotifyTrackItem[]; total: number };
+
+function extractSpotifyImage(json: any): string | null {
+  const items: SpotifyTrackItem[] = json?.items ?? json?.tracks?.items ?? [];
+  for (const it of items) {
+    const imgs: SpotifyImage[] = it?.album?.images ?? (it as any)?.images ?? [];
+    const url = imgs?.[1]?.url || imgs?.[0]?.url || imgs?.[2]?.url || null;
+    if (url) return url;
+  }
+  return null;
+}
+
+const coverCache = new Map<string, string | null>();
+const songKey = (title?: string, artist?: string) =>
+  `${(title ?? "").trim().toLowerCase()}|${(artist ?? "").trim().toLowerCase()}`;
+
+async function findAlbumCover(title?: string, artist?: string, signal?: AbortSignal): Promise<string | null> {
+  const key = songKey(title, artist);
+  if (!key.replace(/\|/g, "")) return null;
+  if (coverCache.has(key)) return coverCache.get(key) ?? null;
+
+  const term = [title ?? "", artist ?? ""].join(" ").trim();
+  if (!term) {
+    coverCache.set(key, null);
+    return null;
+  }
+
+  try {
+    const url = `${API_BASE}/api/spotify/search?query=${encodeURIComponent(term)}&limit=1`;
+    const r = await fetch(url, { signal });
+    if (!r.ok) {
+      coverCache.set(key, null);
+      return null;
+    }
+    const json = (await r.json()) as SpotifySearchResponse | { error?: unknown };
+    if ("error" in json) {
+      coverCache.set(key, null);
+      return null;
+    }
+    const img = extractSpotifyImage(json);
+    coverCache.set(key, img ?? null);
+    return img ?? null;
+  } catch {
+    coverCache.set(key, null);
+    return null;
+  }
+}
+
+const isPlaceholder = (img?: string | null, placeholder?: string | null) =>
+  !img || !img.length || img === placeholder || img.endsWith("/placeholder.svg");
+
+/* =======================  컴포넌트  ======================= */
+
 export default function RecommendClient() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -124,9 +178,79 @@ export default function RecommendClient() {
     };
   }, [photoId]);
 
-  /** 2) 추천(by-photo) — 백엔드 /api/recommendations/by-photo/:photoId 만 호출 */
+  /** 부드러운 무한 회전: 전역 1회 주입 + animationName 고정 */
+  const injectedSpinCSS = useRef(false);
+  useEffect(() => {
+    if (injectedSpinCSS.current) return;
+    const id = "cd-spin-style";
+    if (!document.getElementById(id)) {
+      const style = document.createElement("style");
+      style.id = id;
+      style.textContent = `
+        @keyframes cdSpin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }
+        .cd-spin {
+          animation-name: cdSpin;
+          animation-timing-function: linear;
+          animation-iteration-count: infinite;
+          will-change: transform;
+          transform: translateZ(0);
+          backface-visibility: hidden;
+          contain: paint;
+          pointer-events: none;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .cd-spin { animation: none !important; }
+        }
+      `;
+      document.head.appendChild(style);
+    }
+    injectedSpinCSS.current = true;
+  }, []);
+
+  const SPIN_MS = 8000; // 1회전 8초
+  const spinDynamic: React.CSSProperties = useMemo(
+    () => ({
+      animationDuration: `${SPIN_MS}ms`,
+      animationPlayState: isPlaying ? "running" : "paused",
+    }),
+    [isPlaying]
+  );
+
+  /** 2) 추천(by-photo) */
   useEffect(() => {
     let mounted = true;
+    const abort = new AbortController();
+
+    const hydrateCovers = async (base: Song[], placeholder: string | null) => {
+      const out = [...base];
+      if (mounted) setRecommendations(out);
+
+      const targets = out
+        .map((s, idx) => ({ s, idx }))
+        .filter(({ s }) => isPlaceholder(s.image, placeholder));
+
+      let cursor = 0;
+      const worker = async () => {
+        while (cursor < targets.length && mounted) {
+          const i = cursor++;
+          const { s, idx } = targets[i];
+          const img = await findAlbumCover(s.title, s.artist, abort.signal);
+          if (img && mounted) {
+            out[idx] = { ...s, image: img };
+            setRecommendations((prev) => {
+              const next = [...prev];
+              const pos = next.findIndex((x) => x.id === out[idx].id);
+              if (pos >= 0) next[pos] = out[idx];
+              return next;
+            });
+            setCurrentSong((prev) => (prev && prev.id === out[idx].id ? out[idx] : prev));
+          }
+        }
+      };
+
+      await Promise.all([worker(), worker(), worker()]);
+      return out;
+    };
 
     const fetchByPhoto = async () => {
       if (!photoId) return;
@@ -134,60 +258,40 @@ export default function RecommendClient() {
         const r = await fetch(`${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(photoId)}?debug=1`);
         if (!r.ok) {
           console.error("[by-photo] 실패:", r.status, await r.text());
-          setRecommendations([]);
-          setCurrentSong(null);
+          setRecommendations([]); setCurrentSong(null);
           return;
         }
 
         const raw: unknown = await r.json();
-        console.log("[by-photo raw]", raw);
+        const obj = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
 
-        // 응답 파싱
-        let data: ByPhotoResponse;
+        const data: ByPhotoResponse = obj
+          ? {
+              main_mood: typeof obj["main_mood"] === "string" ? (obj["main_mood"] as string) : null,
+              sub_mood: typeof obj["sub_mood"] === "string" ? (obj["sub_mood"] as string) : null,
+              main_songs: toBackendSongArray(obj["main_songs"]),
+              sub_songs: toBackendSongArray(obj["sub_songs"]),
+              preferred_songs: toBackendSongArray(obj["preferred_songs"]),
+            }
+          : { main_songs: [], sub_songs: [], preferred_songs: [] };
 
-        const obj =
-          raw && typeof raw === "object" && !Array.isArray(raw)
-            ? (raw as Record<string, unknown>)
-            : null;
-
-        if (obj) {
-          data = {
-            main_mood: typeof obj["main_mood"] === "string" ? (obj["main_mood"] as string) : null,
-            sub_mood:  typeof obj["sub_mood"]  === "string" ? (obj["sub_mood"]  as string) : null,
-            main_songs:       toBackendSongArray(obj["main_songs"]),
-            sub_songs:        toBackendSongArray(obj["sub_songs"]),
-            preferred_songs:  toBackendSongArray(obj["preferred_songs"]),
-          };
-        } else {
-          data = { main_songs: [], sub_songs: [], preferred_songs: [] };
-        }
-
-        // ⬇︎ 순서: 메인(5) → 선호장르(3) → 서브(2)
         const merged: BackendSong[] = [
           ...(data.main_songs ?? []),
           ...(data.preferred_songs ?? []),
           ...(data.sub_songs ?? []),
         ];
 
-        // dedup by music_id/id
         const seen = new Set<string | number>();
         const dedup: BackendSong[] = [];
         merged.forEach((s, i) => {
           const id = (s.music_id ?? s.id ?? i) as string | number;
-          if (!seen.has(id)) {
-            seen.add(id);
-            dedup.push(s);
-          }
+          if (!seen.has(id)) { seen.add(id); dedup.push(s); }
         });
 
-        // 렌더용 변환
-        const songs: Song[] = dedup.map((it, idx) => {
+        const baseSongs: Song[] = dedup.map((it, idx) => {
           const sec =
-            typeof it.duration === "number"
-              ? it.duration
-              : typeof it.duration_sec === "number"
-              ? it.duration_sec
-              : 180;
+            typeof it.duration === "number" ? it.duration :
+            typeof it.duration_sec === "number" ? it.duration_sec : 180;
           const mm = Math.floor(sec / 60);
           const ss = String(sec % 60).padStart(2, "0");
           return {
@@ -201,24 +305,23 @@ export default function RecommendClient() {
         });
 
         if (mounted) {
-          setRecommendations(songs);
-          const first = songs[0] ?? null;
+          setRecommendations(baseSongs);
+          const first = baseSongs[0] ?? null;
           setCurrentSong(first);
           setCurrentTime(0);
           setIsPlaying(false);
           setDuration(parseDurationToSec(first?.duration));
         }
+
+        await hydrateCovers(baseSongs, uploadedImage ?? "/placeholder.svg");
       } catch (e) {
         console.error("추천 불러오기 오류:", e);
-        setRecommendations([]);
-        setCurrentSong(null);
+        setRecommendations([]); setCurrentSong(null);
       }
     };
 
     fetchByPhoto();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; abort.abort(); };
   }, [photoId, uploadedImage]);
 
   /** 3) 타이머 */
@@ -270,11 +373,12 @@ export default function RecommendClient() {
       {/* CD Player - Left Side */}
       <div className="flex items-center justify-center flex-1">
         <div className="relative">
-          <div className={`relative w-80 h-80 ${isPlaying ? "animate-spin" : ""}`} style={{ animationDuration: "4s" }}>
+          {/* animate-spin 제거, 전역 .cd-spin 클래스 + 동적 playState 만 변경 */}
+          <div className="relative w-80 h-80 cd-spin" style={spinDynamic}>
             <div className="w-full h-full rounded-full bg-gradient-to-br from-slate-200 via-slate-300 to-slate-400 shadow-2xl border-4 border-slate-300 relative">
               <div
                 className="w-full h-full rounded-full overflow-hidden border-8 border-slate-800 relative z-10 bg-center bg-cover"
-                style={{ backgroundImage: `url(${currentSong?.image ?? safeImageSrc})` }}
+                style={{ backgroundImage: `url(${safeImageSrc})` }}  // 업로드한 사진 고정
               >
                 <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 bg-slate-900/90 rounded-full shadow-inner flex items-center justify-center">
                   <div className="w-8 h-8 bg-slate-950 rounded-full"></div>
@@ -287,15 +391,13 @@ export default function RecommendClient() {
 
       {/* Right Side - Song Info & Playlist */}
       <div className="flex flex-col justify-center flex-1 h-full ml-8">
-        {/* Song Info & Controls - Upper Section */}
+        {/* Song Info & Controls */}
         <div className="flex flex-col items-center mb-8">
-          {/* Album Cover */}
           <div
             className="w-24 h-24 rounded-lg overflow-hidden mb-4 bg-center bg-cover border border-white/20"
             style={{ backgroundImage: `url(${currentSong?.image ?? safeImageSrc})` }}
           />
 
-          {/* Song Info */}
           <div className="text-center mb-4">
             <h3 className="text-white text-2xl font-semibold mb-1">{currentSong?.title ?? "—"}</h3>
             <p className="text-slate-300 text-lg mb-3">{currentSong?.artist ?? "—"}</p>
@@ -306,7 +408,6 @@ export default function RecommendClient() {
             )}
           </div>
 
-          {/* Progress Bar */}
           <div className="w-full max-w-md mb-6">
             <div className="flex justify-between text-slate-300 text-sm mb-2">
               <span>{formatTime(currentTime)}</span>
@@ -322,7 +423,6 @@ export default function RecommendClient() {
             />
           </div>
 
-          {/* Controls */}
           <div className="flex items-center space-x-6">
             <Button
               size="icon"
@@ -340,11 +440,7 @@ export default function RecommendClient() {
               onClick={togglePlay}
               aria-label={isPlaying ? "pause" : "play"}
             >
-              {isPlaying ? (
-                <Pause className="h-7 w-7 text-white" />
-              ) : (
-                <Play className="h-7 w-7 text-white" />
-              )}
+              {isPlaying ? <Pause className="h-7 w-7 text-white" /> : <Play className="h-7 w-7 text-white" />}
             </Button>
 
             <Button
@@ -359,7 +455,7 @@ export default function RecommendClient() {
           </div>
         </div>
 
-        {/* Playlist - Lower Section */}
+        {/* Playlist */}
         <div className="flex-1 bg-black/30 backdrop-blur-sm rounded-2xl p-4 max-h-80">
           <h2 className="text-white font-bold text-lg mb-4">추천 음악</h2>
           <div className="overflow-y-auto h-full">
@@ -443,11 +539,9 @@ export default function RecommendClient() {
 
   return (
     <div className="fixed inset-0 z-40 bg-black bg-opacity-95 flex items-center justify-center">
-      {/* 배경 */}
       <div className="absolute inset-0 bg-cover bg-center blur-md scale-110" style={safeBgStyle} />
       <div className="absolute inset-0 bg-gradient-to-br from-purple-900/30 via-black/50 to-pink-900/30"></div>
 
-      {/* 닫기 */}
       <div className="absolute top-6 right-6 z-50">
         <button
           onClick={handleClose}
@@ -458,7 +552,6 @@ export default function RecommendClient() {
         </button>
       </div>
 
-      {/* 좌/우 뷰 전환 */}
       <button
         onClick={handlePrevView}
         className="absolute left-6 top-1/2 -translate-y-1/2 z-40 bg-white/10 hover:bg-white/20 backdrop-blur-sm rounded-full p-4 transition-all duration-200 hover:scale-110 border border-white/20"
@@ -474,8 +567,9 @@ export default function RecommendClient() {
         <ChevronRight className="h-6 w-6 text-white" />
       </button>
 
-      {/* 메인 View */}
-      <div className="relative z-30 w-full h-full flex items-center justify-center px-20">{renderCurrentView()}</div>
+      <div className="relative z-30 w-full h-full flex items-center justify-center px-20">
+        {renderCurrentView()}
+      </div>
     </div>
   );
 }
