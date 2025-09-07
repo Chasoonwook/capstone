@@ -1,50 +1,24 @@
-// Backend/server.js
+// CAPSTONE_APP_BACK/server.js
 const path = require("path");
 const fs = require("fs");
 const express = require("express");
 const cors = require("cors");
 
-/* ── dotenv: 현재 파일(서버) 디렉터리의 .env를 명시적으로 로드 ── */
-require("dotenv").config({
-  path: path.join(__dirname, ".env"),
-  debug: true,
-});
+// .env는 현재 파일 옆에서 고정 로드
+require("dotenv").config({ path: path.join(__dirname, ".env"), debug: true });
 
-const pool = require("./db");
 const app = express();
-
-/* ─────────────────────────────────────────
- * 부팅 로그(배포 문제 원인 파악용)
- * ───────────────────────────────────────── */
-console.log("[boot] cwd=", process.cwd(), " __dirname=", __dirname);
-const ROUTES_DIR = path.join(__dirname, "routes");
-console.log("[boot] routes dir exists:", fs.existsSync(ROUTES_DIR));
-
-/* ─────────────────────────────────────────
- * 기본 설정
- * ───────────────────────────────────────── */
 app.set("trust proxy", 1);
 app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-/* ─────────────────────────────────────────
- * CORS
- * ───────────────────────────────────────── */
+/* CORS (생략 없이 그대로 사용) */
 const normalize = (s) => s.replace(/\/+$/, "");
 const envList = (process.env.CORS_ORIGINS || "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean)
-  .map(normalize);
-
-const defaultAllow = [
-  "http://localhost:3000",
-  "http://127.0.0.1:3000",
-  "https://capstone-front-tau.vercel.app",
-];
+  .split(",").map(s=>s.trim()).filter(Boolean).map(normalize);
+const defaultAllow = ["http://localhost:3000","http://127.0.0.1:3000","https://capstone-front-tau.vercel.app"];
 const allowList = envList.length ? envList : defaultAllow;
-
-const corsOptions = {
+app.use(cors({
   origin(origin, cb) {
     if (!origin) return cb(null, true);
     try {
@@ -60,27 +34,18 @@ const corsOptions = {
   methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
   allowedHeaders: ["Content-Type","Authorization","X-Requested-With","x-user-id"],
   optionsSuccessStatus: 204,
-};
-app.use(cors(corsOptions));
-app.options(/.*/, cors(corsOptions));
+}));
 
-/* ─────────────────────────────────────────
- * 헬스체크
- * ───────────────────────────────────────── */
-app.get("/", (_req, res) => res.send("정상작동"));
-app.get("/health", async (_req, res) => {
-  try { await pool.query("SELECT 1"); res.send("Server & Database connection OK"); }
-  catch (e) { console.error(e); res.status(500).send("Database connection failed"); }
-});
+/* Health */
+app.get("/", (_req,res)=>res.send("정상작동"));
+app.get("/health", (_req,res)=>res.send("Server OK"));
 
-/* ─────────────────────────────────────────
- * 안전 로더(절대경로 + 상세로그)
- * ───────────────────────────────────────── */
+/* ── 라우터 안전 로더(절대경로) ── */
 function loadRoute(relPath) {
   try {
     const abs = path.join(__dirname, relPath);
     if (!fs.existsSync(abs) && !fs.existsSync(abs + ".js")) {
-      console.warn(`[router] skip: ${relPath} (file not found) abs=${abs}`);
+      console.warn(`[router] skip: ${relPath} (not found) abs=${abs}`);
       return null;
     }
     const mod = require(abs);
@@ -97,9 +62,7 @@ function loadRoute(relPath) {
   }
 }
 
-/* ─────────────────────────────────────────
- * 라우터 마운트
- * ───────────────────────────────────────── */
+/* ── 실제 마운트 ── */
 const mounts = [
   ["/api/photos",          "routes/photos"],
   ["/api/recommendations", "routes/recommendations"],
@@ -110,7 +73,7 @@ const mounts = [
   ["/api",                 "routes/onboarding"],
   ["/api/history",         "routes/history"],
   ["/api/music-requests",  "routes/musicRequests"],
-  ["/api/spotify",         "routes/spotify"],       // ✅ 여기!
+  ["/api/spotify",         "routes/spotify"],      // ✅ 이 줄이 핵심
 ];
 
 const mounted = [];
@@ -120,27 +83,24 @@ for (const [base, rel] of mounts) {
 }
 console.log("[router] mounted:", mounted);
 
-/* ─────────────────────────────────────────
- * 디버그: 등록 라우트/환경
- * ───────────────────────────────────────── */
+/* ── 디버그 ── */
 function collectRoutes(layer, prefix = "") {
   const out = [];
   if (layer.route && layer.route.path) {
     const methods = Object.keys(layer.route.methods || {}).filter(Boolean);
     out.push({ method: methods.join(","), path: prefix + layer.route.path });
   } else if (layer.name === "router" && layer.handle?.stack) {
-    const base =
-      layer.regexp?.fast_slash
-        ? ""
-        : (layer.regexp?.toString() || "")
-            .replace(/^\/\^\\\//, "/")
-            .replace(/\\\/\?\(\?=\\\/\|\$\)\/[a-z]*$/, "");
+    const base = layer.regexp?.fast_slash
+      ? ""
+      : (layer.regexp?.toString() || "")
+          .replace(/^\/\^\\\//, "/")
+          .replace(/\\\/\?\(\?=\\\/\|\$\)\/[a-z]*$/, "");
     layer.handle.stack.forEach((l) => out.push(...collectRoutes(l, prefix + base)));
   }
   return out;
 }
 
-app.get("/debug/routes", (req, res) => {
+app.get("/debug/routes", (_req,res) => {
   try {
     const stack = app._router?.stack || [];
     const routes = [];
@@ -149,32 +109,24 @@ app.get("/debug/routes", (req, res) => {
       ok: true,
       version: "routes-v1",
       env: {
-        PUBLIC_API_BASE: process.env.PUBLIC_API_BASE || null,
-        AI_BASE_URL: process.env.AI_BASE_URL || null,
         SPOTIFY_ID_SET: !!process.env.SPOTIFY_CLIENT_ID,
         SPOTIFY_SECRET_SET: !!process.env.SPOTIFY_CLIENT_SECRET,
         cwd: process.cwd(),
         dirname: __dirname,
-        routesDirExists: fs.existsSync(ROUTES_DIR),
+        routesDirExists: fs.existsSync(path.join(__dirname,"routes")),
       },
       mounted,
-      routes: routes
-        .filter((r) => r.path)
-        .sort((a,b)=> (a.path+a.method).localeCompare(b.path+b.method)),
+      routes: routes.filter(r=>r.path).sort((a,b)=>(a.path+a.method).localeCompare(b.path+b.method)),
     });
   } catch (e) {
     res.status(500).json({ ok:false, error: e.message });
   }
 });
 
-/* ─────────────────────────────────────────
- * 404 / Error
- * ───────────────────────────────────────── */
-app.use((req, res, next) => { if (res.headersSent) return next(); res.status(404).json({ error: "not found", path: req.originalUrl }); });
-app.use((err, _req, res, _next) => { console.error("[error]", err); res.status(500).json({ error: "internal error" }); });
+/* 404/에러 */
+app.use((req,res,next)=>{ if(res.headersSent) return next(); res.status(404).json({ error:"not found", path: req.originalUrl }); });
+app.use((err,_req,res,_next)=>{ console.error("[error]", err); res.status(500).json({ error:"internal error" }); });
 
-/* ─────────────────────────────────────────
- * Start
- * ───────────────────────────────────────── */
+/* Start */
 const PORT = Number(process.env.PORT || 5000);
 app.listen(PORT, () => console.log(`[server] listening on :${PORT}`));
