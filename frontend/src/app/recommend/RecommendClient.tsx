@@ -131,7 +131,7 @@ export default function RecommendClient() {
     const fetchByPhoto = async () => {
       if (!photoId) return;
       try {
-        const r = await fetch(`${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(photoId)}`);
+        const r = await fetch(`${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(photoId)}?debug=1`);
         if (!r.ok) {
           console.error("[by-photo] 실패:", r.status, await r.text());
           setRecommendations([]);
@@ -140,6 +140,7 @@ export default function RecommendClient() {
         }
 
         const raw: unknown = await r.json();
+        console.log("[by-photo raw]", raw);
 
         // 응답 파싱
         let data: ByPhotoResponse;
