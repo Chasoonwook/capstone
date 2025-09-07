@@ -21,7 +21,8 @@ h5py>=3.8,<4
 # --- 딥페이스 / YOLO ---
 deepface==0.0.93
 # ultralytics는 deps 설치 안 하고 headless OpenCV 사용
-ultralytics==8.3.168 --no-deps
+# 뒤에 붙여서 사용 --no-deps
+ultralytics==8.3.168 
 
 # --- PyTorch (CPU 전용) ---
 --extra-index-url https://download.pytorch.org/whl/cpu
