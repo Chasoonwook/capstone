@@ -7,31 +7,24 @@ const router = express.Router();
 const norm = (s) => (typeof s === "string" ? s.trim() : null);
 const lowTrim = (s) => (typeof s === "string" ? s.trim().toLowerCase() : s);
 
-// 라벨 후보: 원형 / ' 분위기' 제거/추가 / '…함' ↔ '…한' 양쪽 생성
+// 라벨 후보: 원형 / ' 분위기' 추가·제거 / '…함'↔'…한' 변형
 function buildLabelCandidates(label) {
   const s = typeof label === "string" ? label.trim() : "";
   if (!s) return [];
-
-  // 접미사 ' 분위기' 제거
   const base = s.replace(/\s*분위기$/, "");
 
-  // '함' ↔ '한' 변형
   const alt =
     base.endsWith("함") ? base.replace(/함$/, "한")
   : base.endsWith("한") ? base.replace(/한$/, "함")
   : null;
 
-  const cand = new Set([
-    base,                   // e.g., '희망적', '따뜻함'
-    `${base} 분위기`,       // e.g., '희망적 분위기', '따뜻함 분위기'
+  const set = new Set([
+    base,                 // 희망적 / 따뜻함
+    `${base} 분위기`,     // 희망적 분위기 / 따뜻함 분위기
+    ...(alt ? [alt, `${alt} 분위기`] : []), // 따뜻한 / 따뜻한 분위기
   ]);
-  if (alt) {
-    cand.add(alt);          // '따뜻한'
-    cand.add(`${alt} 분위기`); // '따뜻한 분위기'
-  }
-  return Array.from(cand);
+  return Array.from(set);
 }
-
 
 /** 선호 장르 가져오기 (쿼리 → 헤더 → (원하면 DB로 확장)) */
 async function getPreferredGenres(req) {
@@ -48,26 +41,30 @@ async function getPreferredGenres(req) {
   return [];
 }
 
-/** 후보 라벨(+선택 장르)로 랜덤 N곡 */
+// 후보 라벨(+선호 장르)로 랜덤 N곡
 async function fetchRandomByLabels({ candidates, limit, genres }) {
   if (!candidates?.length || !limit) return [];
-  const normCands = candidates.map(lowTrim);
+  const normCands = candidates.map((x) => x.toLowerCase().trim());
 
-  const params = [normCands];
-  let idx = 2;
+  const params = [];
+  let idx = 1;
 
-  let where = `lower(trim(label)) = ANY($1)`;
+  // ✅ text[]로 명시 캐스팅
+  let where = `lower(trim(label)) = ANY($${idx++}::text[])`;
+  params.push(normCands);
 
   if (Array.isArray(genres) && genres.length) {
-    where += ` AND lower(trim(genre)) = ANY($${idx++})`;
-    params.push(genres.map(lowTrim));
+    where += ` AND lower(trim(genre)) = ANY($${idx++}::text[])`;
+    params.push(genres.map((g) => g.toLowerCase().trim()));
   }
 
   params.push(limit);
   const lim = `$${idx++}`;
 
   const sql = `
-    SELECT music_id, title, artist, label, genre
+    SELECT
+      COALESCE(music_id, id) AS music_id,
+      title, artist, label, genre
     FROM music
     WHERE ${where}
     ORDER BY RANDOM()
@@ -76,6 +73,7 @@ async function fetchRandomByLabels({ candidates, limit, genres }) {
   const { rows } = await pool.query(sql, params);
   return rows;
 }
+
 
 /** 디버그용 카운트 */
 async function countByLabels({ candidates, genres }) {
