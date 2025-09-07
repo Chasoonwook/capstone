@@ -24,6 +24,10 @@ const nextConfig: NextConfig = {
         port: "31645",
         pathname: "/**",
       },
+      {
+        protocol: "https", hostname: "i.scdn.co"
+        
+      }
     ],
   },
 };
