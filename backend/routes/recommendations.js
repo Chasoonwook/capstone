@@ -1,3 +1,6 @@
+// 맨 위에 한 줄 로그(배포 로그에서 새 라우터 로드 여부 확인용)
+console.log("[recs] router loaded v3");  // ← 이 줄이 Render Logs에 찍혀야 함
+
 // routes/recommendations.js
 const express = require("express");
 const pool = require("../db");
@@ -107,9 +110,9 @@ async function countByLabels({ candidates, genres }) {
   return out;
 }
 
-/* ---------- 핑: 새 코드가 배포됐는지 확인용 ---------- */
+// 새 코드가 올라왔는지 확인용 핑
 router.get("/__ping", (_req, res) => {
-  res.json({ ok: true, from: "routes/recommendations.js", version: "recs-v3", now: new Date().toISOString() });
+  res.json({ ok: true, from: "routes/recommendations.js", version: "recs-v3" });
 });
 
 /* ---------- 메인 라우트 ---------- */
