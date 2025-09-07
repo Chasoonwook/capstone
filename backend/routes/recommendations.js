@@ -3,7 +3,7 @@ const express = require("express");
 const pool = require("../db");
 const router = express.Router();
 
-/* ------------ utils ------------ */
+/* ---------- utils ---------- */
 const norm = (s) => (typeof s === "string" ? s.trim() : null);
 const lowTrim = (s) => (typeof s === "string" ? s.trim().toLowerCase() : s);
 
@@ -12,7 +12,6 @@ function buildLabelCandidates(label) {
   const s = typeof label === "string" ? label.trim() : "";
   if (!s) return [];
   const base = s.replace(/\s*분위기$/, "");
-
   const alt =
     base.endsWith("함") ? base.replace(/함$/, "한")
   : base.endsWith("한") ? base.replace(/한$/, "함")
@@ -26,7 +25,7 @@ function buildLabelCandidates(label) {
   return Array.from(set);
 }
 
-// 선호 장르(쿼리→헤더) — 필요 시 DB 조회로 확장 가능
+// 선호 장르(쿼리→헤더)
 async function getPreferredGenres(req) {
   if (typeof req.query.genres === "string") {
     return req.query.genres.split(",").map((x) => x.trim()).filter(Boolean);
@@ -40,7 +39,7 @@ async function getPreferredGenres(req) {
   return [];
 }
 
-// 후보 라벨(+선호장르)로 랜덤 N곡  ✅ ANY($n::text[]) 캐스팅 + id/music_id 호환
+// 후보 라벨(+선호장르)로 랜덤 N곡  ✅ ANY($n::text[]) 캐스팅, id/music_id 호환
 async function fetchRandomByLabels({ candidates, limit, genres }) {
   if (!candidates?.length || !limit) return [];
   const normCands = candidates.map(lowTrim);
@@ -60,9 +59,7 @@ async function fetchRandomByLabels({ candidates, limit, genres }) {
   const lim = `$${idx++}`;
 
   const sql = `
-    SELECT
-      COALESCE(music_id, id) AS music_id,
-      title, artist, label, genre
+    SELECT COALESCE(music_id, id) AS music_id, title, artist, label, genre
     FROM music
     WHERE ${where}
     ORDER BY RANDOM()
@@ -75,12 +72,10 @@ async function fetchRandomByLabels({ candidates, limit, genres }) {
 // 아무 조건 없이 랜덤 N곡 (폴백용)
 async function fetchRandomAny(limit) {
   const { rows } = await pool.query(
-    `
-    SELECT COALESCE(music_id, id) AS music_id, title, artist, label, genre
-    FROM music
-    ORDER BY RANDOM()
-    LIMIT $1
-    `,
+    `SELECT COALESCE(music_id, id) AS music_id, title, artist, label, genre
+     FROM music
+     ORDER BY RANDOM()
+     LIMIT $1`,
     [limit]
   );
   return rows;
@@ -116,7 +111,7 @@ async function countByLabels({ candidates, genres }) {
   return out;
 }
 
-/* ------------ route ------------ */
+/* ---------- route ---------- */
 // 사진ID 기반 추천 10곡: 메인5 + 서브2 + (선호장르)3, 모자라면 전체 랜덤으로 보충
 router.get("/by-photo/:photoId", async (req, res) => {
   const debug = String(req.query.debug || "") === "1";
@@ -126,13 +121,11 @@ router.get("/by-photo/:photoId", async (req, res) => {
 
     // 1) 최신 분석값
     const { rows: aRows } = await pool.query(
-      `
-      SELECT main_mood, sub_mood
-      FROM photo_analysis
-      WHERE photo_id = $1
-      ORDER BY analyzed_at DESC
-      LIMIT 1
-      `,
+      `SELECT main_mood, sub_mood
+         FROM photo_analysis
+        WHERE photo_id = $1
+        ORDER BY analyzed_at DESC
+        LIMIT 1`,
       [photoId]
     );
     if (!aRows.length) {
@@ -167,12 +160,9 @@ router.get("/by-photo/:photoId", async (req, res) => {
       if (seen.has(id)) return false;
       seen.add(id); arr.push(item); return true;
     };
-
-    // 먼저 기존으로 채우며 seen 마킹
     [main_songs, sub_songs, preferred_songs] = [main_songs, sub_songs, preferred_songs].map((lst) => {
       const out = []; lst.forEach((it) => dedupPush(out, it)); return out;
     });
-
     const fill = async (arr, count) => {
       if (arr.length >= count) return arr;
       const extra = await fetchRandomAny(count - arr.length);
@@ -183,7 +173,6 @@ router.get("/by-photo/:photoId", async (req, res) => {
     sub_songs = await fill(sub_songs, need.sub);
     preferred_songs = await fill(preferred_songs, need.preferred);
 
-    // 4) 응답
     const payload = {
       main_mood, sub_mood, preferred_genres,
       main_songs, sub_songs, preferred_songs,
