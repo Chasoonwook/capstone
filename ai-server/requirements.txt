@@ -1,26 +1,30 @@
-fastapi
-uvicorn
-pydantic==2.*
+# --- API 서버 기본 ---
+fastapi>=0.110
+uvicorn[standard]>=0.23
+pydantic>=2.6
 httpx
 python-multipart
 pillow
-opencv-python-headless
-numpy<2.0
+gdown
 
-# tf/keras를 같은 세대로 고정
+# --- 이미지/수치 처리 ---
+# numpy: TF 2.15 호환 (>=1.23.5,<2.0)
+numpy==1.26.4
+# OpenCV: numpy 1.26과 호환되는 마지막 안정판
+opencv-python-headless==4.9.0.80
+
+# --- TensorFlow / Keras ---
 tensorflow==2.15.0
 keras==2.15.0
+h5py>=3.8,<4
 
-# deepface / yolo
+# --- 딥페이스 / YOLO ---
 deepface==0.0.93
-ultralytics==8.3.168
+# ultralytics는 deps 설치 안 하고 headless OpenCV 사용
+ultralytics==8.3.168 --no-deps
 
-# PyTorch (CPU)
+# --- PyTorch (CPU 전용) ---
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.1.2
 torchvision==0.16.2
 torchaudio==2.1.2
-
-# H5 패치용
-h5py
-gdown
