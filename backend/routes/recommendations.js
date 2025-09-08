@@ -67,7 +67,7 @@ async function fetchRandomByLabels({ candidates, limit, genres }) {
 /** 아무 조건 없이 랜덤 N곡(폴백용) */
 async function fetchRandomAny(limit) {
   const { rows } = await pool.query(
-    `SELECT COALESCE(music_id) AS music_id, title, artist, label, genre
+    `SELECT COALESCE(music_id, id) AS music_id, title, artist, label, genre
        FROM music
    ORDER BY RANDOM()
       LIMIT $1`,
