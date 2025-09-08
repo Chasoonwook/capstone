@@ -162,6 +162,13 @@ async function findAlbumCover(title?: string, artist?: string, signal?: AbortSig
 const isPlaceholder = (img?: string | null, placeholder?: string | null) =>
   !img || !img.length || img === placeholder || img.endsWith("/placeholder.svg");
 
+/** ---- AbortError 타입가드 (ESLint any 방지) ---- */
+function isAbortError(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const maybe = err as Record<string, unknown>;
+  return typeof maybe.name === "string" && maybe.name === "AbortError";
+}
+
 /* =======================  컴포넌트  ======================= */
 
 export default function RecommendClient() {
@@ -183,6 +190,9 @@ export default function RecommendClient() {
 
   const [isRefreshing, setIsRefreshing] = useState(false);
 
+  // 가로/세로 판별
+  const [isLandscape, setIsLandscape] = useState<boolean | null>(null);
+
   /** 1) 업로드 이미지 URL */
   useEffect(() => {
     let mounted = true;
@@ -193,6 +203,16 @@ export default function RecommendClient() {
     })();
     return () => { mounted = false; };
   }, [photoId]);
+
+  // 원본의 가로/세로 비율 판별 (여백 없이 맞추기 위함)
+  useEffect(() => {
+    if (!uploadedImage) { setIsLandscape(null); return; }
+    const img = new window.Image();
+    img.src = uploadedImage;
+    img.onload = () => {
+      setIsLandscape(img.naturalWidth > img.naturalHeight);
+    };
+  }, [uploadedImage]);
 
   /** 전역 회전 키프레임 (CD 뷰 전용) */
   const injectedSpinCSS = useRef(false);
@@ -305,8 +325,8 @@ export default function RecommendClient() {
         setDuration(parseDurationToSec(first?.duration));
 
         await hydrateCovers(baseSongs, null);
-      } catch (e) {
-        if ((e as any)?.name === "AbortError") return;
+      } catch (e: unknown) {
+        if (isAbortError(e)) return;
         console.error("추천 불러오기 오류:", e);
         setRecommendations([]); setCurrentSong(null);
       }
@@ -501,21 +521,31 @@ export default function RecommendClient() {
   /** ---------- 뷰들 ---------- */
 
   // 1) 새 기본 뷰: 원본 사진을 크게 보여주는 '사진 플레이어' 뷰
-  const PhotoPlayerView = () => (
-    <div className="flex items-center justify-between w-full h-full px-8">
-      {/* Left: 업로드 원본 사진 */}
-      <div className="flex items-center justify-center flex-1">
-        <div
-          className="w-[36rem] h-[36rem] max-w-[90vw] max-h-[80vh] rounded-3xl shadow-2xl border border-white/20 
-                     bg-center bg-contain bg-no-repeat bg-black/40"
-          style={{ backgroundImage: `url(${safeImageSrc})` }}
-          aria-label="uploaded photo"
-        />
+  // - 세로형: 기존 정사각형(36rem) 박스에 object-cover로 꽉 차게 (여백 없음)
+  // - 가로형: 더 가로로 넓은 박스(44rem x 28rem)에 object-cover로 채워서 레터박스/여백 제거
+  const PhotoPlayerView = () => {
+    // 박스 크기를 비율에 따라 다르게
+    const portraitBox = "w-[36rem] h-[36rem]";
+    const landscapeBox = "w-[44rem] h-[28rem]"; // ~16:10
+    const box = isLandscape ? landscapeBox : portraitBox;
+
+    return (
+      <div className="flex items-center justify-between w-full h-full px-8">
+        {/* Left: 업로드 원본 사진 (img + object-cover) */}
+        <div className="flex items-center justify-center flex-1">
+          {uploadedImage && (
+            <img
+              src={uploadedImage}
+              alt="uploaded photo"
+              className={`${box} max-w-[90vw] max-h-[80vh] rounded-3xl shadow-2xl border border-white/20 object-cover`}
+            />
+          )}
+        </div>
+        {/* Right: 공통 패널 */}
+        <RightPane />
       </div>
-      {/* Right: 공통 패널 */}
-      <RightPane />
-    </div>
-  );
+    );
+  };
 
   // 2) 기존 CD 플레이어 뷰 (오른쪽으로 이동하면 보임)
   const CDPlayerView = () => (
