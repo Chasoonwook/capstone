@@ -1,12 +1,13 @@
+// src/app/recommend/RecommendClient.tsx
 "use client";
 
 import Image from "next/image";
 import type React from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Play, Pause, SkipBack, SkipForward, X, ChevronLeft, ChevronRight } from "lucide-react";
+import { Play, Pause, SkipBack, SkipForward, X, ChevronLeft, ChevronRight, RotateCcw } from "lucide-react";
 import { API_BASE } from "@/lib/api";
 
 /** ---------- 타입 ---------- */
@@ -113,15 +114,13 @@ const isSpotifyTrackItem = (v: unknown): v is SpotifyTrackItem =>
   typeof v.name === "string" &&
   isRecord(v.album ?? {}) &&
   (isSpotifyImageArray((v.album as Record<string, unknown>).images) ||
-    Array.isArray((v.album as Record<string, unknown>).images)); // 느슨 허용(스포티파이 필드 일관성 이슈 대비)
+    Array.isArray((v.album as Record<string, unknown>).images));
 
 const getItemsArray = (json: unknown): SpotifyTrackItem[] => {
   if (!isRecord(json)) return [];
-  // 지원 형태 1: { items: [...] }
   if (Array.isArray(json.items) && json.items.every(isSpotifyTrackItem)) {
     return json.items as SpotifyTrackItem[];
   }
-  // 지원 형태 2: { tracks: { items: [...] } }
   if (
     isRecord(json.tracks) &&
     Array.isArray(json.tracks.items) &&
@@ -139,9 +138,6 @@ function extractSpotifyImage(json: unknown): string | null {
     const imgs = Array.isArray(it.album.images) ? it.album.images : [];
     const url = imgs?.[1]?.url || imgs?.[0]?.url || imgs?.[2]?.url || null;
     if (url) return url;
-
-    // (드물게) 이미지가 album이 아닌 루트/다른 필드에 오는 경우를 매우 보수적으로 처리
-    // 여기서는 안전을 위해 무시 (규격 외 응답)
   }
   return null;
 }
@@ -202,6 +198,9 @@ export default function RecommendClient() {
 
   const [currentViewIndex, setCurrentViewIndex] = useState(0);
 
+  // 새로고침 상태
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
   /** 1) 업로드 이미지 URL */
   useEffect(() => {
     let mounted = true;
@@ -256,46 +255,48 @@ export default function RecommendClient() {
     [isPlaying]
   );
 
-  /** 2) 추천(by-photo) */
-  useEffect(() => {
-    let mounted = true;
-    const abort = new AbortController();
+  /** 2) 추천 불러오기 로직 (공용) */
+  const fetchRecommendations = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!photoId) {
+        setRecommendations([]);
+        setCurrentSong(null);
+        return;
+      }
 
-    const hydrateCovers = async (base: Song[], placeholder: string | null) => {
-      const out = [...base];
-      if (mounted) setRecommendations(out);
+      const hydrateCovers = async (base: Song[], placeholder: string | null) => {
+        const out = [...base];
+        setRecommendations(out);
 
-      const targets = out
-        .map((s, idx) => ({ s, idx }))
-        .filter(({ s }) => isPlaceholder(s.image, placeholder));
+        const targets = out
+          .map((s, idx) => ({ s, idx }))
+          .filter(({ s }) => isPlaceholder(s.image, placeholder));
 
-      let cursor = 0;
-      const worker = async () => {
-        while (cursor < targets.length && mounted) {
-          const i = cursor++;
-          const { s, idx } = targets[i];
-          const img = await findAlbumCover(s.title, s.artist, abort.signal);
-          if (img && mounted) {
-            out[idx] = { ...s, image: img };
-            setRecommendations((prev) => {
-              const next = [...prev];
-              const pos = next.findIndex((x) => x.id === out[idx].id);
-              if (pos >= 0) next[pos] = out[idx];
-              return next;
-            });
-            setCurrentSong((prev) => (prev && prev.id === out[idx].id ? out[idx] : prev));
+        let cursor = 0;
+        const worker = async () => {
+          while (cursor < targets.length) {
+            const i = cursor++;
+            const { s, idx } = targets[i];
+            const img = await findAlbumCover(s.title, s.artist, signal);
+            if (img) {
+              out[idx] = { ...s, image: img };
+              setRecommendations((prev) => {
+                const next = [...prev];
+                const pos = next.findIndex((x) => x.id === out[idx].id);
+                if (pos >= 0) next[pos] = out[idx];
+                return next;
+              });
+              setCurrentSong((prev) => (prev && prev.id === out[idx].id ? out[idx] : prev));
+            }
           }
-        }
+        };
+
+        await Promise.all([worker(), worker(), worker()]);
+        return out;
       };
 
-      await Promise.all([worker(), worker(), worker()]);
-      return out;
-    };
-
-    const fetchByPhoto = async () => {
-      if (!photoId) return;
       try {
-        const r = await fetch(`${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(photoId)}?debug=1`);
+        const r = await fetch(`${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(photoId)}?debug=1`, { signal });
         if (!r.ok) {
           console.error("[by-photo] 실패:", r.status, await r.text());
           setRecommendations([]); setCurrentSong(null);
@@ -344,25 +345,36 @@ export default function RecommendClient() {
           };
         });
 
-        if (mounted) {
-          setRecommendations(baseSongs);
-          const first = baseSongs[0] ?? null;
-          setCurrentSong(first);
-          setCurrentTime(0);
-          setIsPlaying(false);
-          setDuration(parseDurationToSec(first?.duration));
-        }
+        setRecommendations(baseSongs);
+        const first = baseSongs[0] ?? null;
+        setCurrentSong(first);
+        setCurrentTime(0);
+        setIsPlaying(false);
+        setDuration(parseDurationToSec(first?.duration));
 
         await hydrateCovers(baseSongs, null);
       } catch (e) {
+        if ((e as any)?.name === "AbortError") return;
         console.error("추천 불러오기 오류:", e);
         setRecommendations([]); setCurrentSong(null);
       }
-    };
+    },
+    [photoId]
+  );
 
-    fetchByPhoto();
-    return () => { mounted = false; abort.abort(); };
-  }, [photoId]);
+  /** 첫 로드 */
+  useEffect(() => {
+    let mounted = true;
+    const abort = new AbortController();
+    (async () => {
+      if (!mounted) return;
+      await fetchRecommendations(abort.signal);
+    })();
+    return () => {
+      mounted = false;
+      abort.abort();
+    };
+  }, [fetchRecommendations]);
 
   /** 3) 타이머 */
   useEffect(() => {
@@ -407,13 +419,29 @@ export default function RecommendClient() {
   const safeImageSrc = useMemo(() => uploadedImage || "/placeholder.svg", [uploadedImage]);
   const safeBgStyle = useMemo(() => ({ backgroundImage: `url(${safeImageSrc})` }), [safeImageSrc]);
 
+  /** 새로고침 핸들러 */
+  const handleRefresh = async () => {
+    if (isRefreshing) return;
+    try {
+      setIsRefreshing(true);
+      // 새로고침 시 현재 재생/타이머 초기화
+      setIsPlaying(false);
+      setCurrentTime(0);
+      // 필요 시 커버 캐시를 초기화하고 싶다면 주석 해제
+      // coverCache.clear();
+      await fetchRecommendations();
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   /** ---------- 뷰들 ---------- */
   const CDPlayerView = () => (
     <div className="flex items-center justify-between w-full h-full px-8">
       {/* CD Player - Left Side */}
       <div className="flex items-center justify-center flex-1">
         <div className="relative">
-          {/* animate-spin 제거, 전역 .cd-spin 클래스 + 동적 playState 만 변경 */}
+          {/* 전역 .cd-spin + playState */}
           <div className="relative w-80 h-80 cd-spin" style={spinDynamic}>
             <div className="w-full h-full rounded-full bg-gradient-to-br from-slate-200 via-slate-300 to-slate-400 shadow-2xl border-4 border-slate-300 relative">
               <div
@@ -497,7 +525,23 @@ export default function RecommendClient() {
 
         {/* Playlist */}
         <div className="flex-1 bg-black/30 backdrop-blur-sm rounded-2xl p-4 max-h-80">
-          <h2 className="text-white font-bold text-lg mb-4">추천 음악</h2>
+          {/* 헤더: 좌측 제목, 우측 새로고침 버튼 */}
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-white font-bold text-lg">추천 음악</h2>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="text-slate-200 hover:bg-white/10 border border-white/10"
+              aria-label="refresh recommendations"
+              title="추천 다시 받기"
+            >
+              <RotateCcw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+              <span className="ml-2 text-xs">{isRefreshing ? "새로고침 중…" : "새로고침"}</span>
+            </Button>
+          </div>
+
           <div className="overflow-y-auto h-full">
             {recommendations.length > 0 ? (
               <div className="space-y-2">
@@ -543,7 +587,9 @@ export default function RecommendClient() {
                 ))}
               </div>
             ) : (
-              <div className="text-center text-slate-400 py-8">추천 음악이 없습니다.</div>
+              <div className="text-center text-slate-400 py-8">
+                {isRefreshing ? "추천을 새로 불러오는 중입니다…" : "추천 음악이 없습니다."}
+              </div>
             )}
           </div>
         </div>
