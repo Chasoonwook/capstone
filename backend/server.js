@@ -30,6 +30,8 @@ const defaultAllow = [
 
 const allowList = envAllow.length ? envAllow : defaultAllow;
 
+const spotifyRouter = require("./routes/spotify");
+
 const corsOptions = {
   origin(origin, cb) {
     // 서버-서버/포스트맨/크론 등 Origin 없는 요청 허용
@@ -53,6 +55,8 @@ const corsOptions = {
 app.use(cors(corsOptions));
 // 모든 경로에 대해 사전검사(Preflight) 허용
 app.options(/.*/, cors(corsOptions));
+
+app.use("/api/spotify", spotifyRouter);
 
 /* ---------------------------
  * Health
