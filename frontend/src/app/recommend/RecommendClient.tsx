@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
@@ -300,7 +301,7 @@ export default function RecommendClient() {
             artist: it.artist ?? "Unknown Artist",
             genre: it.genre ?? it.label ?? "UNKNOWN",
             duration: `${mm}:${ss}`,
-            image: uploadedImage ?? "/placeholder.svg",
+            image: null,
           };
         });
 
@@ -313,7 +314,7 @@ export default function RecommendClient() {
           setDuration(parseDurationToSec(first?.duration));
         }
 
-        await hydrateCovers(baseSongs, uploadedImage ?? "/placeholder.svg");
+        await hydrateCovers(baseSongs, null);
       } catch (e) {
         console.error("추천 불러오기 오류:", e);
         setRecommendations([]); setCurrentSong(null);
@@ -322,7 +323,7 @@ export default function RecommendClient() {
 
     fetchByPhoto();
     return () => { mounted = false; abort.abort(); };
-  }, [photoId, uploadedImage]);
+  }, [photoId]);
 
   /** 3) 타이머 */
   useEffect(() => {
@@ -476,10 +477,20 @@ export default function RecommendClient() {
                         : ""
                     }`}
                   >
-                    <div
-                      className="flex-shrink-0 w-12 h-12 rounded-lg overflow-hidden mr-3 border border-white/10 bg-center bg-cover"
-                      style={{ backgroundImage: `url(${song.image ?? uploadedImage ?? "/placeholder.svg"})` }}
-                    />
+                    {(() => {
+                      const cover = song.image ?? uploadedImage ?? "/placeholder.svg";
+                      return cover ? (
+                        <Image
+                          src={cover}
+                          alt={song.title ?? "album cover"}
+                          width={48}
+                          height={48}
+                          className="rounded-lg mr-3 border border-white/10 flex-shrink-0"
+                        />
+                      ) : (
+                        <div className="w-12 h-12 rounded-lg mr-3 bg-gray-300/40" />
+                      );
+                    })()}
                     <div className="flex-1 min-w-0">
                       <p className="text-white font-medium truncate text-sm">{song.title}</p>
                       <p className="text-slate-300 text-xs truncate">{song.artist}</p>
