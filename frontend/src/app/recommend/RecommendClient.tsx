@@ -7,7 +7,9 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Play, Pause, SkipBack, SkipForward, X, ChevronLeft, ChevronRight, RotateCcw } from "lucide-react";
+import {
+  Play, Pause, SkipBack, SkipForward, X, ChevronLeft, ChevronRight, RotateCcw
+} from "lucide-react";
 import { API_BASE } from "@/lib/api";
 
 /** ---------- 타입 ---------- */
@@ -16,8 +18,8 @@ type Song = {
   title: string;
   artist: string;
   genre: string;
-  duration?: string; // "mm:ss"
-  image?: string | null; // 앨범 커버(없으면 업로드 이미지)
+  duration?: string;
+  image?: string | null;
 };
 
 type BackendSong = {
@@ -27,8 +29,8 @@ type BackendSong = {
   artist?: string;
   label?: string;
   genre?: string;
-  duration?: number;      // 초 단위일 수도 있음
-  duration_sec?: number;  // 초 단위
+  duration?: number;
+  duration_sec?: number;
 };
 
 type ByPhotoResponse = {
@@ -93,17 +95,13 @@ async function resolveImageUrl(photoId: string): Promise<string | null> {
   return null;
 }
 
-/* =======================  Spotify 앨범 커버 (Search API 사용)  ======================= */
+/* =======================  Spotify 앨범 커버  ======================= */
 type SpotifyImage = { url: string; height: number; width: number };
 type SpotifyTrackItem = { id: string; name: string; album: { id?: string; name?: string; images: SpotifyImage[] } };
 type SpotifySearchResponse = { items: SpotifyTrackItem[]; total: number };
 
-/** ---- 타입가드 ---- */
 const isSpotifyImage = (v: unknown): v is SpotifyImage =>
-  isRecord(v) &&
-  typeof v.url === "string" &&
-  typeof v.height === "number" &&
-  typeof v.width === "number";
+  isRecord(v) && typeof v.url === "string" && typeof v.height === "number" && typeof v.width === "number";
 
 const isSpotifyImageArray = (v: unknown): v is SpotifyImage[] =>
   Array.isArray(v) && v.every(isSpotifyImage);
@@ -118,20 +116,12 @@ const isSpotifyTrackItem = (v: unknown): v is SpotifyTrackItem =>
 
 const getItemsArray = (json: unknown): SpotifyTrackItem[] => {
   if (!isRecord(json)) return [];
-  if (Array.isArray(json.items) && json.items.every(isSpotifyTrackItem)) {
-    return json.items as SpotifyTrackItem[];
-  }
-  if (
-    isRecord(json.tracks) &&
-    Array.isArray(json.tracks.items) &&
-    (json.tracks.items as unknown[]).every(isSpotifyTrackItem)
-  ) {
+  if (Array.isArray(json.items) && json.items.every(isSpotifyTrackItem)) return json.items as SpotifyTrackItem[];
+  if (isRecord(json.tracks) && Array.isArray(json.tracks.items) && (json.tracks.items as unknown[]).every(isSpotifyTrackItem))
     return json.tracks.items as SpotifyTrackItem[];
-  }
   return [];
 };
 
-/** ---- any 제거 버전 ---- */
 function extractSpotifyImage(json: unknown): string | null {
   const items = getItemsArray(json);
   for (const it of items) {
@@ -152,23 +142,14 @@ async function findAlbumCover(title?: string, artist?: string, signal?: AbortSig
   if (coverCache.has(key)) return coverCache.get(key) ?? null;
 
   const term = [title ?? "", artist ?? ""].join(" ").trim();
-  if (!term) {
-    coverCache.set(key, null);
-    return null;
-  }
+  if (!term) { coverCache.set(key, null); return null; }
 
   try {
     const url = `${API_BASE}/api/spotify/search?query=${encodeURIComponent(term)}&limit=1`;
     const r = await fetch(url, { signal });
-    if (!r.ok) {
-      coverCache.set(key, null);
-      return null;
-    }
+    if (!r.ok) { coverCache.set(key, null); return null; }
     const json = (await r.json()) as SpotifySearchResponse | { error?: unknown } | unknown;
-    if (isRecord(json) && "error" in json) {
-      coverCache.set(key, null);
-      return null;
-    }
+    if (isRecord(json) && "error" in json) { coverCache.set(key, null); return null; }
     const img = extractSpotifyImage(json);
     coverCache.set(key, img ?? null);
     return img ?? null;
@@ -196,28 +177,24 @@ export default function RecommendClient() {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(180);
 
+  // 기본 뷰를 '사진 플레이어'로
   const [currentViewIndex, setCurrentViewIndex] = useState(0);
+  const views = ["photo", "cd", "instagram", "default"] as const;
 
-  // 새로고침 상태
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   /** 1) 업로드 이미지 URL */
   useEffect(() => {
     let mounted = true;
     (async () => {
-      if (!photoId) {
-        setUploadedImage(null);
-        return;
-      }
+      if (!photoId) { setUploadedImage(null); return; }
       const url = await resolveImageUrl(photoId);
       if (mounted) setUploadedImage(url ?? "/placeholder.svg");
     })();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [photoId]);
 
-  /** 부드러운 무한 회전: 전역 1회 주입 + animationName 고정 */
+  /** 전역 회전 키프레임 (CD 뷰 전용) */
   const injectedSpinCSS = useRef(false);
   useEffect(() => {
     if (injectedSpinCSS.current) return;
@@ -227,51 +204,31 @@ export default function RecommendClient() {
       style.id = id;
       style.textContent = `
         @keyframes cdSpin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }
-        .cd-spin {
-          animation-name: cdSpin;
-          animation-timing-function: linear;
-          animation-iteration-count: infinite;
-          will-change: transform;
-          transform: translateZ(0);
-          backface-visibility: hidden;
-          contain: paint;
-          pointer-events: none;
-        }
-        @media (prefers-reduced-motion: reduce) {
-          .cd-spin { animation: none !important; }
-        }
+        .cd-spin { animation-name: cdSpin; animation-timing-function: linear; animation-iteration-count: infinite;
+          will-change: transform; transform: translateZ(0); backface-visibility: hidden; contain: paint; pointer-events: none; }
+        @media (prefers-reduced-motion: reduce) { .cd-spin { animation: none !important; } }
       `;
       document.head.appendChild(style);
     }
     injectedSpinCSS.current = true;
   }, []);
 
-  const SPIN_MS = 8000; // 1회전 8초
+  const SPIN_MS = 8000;
   const spinDynamic: React.CSSProperties = useMemo(
-    () => ({
-      animationDuration: `${SPIN_MS}ms`,
-      animationPlayState: isPlaying ? "running" : "paused",
-    }),
+    () => ({ animationDuration: `${SPIN_MS}ms`, animationPlayState: isPlaying ? "running" : "paused" }),
     [isPlaying]
   );
 
-  /** 2) 추천 불러오기 로직 (공용) */
+  /** 2) 추천 불러오기 (공용) */
   const fetchRecommendations = useCallback(
     async (signal?: AbortSignal) => {
-      if (!photoId) {
-        setRecommendations([]);
-        setCurrentSong(null);
-        return;
-      }
+      if (!photoId) { setRecommendations([]); setCurrentSong(null); return; }
 
       const hydrateCovers = async (base: Song[], placeholder: string | null) => {
         const out = [...base];
         setRecommendations(out);
 
-        const targets = out
-          .map((s, idx) => ({ s, idx }))
-          .filter(({ s }) => isPlaceholder(s.image, placeholder));
-
+        const targets = out.map((s, idx) => ({ s, idx })).filter(({ s }) => isPlaceholder(s.image, placeholder));
         let cursor = 0;
         const worker = async () => {
           while (cursor < targets.length) {
@@ -290,18 +247,13 @@ export default function RecommendClient() {
             }
           }
         };
-
         await Promise.all([worker(), worker(), worker()]);
         return out;
       };
 
       try {
         const r = await fetch(`${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(photoId)}?debug=1`, { signal });
-        if (!r.ok) {
-          console.error("[by-photo] 실패:", r.status, await r.text());
-          setRecommendations([]); setCurrentSong(null);
-          return;
-        }
+        if (!r.ok) { console.error("[by-photo] 실패:", r.status, await r.text()); setRecommendations([]); setCurrentSong(null); return; }
 
         const raw: unknown = await r.json();
         const obj = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
@@ -364,19 +316,12 @@ export default function RecommendClient() {
 
   /** 첫 로드 */
   useEffect(() => {
-    let mounted = true;
     const abort = new AbortController();
-    (async () => {
-      if (!mounted) return;
-      await fetchRecommendations(abort.signal);
-    })();
-    return () => {
-      mounted = false;
-      abort.abort();
-    };
+    (async () => { await fetchRecommendations(abort.signal); })();
+    return () => { abort.abort(); };
   }, [fetchRecommendations]);
 
-  /** 3) 타이머 */
+  /** 타이머 */
   useEffect(() => {
     if (!isPlaying) return;
     const id = setInterval(() => {
@@ -385,7 +330,7 @@ export default function RecommendClient() {
     return () => clearInterval(id);
   }, [isPlaying, duration]);
 
-  /** 4) 컨트롤 */
+  /** 컨트롤 */
   const togglePlay = () => setIsPlaying((p) => !p);
 
   const playNextSong = () => {
@@ -415,38 +360,173 @@ export default function RecommendClient() {
     if (Number.isFinite(val)) setCurrentTime(Math.min(Math.max(val, 0), duration));
   };
 
-  /** 5) 배경 이미지 */
+  /** 배경 이미지 */
   const safeImageSrc = useMemo(() => uploadedImage || "/placeholder.svg", [uploadedImage]);
   const safeBgStyle = useMemo(() => ({ backgroundImage: `url(${safeImageSrc})` }), [safeImageSrc]);
 
-  /** 새로고침 핸들러 */
+  /** 새로고침 */
   const handleRefresh = async () => {
     if (isRefreshing) return;
     try {
       setIsRefreshing(true);
-      // 새로고침 시 현재 재생/타이머 초기화
       setIsPlaying(false);
       setCurrentTime(0);
-      // 필요 시 커버 캐시를 초기화하고 싶다면 주석 해제
-      // coverCache.clear();
       await fetchRecommendations();
     } finally {
       setIsRefreshing(false);
     }
   };
 
+  /** ----- 공통 Right Pane (곡정보/컨트롤/플레이리스트) ----- */
+  const RightPane = () => (
+    <div className="flex flex-col justify-center flex-1 h-full ml-8">
+      {/* Song Info & Controls */}
+      <div className="flex flex-col items-center mb-8">
+        <div
+          className="w-24 h-24 rounded-lg overflow-hidden mb-4 bg-center bg-cover border border-white/20"
+          style={{ backgroundImage: `url(${currentSong?.image ?? safeImageSrc})` }}
+        />
+        <div className="text-center mb-4">
+          <h3 className="text-white text-2xl font-semibold mb-1">{currentSong?.title ?? "—"}</h3>
+          <p className="text-slate-300 text-lg mb-3">{currentSong?.artist ?? "—"}</p>
+          {currentSong?.genre && (
+            <Badge className="bg-gradient-to-r from-purple-500 to-pink-500 text-white border-0 px-4 py-1">
+              {currentSong.genre}
+            </Badge>
+          )}
+        </div>
+
+        <div className="w-full max-w-md mb-6">
+          <div className="flex justify-between text-slate-300 text-sm mb-2">
+            <span>{formatTime(currentTime)}</span>
+            <span>{formatTime(duration)}</span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={duration}
+            value={currentTime}
+            onChange={handleSeek}
+            className="w-full accent-purple-500"
+          />
+        </div>
+
+        <div className="flex items-center space-x-6">
+          <Button size="icon" variant="ghost" className="rounded-full bg-white/10 hover:bg-white/20 w-12 h-12"
+                  onClick={playPreviousSong} aria-label="previous">
+            <SkipBack className="h-5 w-5 text-white" />
+          </Button>
+
+          <Button size="icon"
+                  className="rounded-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 w-16 h-16"
+                  onClick={togglePlay} aria-label={isPlaying ? "pause" : "play"}>
+            {isPlaying ? <Pause className="h-7 w-7 text-white" /> : <Play className="h-7 w-7 text-white" />}
+          </Button>
+
+          <Button size="icon" variant="ghost" className="rounded-full bg-white/10 hover:bg-white/20 w-12 h-12"
+                  onClick={playNextSong} aria-label="next">
+            <SkipForward className="h-5 w-5 text-white" />
+          </Button>
+        </div>
+      </div>
+
+      {/* Playlist */}
+      <div className="flex-1 bg-black/30 backdrop-blur-sm rounded-2xl p-4 max-h-80">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-white font-bold text-lg">추천 음악</h2>
+          <Button
+            variant="ghost" size="sm" onClick={handleRefresh} disabled={isRefreshing}
+            className="text-slate-200 hover:bg-white/10 border border-white/10"
+            aria-label="refresh recommendations" title="추천 다시 받기"
+          >
+            <RotateCcw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+            <span className="ml-2 text-xs">{isRefreshing ? "새로고침 중…" : "새로고침"}</span>
+          </Button>
+        </div>
+
+        <div className="overflow-y-auto h-full">
+          {recommendations.length > 0 ? (
+            <div className="space-y-2">
+              {recommendations.map((song) => (
+                <div
+                  key={song.id}
+                  onClick={() => {
+                    setCurrentSong(song);
+                    setCurrentTime(0);
+                    setDuration(parseDurationToSec(song.duration));
+                    setIsPlaying(true);
+                  }}
+                  className={`flex items-center p-3 rounded-xl cursor-pointer transition-all duration-200 hover:bg-white/10 ${
+                    currentSong?.id === song.id
+                      ? "bg-gradient-to-r from-purple-500/30 to-pink-500/30 border border-purple-400/50"
+                      : ""
+                  }`}
+                >
+                  {(() => {
+                    const cover = song.image ?? uploadedImage ?? "/placeholder.svg";
+                    return cover ? (
+                      <Image
+                        src={cover}
+                        alt={song.title ?? "album cover"}
+                        width={48}
+                        height={48}
+                        className="rounded-lg mr-3 border border-white/10 flex-shrink-0"
+                      />
+                    ) : (
+                      <div className="w-12 h-12 rounded-lg mr-3 bg-gray-300/40" />
+                    );
+                  })()}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-white font-medium truncate text-sm">{song.title}</p>
+                    <p className="text-slate-300 text-xs truncate">{song.artist}</p>
+                  </div>
+                  <div className="flex-shrink-0 ml-2">
+                    <Badge variant="secondary" className="bg-white/10 text-slate-300 text-xs px-2 py-0.5 border-0">
+                      {song.genre}
+                    </Badge>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center text-slate-400 py-8">
+              {isRefreshing ? "추천을 새로 불러오는 중입니다…" : "추천 음악이 없습니다."}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
   /** ---------- 뷰들 ---------- */
+
+  // 1) 새 기본 뷰: 원본 사진을 크게 보여주는 '사진 플레이어' 뷰
+  const PhotoPlayerView = () => (
+    <div className="flex items-center justify-between w-full h-full px-8">
+      {/* Left: 업로드 원본 사진 */}
+      <div className="flex items-center justify-center flex-1">
+        <div
+          className="w-[36rem] h-[36rem] max-w-[90vw] max-h-[80vh] rounded-3xl shadow-2xl border border-white/20 
+                     bg-center bg-contain bg-no-repeat bg-black/40"
+          style={{ backgroundImage: `url(${safeImageSrc})` }}
+          aria-label="uploaded photo"
+        />
+      </div>
+      {/* Right: 공통 패널 */}
+      <RightPane />
+    </div>
+  );
+
+  // 2) 기존 CD 플레이어 뷰 (오른쪽으로 이동하면 보임)
   const CDPlayerView = () => (
     <div className="flex items-center justify-between w-full h-full px-8">
-      {/* CD Player - Left Side */}
       <div className="flex items-center justify-center flex-1">
         <div className="relative">
-          {/* 전역 .cd-spin + playState */}
           <div className="relative w-80 h-80 cd-spin" style={spinDynamic}>
             <div className="w-full h-full rounded-full bg-gradient-to-br from-slate-200 via-slate-300 to-slate-400 shadow-2xl border-4 border-slate-300 relative">
               <div
                 className="w-full h-full rounded-full overflow-hidden border-8 border-slate-800 relative z-10 bg-center bg-cover"
-                style={{ backgroundImage: `url(${safeImageSrc})` }}  // 업로드한 사진 고정
+                style={{ backgroundImage: `url(${safeImageSrc})` }}
               >
                 <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 bg-slate-900/90 rounded-full shadow-inner flex items-center justify-center">
                   <div className="w-8 h-8 bg-slate-950 rounded-full"></div>
@@ -456,144 +536,7 @@ export default function RecommendClient() {
           </div>
         </div>
       </div>
-
-      {/* Right Side - Song Info & Playlist */}
-      <div className="flex flex-col justify-center flex-1 h-full ml-8">
-        {/* Song Info & Controls */}
-        <div className="flex flex-col items-center mb-8">
-          <div
-            className="w-24 h-24 rounded-lg overflow-hidden mb-4 bg-center bg-cover border border-white/20"
-            style={{ backgroundImage: `url(${currentSong?.image ?? safeImageSrc})` }}
-          />
-
-          <div className="text-center mb-4">
-            <h3 className="text-white text-2xl font-semibold mb-1">{currentSong?.title ?? "—"}</h3>
-            <p className="text-slate-300 text-lg mb-3">{currentSong?.artist ?? "—"}</p>
-            {currentSong?.genre && (
-              <Badge className="bg-gradient-to-r from-purple-500 to-pink-500 text-white border-0 px-4 py-1">
-                {currentSong.genre}
-              </Badge>
-            )}
-          </div>
-
-          <div className="w-full max-w-md mb-6">
-            <div className="flex justify-between text-slate-300 text-sm mb-2">
-              <span>{formatTime(currentTime)}</span>
-              <span>{formatTime(duration)}</span>
-            </div>
-            <input
-              type="range"
-              min={0}
-              max={duration}
-              value={currentTime}
-              onChange={handleSeek}
-              className="w-full accent-purple-500"
-            />
-          </div>
-
-          <div className="flex items-center space-x-6">
-            <Button
-              size="icon"
-              variant="ghost"
-              className="rounded-full bg-white/10 hover:bg-white/20 w-12 h-12"
-              onClick={playPreviousSong}
-              aria-label="previous"
-            >
-              <SkipBack className="h-5 w-5 text-white" />
-            </Button>
-
-            <Button
-              size="icon"
-              className="rounded-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 w-16 h-16"
-              onClick={togglePlay}
-              aria-label={isPlaying ? "pause" : "play"}
-            >
-              {isPlaying ? <Pause className="h-7 w-7 text-white" /> : <Play className="h-7 w-7 text-white" />}
-            </Button>
-
-            <Button
-              size="icon"
-              variant="ghost"
-              className="rounded-full bg-white/10 hover:bg-white/20 w-12 h-12"
-              onClick={playNextSong}
-              aria-label="next"
-            >
-              <SkipForward className="h-5 w-5 text-white" />
-            </Button>
-          </div>
-        </div>
-
-        {/* Playlist */}
-        <div className="flex-1 bg-black/30 backdrop-blur-sm rounded-2xl p-4 max-h-80">
-          {/* 헤더: 좌측 제목, 우측 새로고침 버튼 */}
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-white font-bold text-lg">추천 음악</h2>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleRefresh}
-              disabled={isRefreshing}
-              className="text-slate-200 hover:bg-white/10 border border-white/10"
-              aria-label="refresh recommendations"
-              title="추천 다시 받기"
-            >
-              <RotateCcw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
-              <span className="ml-2 text-xs">{isRefreshing ? "새로고침 중…" : "새로고침"}</span>
-            </Button>
-          </div>
-
-          <div className="overflow-y-auto h-full">
-            {recommendations.length > 0 ? (
-              <div className="space-y-2">
-                {recommendations.map((song) => (
-                  <div
-                    key={song.id}
-                    onClick={() => {
-                      setCurrentSong(song);
-                      setCurrentTime(0);
-                      setDuration(parseDurationToSec(song.duration));
-                      setIsPlaying(true);
-                    }}
-                    className={`flex items-center p-3 rounded-xl cursor-pointer transition-all duration-200 hover:bg-white/10 ${
-                      currentSong?.id === song.id
-                        ? "bg-gradient-to-r from-purple-500/30 to-pink-500/30 border border-purple-400/50"
-                        : ""
-                    }`}
-                  >
-                    {(() => {
-                      const cover = song.image ?? uploadedImage ?? "/placeholder.svg";
-                      return cover ? (
-                        <Image
-                          src={cover}
-                          alt={song.title ?? "album cover"}
-                          width={48}
-                          height={48}
-                          className="rounded-lg mr-3 border border-white/10 flex-shrink-0"
-                        />
-                      ) : (
-                        <div className="w-12 h-12 rounded-lg mr-3 bg-gray-300/40" />
-                      );
-                    })()}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-white font-medium truncate text-sm">{song.title}</p>
-                      <p className="text-slate-300 text-xs truncate">{song.artist}</p>
-                    </div>
-                    <div className="flex-shrink-0 ml-2">
-                      <Badge variant="secondary" className="bg-white/10 text-slate-300 text-xs px-2 py-0.5 border-0">
-                        {song.genre}
-                      </Badge>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="text-center text-slate-400 py-8">
-                {isRefreshing ? "추천을 새로 불러오는 중입니다…" : "추천 음악이 없습니다."}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
+      <RightPane />
     </div>
   );
 
@@ -610,8 +553,9 @@ export default function RecommendClient() {
   );
 
   const renderCurrentView = () => {
-    const views = ["cd", "instagram", "default"] as const;
     switch (views[currentViewIndex]) {
+      case "photo":
+        return <PhotoPlayerView />;
       case "cd":
         return <CDPlayerView />;
       case "instagram":
@@ -623,21 +567,16 @@ export default function RecommendClient() {
 
   /** 네비게이션/뷰 전환 */
   const handleClose = () => {
-    try {
-      router.replace("/");
-    } catch {
-      (window as unknown as { location: Location }).location.href = "/";
-    }
+    try { router.replace("/"); } catch { (window as unknown as { location: Location }).location.href = "/"; }
   };
 
-  const handlePrevView = () => setCurrentViewIndex((prev) => (prev - 1 + 3) % 3);
-  const handleNextView = () => setCurrentViewIndex((prev) => (prev + 1) % 3);
+  const handlePrevView = () => setCurrentViewIndex((prev) => (prev - 1 + views.length) % views.length);
+  const handleNextView = () => setCurrentViewIndex((prev) => (prev + 1) % views.length);
 
   return (
     <div className="fixed inset-0 z-40 bg-black bg-opacity-95 flex items-center justify-center">
       <div className="absolute inset-0 bg-cover bg-center blur-md scale-110" style={safeBgStyle} />
-      <div className="absolute inset-0 bg-gradient-to-br from-purple-900/30 via-black/50 to-pink-900/30"></div>
-
+      <div className="absolute inset-0 bg-gradient-to-br from-purple-900/30 via-black/50 to-pink-900/30" />
       <div className="absolute top-6 right-6 z-50">
         <button
           onClick={handleClose}
