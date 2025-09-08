@@ -139,13 +139,11 @@ type RefreshResponse = {
   scope?: string;
 };
 
-export async function refreshSpotifyToken(refreshToken: string): Promise<RefreshResponse> {
+export async function refreshSpotifyToken(refreshToken: string) {
   const clientId = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID || process.env.SPOTIFY_CLIENT_ID;
   const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
 
-  if (!clientId || !clientSecret) {
-    throw new Error("Spotify client env vars are missing.");
-  }
+  if (!clientId || !clientSecret) throw new Error("Spotify client env vars are missing.");
 
   const body = new URLSearchParams({
     grant_type: "refresh_token",
@@ -156,11 +154,9 @@ export async function refreshSpotifyToken(refreshToken: string): Promise<Refresh
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
-      Authorization:
-        "Basic " + Buffer.from(`${clientId}:${clientSecret}`).toString("base64"),
+      Authorization: "Basic " + Buffer.from(`${clientId}:${clientSecret}`).toString("base64"), // ← clientId 사용
     },
     body,
-    // Edge에서도 동작하도록 캐시/모드 명시는 생략
   });
 
   if (!res.ok) {

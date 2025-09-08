@@ -598,15 +598,10 @@ export default function RecommendClient() {
                     const cover = song.image ?? uploadedImage ?? "/placeholder.svg";
                     return cover ? (
                       <Image
-                        key={cover}                                   // src 바뀔 때 강제 재렌더
-                        src={cover}
-                        alt={song.title ?? "album cover"}
-                        width={48}
-                        height={48}
-                        sizes="48px"
-                        className="rounded-lg mr-3 border border-white/10 flex-shrink-0 !w-12 !h-12"
-                        style={{ width: 48, height: 48 }}             // height:auto 경고 방지 (둘 다 명시)
-                        unoptimized={typeof cover === "string" && cover.startsWith("data:")} // 데이터 URL 최적화 끔
+                        src={song.image ?? "/placeholder.svg"}
+                        alt={`${song.title} cover`}
+                        width={64}
+                        height={64}
                       />
                     ) : (
                       <div className="w-12 h-12 rounded-lg mr-3 bg-gray-300/40" />
