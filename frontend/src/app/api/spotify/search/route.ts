@@ -7,6 +7,25 @@ export const runtime = "nodejs";
 type AppTok = { accessToken: string; expiresAt: number };
 const g = globalThis as unknown as { __spAppTok?: AppTok };
 
+// 타입 정의 (파일 상단에 추가)
+type SpotifyImage = { url: string; height?: number; width?: number };
+type SpotifyArtist = { id: string; name: string };
+type SpotifyAlbum  = { images?: SpotifyImage[] };
+type SpotifyTrack  = {
+  id: string;
+  name: string;
+  uri: string;
+  preview_url?: string | null;
+  artists?: SpotifyArtist[];
+  album?: SpotifyAlbum;
+};
+type SpotifySearchResponse = {
+  tracks?: {
+    items: SpotifyTrack[];
+    total?: number;
+  };
+};
+
 async function getAppToken(): Promise<string> {
   const now = Date.now();
   if (g.__spAppTok && g.__spAppTok.expiresAt - 10_000 > now) {
@@ -34,8 +53,10 @@ async function getAppToken(): Promise<string> {
 }
 
 // ----- 유틸 -----
-const pickImage = (x: any) =>
-  x?.album?.images?.[1]?.url || x?.album?.images?.[0]?.url || x?.album?.images?.[2]?.url || null;
+const pickImage = (t: SpotifyTrack): string | null => {
+  const imgs = t.album?.images ?? [];
+  return imgs[1]?.url ?? imgs[0]?.url ?? imgs[2]?.url ?? null;
+}
 
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams.get("query")?.trim();
@@ -66,12 +87,12 @@ export async function GET(req: NextRequest) {
       });
       if (!r.ok) continue;
 
-      const js = (await r.json()) as any;
-      const items: any[] = js?.tracks?.items ?? [];
+      const js = (await r.json()) as SpotifySearchResponse;
+      const items: SpotifyTrack[] = js?.tracks?.items ?? [];
       if (!items.length) continue;
 
       // 1-1) 같은 마켓 내에서 preview_url 있는 후보 먼저 선택
-      const withPreview = items.find((t) => !!t?.preview_url);
+      const withPreview = items.find((t: SpotifyTrack) => Boolean(t.preview_url));
       const chosen = withPreview || items[0];
 
       return NextResponse.json({
@@ -83,21 +104,21 @@ export async function GET(req: NextRequest) {
         preview_url: chosen?.preview_url ?? null,
         image: pickImage(chosen),
         // 참고용으로 상위 후보들도 반환
-        items: items.map((x) => ({
-          id: x?.id,
-          name: x?.name,
-          uri: x?.uri,
-          preview_url: x?.preview_url,
-          image: pickImage(x),
-          artists: Array.isArray(x?.artists) ? x.artists.map((a: any) => a.name) : [],
-        })),
+        items: items.map((x: SpotifyTrack) => ({
+            id: x.id,
+            name: x.name,
+            uri: x.uri,
+            preview_url: x.preview_url ?? null,
+            image: pickImage(x),
+            artists: (x.artists ?? []).map((a: SpotifyArtist) => a.name),
+            })),
         total: js?.tracks?.total ?? items.length,
       });
     }
 
     // 모든 마켓에서 못 찾음
     return NextResponse.json({ ok: false, reason: "not_found" }, { status: 404 });
-  } catch (e) {
+  } catch {
     return NextResponse.json({ ok: false, reason: "server_error" }, { status: 500 });
   }
 }

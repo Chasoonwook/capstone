@@ -1,6 +1,5 @@
 // src/lib/spotify.ts
 import { cookies } from "next/headers";
-import type { NextRequest } from "next/server";
 
 /** ---------- 쿠키 헬퍼 (Next.js 14.2+/15) ---------- */
 /** cookies()가 비동기이므로 반드시 await */

@@ -35,9 +35,10 @@ export async function GET() {
       access_token: refreshed.access_token,
       expires_in: refreshed.expires_in,
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json(
-      { error: "Token endpoint failed", detail: String(err?.message ?? err) },
+      { error: "Token endpoint failed", detail: msg },
       { status: 500 },
     );
   }

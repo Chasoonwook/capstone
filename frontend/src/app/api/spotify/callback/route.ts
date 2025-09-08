@@ -51,8 +51,7 @@ export async function GET(req: Request) {
 
     // 4) 성공 리다이렉트
     return NextResponse.redirect(new URL("/?spotify=ok", url));
-  } catch (e) {
-    // 실패 시 에러 코드와 함께 리다이렉트
+  } catch {
     return NextResponse.redirect(new URL("/?spotify=exchange_failed", url));
   }
 }
