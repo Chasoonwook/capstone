@@ -1,43 +1,58 @@
+// src/app/api/spotify/callback/route.ts
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import {
+  VERIFIER_COOKIE,
+  exchangeCodeForToken,
+  setTokenCookies,
+} from "@/lib/spotify";
 
-export const runtime = "nodejs";
+// 필요하면 Node 런타임 고정
+// export const runtime = "nodejs";
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const code = url.searchParams.get("code");
-  const err  = url.searchParams.get("error");
-  if (err) return NextResponse.redirect(new URL("/?spotify=error", url.origin));
-  if (!code) return NextResponse.redirect(new URL("/?spotify=missing_code", url.origin));
+  const err = url.searchParams.get("error");
 
-  const cookie = (req.headers.get("cookie") ?? "");
-  const m = /(?:^|;\s*)sp_verifier=([^;]+)/.exec(cookie);
-  const verifier = m?.[1];
-  if (!verifier) return NextResponse.redirect(new URL("/?spotify=missing_verifier", url.origin));
-
-  const body = new URLSearchParams({
-    grant_type: "authorization_code",
-    code,
-    redirect_uri: process.env.SPOTIFY_REDIRECT_URI!,
-    client_id: process.env.SPOTIFY_CLIENT_ID!,
-    code_verifier: verifier,
-  });
-
-  const tokenRes = await fetch("https://accounts.spotify.com/api/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString(),
-  });
-  if (!tokenRes.ok) return NextResponse.redirect(new URL("/?spotify=token_fail", url.origin));
-
-  const js = await tokenRes.json() as any;
-  const res = NextResponse.redirect(new URL("/?spotify=ok", url.origin));
-
-  // access / refresh 저장
-  const maxAge = Math.max(1, Math.floor((js.expires_in ?? 3600) * 0.9));
-  res.cookies.set("sp_access",  js.access_token,  { httpOnly:true, sameSite:"lax", path:"/", maxAge });
-  if (js.refresh_token) {
-    res.cookies.set("sp_refresh", js.refresh_token, { httpOnly:true, sameSite:"lax", path:"/" });
+  // 에러 콜백
+  if (err) {
+    return NextResponse.redirect(new URL("/?spotify=error", url));
   }
-  res.cookies.set("sp_verifier", "", { httpOnly:true, sameSite:"lax", path:"/", maxAge:0 });
-  return res;
+  if (!code) {
+    return NextResponse.redirect(new URL("/?spotify=missing_code", url));
+  }
+
+  // PKCE verifier 쿠키 읽기 (반드시 await cookies())
+  const store = await cookies();
+  const verifier = store.get(VERIFIER_COOKIE)?.value;
+  if (!verifier) {
+    return NextResponse.redirect(new URL("/?spotify=missing_verifier", url));
+  }
+
+  try {
+    // 1) code + verifier로 토큰 교환
+    const token = await exchangeCodeForToken(code, verifier);
+    // token: { access_token, refresh_token?, token_type, scope?, expires_in }
+
+    // 2) 액세스/리프레시 쿠키 저장 (expires_in은 초 단위)
+    await setTokenCookies(token.access_token, token.refresh_token ?? "", token.expires_in);
+
+    // 3) 일회성 verifier 쿠키 제거
+    store.set({
+      name: VERIFIER_COOKIE,
+      value: "",
+      path: "/",
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      expires: new Date(0),
+    });
+
+    // 4) 성공 리다이렉트
+    return NextResponse.redirect(new URL("/?spotify=ok", url));
+  } catch (e) {
+    // 실패 시 에러 코드와 함께 리다이렉트
+    return NextResponse.redirect(new URL("/?spotify=exchange_failed", url));
+  }
 }

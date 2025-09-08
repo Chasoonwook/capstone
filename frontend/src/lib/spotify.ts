@@ -1,82 +1,172 @@
 // src/lib/spotify.ts
-import "server-only";
-import crypto from "crypto";
+import { cookies } from "next/headers";
+import type { NextRequest } from "next/server";
 
-export const CLIENT_ID = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID!;
-export const CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET!;
-export const REDIRECT_URI = process.env.NEXT_PUBLIC_SPOTIFY_REDIRECT_URI!;
-export const SCOPES =
-  process.env.NEXT_PUBLIC_SPOTIFY_SCOPES ??
-  "user-read-email user-read-private streaming user-read-playback-state user-modify-playback-state";
+/** ---------- 쿠키 헬퍼 (Next.js 14.2+/15) ---------- */
+/** cookies()가 비동기이므로 반드시 await */
+export async function readCookie(name: string): Promise<string | null> {
+  const store = await cookies();
+  return store.get(name)?.value ?? null;
+}
 
-// 쿠키 이름 상수만 노출 (설정/삭제는 각 Route에서 처리)
-export const ACCESS_COOKIE = "sp_access";
-export const REFRESH_COOKIE = "sp_refresh";
 export const VERIFIER_COOKIE = "sp_verifier";
 
-// --- PKCE ---
-export function generateCodeVerifier(len = 64) {
-  const possible = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";
-  let text = "";
-  for (let i = 0; i < len; i++) text += possible.charAt(Math.floor(Math.random() * possible.length));
-  return text;
-}
-export function generateCodeChallenge(verifier: string) {
-  const hash = crypto.createHash("sha256").update(verifier).digest();
-  return hash
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
+type SetCookieOptions = {
+  /** 초 단위 maxAge */
+  maxAge?: number;
+  path?: string;
+  httpOnly?: boolean;
+  secure?: boolean;
+  sameSite?: "lax" | "strict" | "none";
+  expires?: Date;
+  domain?: string;
+};
+
+export async function writeCookie(
+  name: string,
+  value: string,
+  opts: SetCookieOptions = {},
+): Promise<void> {
+  const store = await cookies();
+  const {
+    maxAge,
+    path = "/",
+    httpOnly = true,
+    secure = process.env.NODE_ENV === "production",
+    sameSite = "lax",
+    expires,
+    domain,
+  } = opts;
+
+  store.set({
+    name,
+    value,
+    path,
+    httpOnly,
+    secure,
+    sameSite,
+    ...(typeof maxAge === "number" ? { maxAge } : {}),
+    ...(expires ? { expires } : {}),
+    ...(domain ? { domain } : {}),
+  });
 }
 
-// --- 토큰 교환/갱신 ---
-async function tokenRequest(body: Record<string, string>) {
-  const data = new URLSearchParams(body);
+export async function setTokenCookies(access: string, refresh: string, expiresInSec?: number) {
+  await setAccessCookie(access, expiresInSec);
+  if (refresh) {
+    await setRefreshCookie(refresh);
+  }
+}
+
+export async function exchangeCodeForToken(code: string, verifier: string): Promise<ExchangeResponse> {
+  const clientId = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID || process.env.SPOTIFY_CLIENT_ID;
+  const redirectUri = process.env.NEXT_PUBLIC_SPOTIFY_REDIRECT_URI;
+
+  const body = new URLSearchParams({
+    grant_type: "authorization_code",
+    code,
+    redirect_uri: redirectUri!,
+    code_verifier: verifier,
+  });
+
+  const res = await fetch("https://accounts.spotify.com/api/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+
+  if (!res.ok) throw new Error(`Spotify token exchange failed: ${res.status}`);
+
+  return (await res.json()) as ExchangeResponse;
+}
+
+export type ExchangeResponse = {
+  access_token: string;
+  refresh_token?: string;
+  token_type: string;
+  scope?: string;
+  expires_in: number;
+};
+
+export async function deleteCookie(name: string): Promise<void> {
+  const store = await cookies();
+  // expires 과거로 설정하여 삭제
+  store.set({
+    name,
+    value: "",
+    path: "/",
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    expires: new Date(0),
+  });
+}
+
+/** ---------- 도메인 로직 헬퍼 ---------- */
+const ACCESS_KEY = "sp_access";
+const REFRESH_KEY = "sp_refresh";
+
+/** 액세스/리프레시 토큰 읽기 */
+export async function getAccessCookie(): Promise<string | null> {
+  return readCookie(ACCESS_KEY);
+}
+export async function getRefreshCookie(): Promise<string | null> {
+  return readCookie(REFRESH_KEY);
+}
+
+/** 액세스/리프레시 토큰 쓰기 */
+export async function setAccessCookie(
+  token: string,
+  expiresInSec?: number, // Spotify가 주는 expires_in(sec)
+) {
+  // 만료 60초 전에 재갱신 여유
+  const maxAge = typeof expiresInSec === "number" ? Math.max(0, expiresInSec - 60) : undefined;
+  await writeCookie(ACCESS_KEY, token, { maxAge });
+}
+export async function setRefreshCookie(token: string) {
+  // 리프레시 토큰은 길게(예: 30일) — 필요에 맞게 조정
+  await writeCookie(REFRESH_KEY, token, { maxAge: 60 * 60 * 24 * 30 });
+}
+export async function clearSpotifyCookies() {
+  await deleteCookie(ACCESS_KEY);
+  await deleteCookie(REFRESH_KEY);
+}
+
+/** ---------- Spotify 토큰 갱신 API 호출 ---------- */
+type RefreshResponse = {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  scope?: string;
+};
+
+export async function refreshSpotifyToken(refreshToken: string): Promise<RefreshResponse> {
+  const clientId = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID || process.env.SPOTIFY_CLIENT_ID;
+  const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
+
+  if (!clientId || !clientSecret) {
+    throw new Error("Spotify client env vars are missing.");
+  }
+
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: refreshToken,
+  });
+
   const res = await fetch("https://accounts.spotify.com/api/token", {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
       Authorization:
-        "Basic " + Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`, "utf8").toString("base64"),
+        "Basic " + Buffer.from(`${clientId}:${clientSecret}`).toString("base64"),
     },
-    body: data.toString(),
+    body,
+    // Edge에서도 동작하도록 캐시/모드 명시는 생략
   });
+
   if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`Spotify token error: ${res.status} ${t}`);
+    const text = await res.text().catch(() => "");
+    throw new Error(`Failed to refresh token: ${res.status} ${text}`);
   }
-  return res.json() as Promise<{
-    access_token: string;
-    refresh_token?: string;
-    expires_in: number;
-  }>;
-}
-
-export function buildAuthorizeURL(codeChallenge: string) {
-  const params = new URLSearchParams({
-    client_id: CLIENT_ID,
-    response_type: "code",
-    redirect_uri: REDIRECT_URI,
-    code_challenge_method: "S256",
-    code_challenge: codeChallenge,
-    scope: SCOPES,
-  });
-  return `https://accounts.spotify.com/authorize?${params.toString()}`;
-}
-
-export function exchangeCodeForTokens(code: string, codeVerifier: string) {
-  return tokenRequest({
-    grant_type: "authorization_code",
-    code,
-    redirect_uri: REDIRECT_URI,
-    code_verifier: codeVerifier,
-  });
-}
-
-export function refreshAccessToken(refreshToken: string) {
-  return tokenRequest({
-    grant_type: "refresh_token",
-    refresh_token: refreshToken,
-  });
+  return (await res.json()) as RefreshResponse;
 }
