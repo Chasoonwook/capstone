@@ -97,12 +97,51 @@ type SpotifyImage = { url: string; height: number; width: number };
 type SpotifyTrackItem = { id: string; name: string; album: { id?: string; name?: string; images: SpotifyImage[] } };
 type SpotifySearchResponse = { items: SpotifyTrackItem[]; total: number };
 
-function extractSpotifyImage(json: any): string | null {
-  const items: SpotifyTrackItem[] = json?.items ?? json?.tracks?.items ?? [];
+/** ---- 타입가드 ---- */
+const isSpotifyImage = (v: unknown): v is SpotifyImage =>
+  isRecord(v) &&
+  typeof v.url === "string" &&
+  typeof v.height === "number" &&
+  typeof v.width === "number";
+
+const isSpotifyImageArray = (v: unknown): v is SpotifyImage[] =>
+  Array.isArray(v) && v.every(isSpotifyImage);
+
+const isSpotifyTrackItem = (v: unknown): v is SpotifyTrackItem =>
+  isRecord(v) &&
+  typeof v.id === "string" &&
+  typeof v.name === "string" &&
+  isRecord(v.album ?? {}) &&
+  (isSpotifyImageArray((v.album as Record<string, unknown>).images) ||
+    Array.isArray((v.album as Record<string, unknown>).images)); // 느슨 허용(스포티파이 필드 일관성 이슈 대비)
+
+const getItemsArray = (json: unknown): SpotifyTrackItem[] => {
+  if (!isRecord(json)) return [];
+  // 지원 형태 1: { items: [...] }
+  if (Array.isArray(json.items) && json.items.every(isSpotifyTrackItem)) {
+    return json.items as SpotifyTrackItem[];
+  }
+  // 지원 형태 2: { tracks: { items: [...] } }
+  if (
+    isRecord(json.tracks) &&
+    Array.isArray(json.tracks.items) &&
+    (json.tracks.items as unknown[]).every(isSpotifyTrackItem)
+  ) {
+    return json.tracks.items as SpotifyTrackItem[];
+  }
+  return [];
+};
+
+/** ---- any 제거 버전 ---- */
+function extractSpotifyImage(json: unknown): string | null {
+  const items = getItemsArray(json);
   for (const it of items) {
-    const imgs: SpotifyImage[] = it?.album?.images ?? (it as any)?.images ?? [];
+    const imgs = Array.isArray(it.album.images) ? it.album.images : [];
     const url = imgs?.[1]?.url || imgs?.[0]?.url || imgs?.[2]?.url || null;
     if (url) return url;
+
+    // (드물게) 이미지가 album이 아닌 루트/다른 필드에 오는 경우를 매우 보수적으로 처리
+    // 여기서는 안전을 위해 무시 (규격 외 응답)
   }
   return null;
 }
@@ -129,8 +168,8 @@ async function findAlbumCover(title?: string, artist?: string, signal?: AbortSig
       coverCache.set(key, null);
       return null;
     }
-    const json = (await r.json()) as SpotifySearchResponse | { error?: unknown };
-    if ("error" in json) {
+    const json = (await r.json()) as SpotifySearchResponse | { error?: unknown } | unknown;
+    if (isRecord(json) && "error" in json) {
       coverCache.set(key, null);
       return null;
     }
