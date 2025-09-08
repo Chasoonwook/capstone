@@ -3,12 +3,15 @@ console.log("[spotify] router loaded v3");
 
 const express = require("express");
 const router = express.Router();
+
+// Node 18+ 에서 global.fetch 사용
 const fetch = global.fetch;
 
+// 必: 환경변수
 const CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;
 const CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
 
-// 앱 토큰 캐시 (검색/커버 전용)
+// 앱 토큰(검색/커버에만 사용) 캐시
 let appToken = null;
 let appTokenExp = 0;
 
@@ -21,10 +24,7 @@ async function getAppToken() {
 
   const r = await fetch("https://accounts.spotify.com/api/token", {
     method: "POST",
-    headers: {
-      Authorization: `Basic ${basic}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
+    headers: { Authorization: `Basic ${basic}`, "Content-Type": "application/x-www-form-urlencoded" },
     body,
   });
   const json = await r.json();
@@ -43,7 +43,8 @@ router.get("/__ping", (_req, res) => {
 
 /**
  * GET /api/spotify/search?query=...&limit=1&market=KR
- *  -> 앨범 커버 hydrate 용
+ *  - 프런트에서 앨범커버 hydrate 용으로 사용
+ *  - 결과 형식: { items: [{ id, name, album: { images:[...] } }], total }
  */
 router.get("/search", async (req, res) => {
   try {
@@ -72,8 +73,7 @@ router.get("/search", async (req, res) => {
       name: t.name,
       album: { id: t.album?.id, name: t.album?.name, images: t.album?.images || [] },
     }));
-
-    res.json({ items, total: json?.tracks?.total ?? items.length });
+    res.json({ items, total: json?.tracks?.total || items.length });
   } catch (e) {
     console.error("[spotify/search] exception:", e);
     res.status(500).json({ error: "server error" });
