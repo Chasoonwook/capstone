@@ -116,6 +116,7 @@ const mounts = [
   ["/api/history",         "routes/history"],
   ["/api/music-requests",  "routes/musicRequests"],
   ["/api/spotify",         "routes/spotify"], // ✅ 팀원 코드의 핵심 라우터 포함
+  ["/api",                 "routes/feedback"], // 좋아요 싫어요 피드백 라우터추가
 ];
 
 const mounted = [];

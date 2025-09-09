@@ -45,6 +45,8 @@ AI 결과 업로드: POST /api/ai/results
 사용자: GET /api/recommendations/by-photo/:photoId
 
 사용자 history : POST /api/history
+
+사용자 피드백 : POST /api/feedback
 ### 설치해야 할 패키지
 npm i express cors dotenv pg multer jsonwebtoken axios bcrypt
 
@@ -81,3 +83,44 @@ misic_id 로 메타데이터 가지고 hisory테이블에 스냅샷 형식으로
   "selected_from": "main",
   "created_at": "2025-09-01T23:15:30.456Z"
 }
+
+### 사진 좋아요 싫어요에 따른 피드백 결과 (0908 추가) feedback.js 추가 / photos.js, server.js 수정
+# 프론트 UI에 사용 예시 
+{recommendations.map((song) => (
+  <div key={song.music_id} className="song-card">
+    <div>
+      <strong>{song.title}</strong> - {song.artist}
+    </div>
+    <button onClick={() => handleFeedback(song.music_id, 1)}>좋아용 </button>
+    <button onClick={() => handleFeedback(song.music_id, -1)}>싫어용 </button>
+  </div>
+))}
+
+# 버튼 클릭 핸들러 >   UI에 구현된 버튼을 클릭하면 /api/feedback에 POST 요청
+async function handleFeedback(musicId: number, value: 1 | -1) {
+  try {
+    const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE}/api/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        user_id: user.id,       // 현재 로그인한 사용자
+        music_id: musicId,      // 선택한 곡
+        feedback: value,        // 좋아요=1, 싫어요=-1
+        photo_id: currentPhotoId,   // (선택) 분석한 사진 ID
+        context_main_mood: analysis.main_mood, // (선택) 분위기 컨텍스트
+        context_sub_mood: analysis.sub_mood,
+      }),
+    });
+    const result = await res.json();
+    if (result.ok) {
+      console.log("Feedback saved!");
+    } else {
+      console.error("Feedback error:", result.error);
+    }
+  } catch (err) {
+    console.error("Network error", err);
+  }
+}
+
+# 점수 계산 방식
+점수 = 분위기 가중치 + (곡 피드백 점수 × 가중치) + 인기(popularity) + 최신성(recency)
