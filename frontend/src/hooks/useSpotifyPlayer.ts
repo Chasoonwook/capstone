@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 type ReadyEvent = { device_id: string };
 type ErrorEvent = { message: string };
 type WebPlaybackState = unknown;
+
 type TokenGetter = (cb: (token: string) => void) => void;
 type PlayerOptions = { name: string; getOAuthToken: TokenGetter; volume?: number };
 
@@ -29,9 +30,10 @@ type SpotifyPlayer = {
   nextTrack(): Promise<void>;
 };
 
+type SpotifyNS = { Player: new (opts: PlayerOptions) => SpotifyPlayer };
 type SpotifyWindow = Window & {
   onSpotifyWebPlaybackSDKReady?: () => void;
-  Spotify?: { Player: new (opts: PlayerOptions) => SpotifyPlayer };
+  Spotify?: SpotifyNS;
 };
 
 async function ensureSDK(): Promise<void> {
@@ -39,9 +41,9 @@ async function ensureSDK(): Promise<void> {
   if (w.Spotify) return;
 
   // 이미 추가된 스크립트가 있으면 onload만 기다림
-  const existing = document.querySelector<HTMLScriptElement>('script[src="https://sdk.scdn.co/spotify-player.js"]');
-  if (existing && (w as any).Spotify) return;
-
+  const existing = document.querySelector<HTMLScriptElement>(
+    'script[src="https://sdk.scdn.co/spotify-player.js"]'
+  );
   if (!existing) {
     const s = document.createElement("script");
     s.src = "https://sdk.scdn.co/spotify-player.js";
@@ -86,44 +88,46 @@ export function useSpotifyPlayer(userAccessToken: string | null) {
       if (cancelled) return;
 
       const w = window as unknown as SpotifyWindow;
-      const PlayerCtor = w.Spotify!.Player as new (opts: PlayerOptions) => SpotifyPlayer;
+      const spotifyNS = w.Spotify;
+      if (!spotifyNS) return;
+
+      const PlayerCtor = spotifyNS.Player;
 
       // 이미 인스턴스가 있으면 재사용 (getOAuthToken은 항상 tokenRef를 참조)
       if (!playerRef.current) {
-        const player: SpotifyPlayer = new PlayerCtor({
+        const Ctor: new (opts: PlayerOptions) => SpotifyPlayer = PlayerCtor;
+        playerRef.current = new Ctor({
           name: "Photo-mood Web Player",
           getOAuthToken: (cb) => {
-            if (tokenRef.current) cb(tokenRef.current);
+            const tk = tokenRef.current;
+            if (tk) cb(tk);
           },
           volume: 0.8,
         });
 
-        player.addListener("ready", ({ device_id }) => {
+        const p = playerRef.current;
+         p.addListener("ready", ({ device_id }) => {
           deviceIdRef.current = device_id;
           setDeviceId(device_id);
           setReady(true);
         });
-        player.addListener("not_ready", () => {
-          setReady(false);
-        });
-        player.addListener("initialization_error", ({ message }) => {
-          console.error("[Spotify SDK] initialization_error:", message);
-        });
-        player.addListener("authentication_error", ({ message }) => {
+        p.addListener("not_ready", () => setReady(false));
+        p.addListener("initialization_error", ({ message }) =>
+          console.error("[Spotify SDK] initialization_error:", message)
+        );
+        p.addListener("authentication_error", ({ message }) => {
           console.error("[Spotify SDK] authentication_error:", message);
           setReady(false);
         });
-        player.addListener("account_error", ({ message }) => {
-          console.error("[Spotify SDK] account_error:", message);
-          // 프리미엄 계정이 아니면 여기로 떨어질 수 있음
-        });
-        player.addListener("playback_error", ({ message }) => {
-          console.error("[Spotify SDK] playback_error:", message);
-        });
+        p.addListener("account_error", ({ message }) =>
+          console.error("[Spotify SDK] account_error:", message)
+        );
+        p.addListener("playback_error", ({ message }) =>
+          console.error("[Spotify SDK] playback_error:", message)
+        );
 
-        playerRef.current = player;
         try {
-          await player.connect();
+          await p.connect();
         } catch {
           // 연결 실패 시 그대로 둠(다음 토큰/포커스에서 재시도)
         }
@@ -134,7 +138,7 @@ export function useSpotifyPlayer(userAccessToken: string | null) {
 
     return () => {
       cancelled = true;
-      // 언마운트 시에는 정리(페이지 내에서만). 앱 전체에서 단일 인스턴스를 원하면 이 정리는 제거 가능.
+      // 앱 전역 단일 인스턴스를 원하면 아래 정리를 비활성화 가능
       // playerRef.current?.disconnect();
       // playerRef.current = null;
       // deviceIdRef.current = null;
@@ -145,15 +149,18 @@ export function useSpotifyPlayer(userAccessToken: string | null) {
 
   /** 이 디바이스로 재생 전환(Transfer playback) */
   const transferToThisDevice = useCallback(async () => {
-    if (!deviceIdRef.current || !tokenRef.current) return;
+    const devId = deviceIdRef.current;
+    const token = tokenRef.current;
+    if (!devId || !token) return;
+
     try {
       await fetch("https://api.spotify.com/v1/me/player", {
         method: "PUT",
         headers: {
-          Authorization: `Bearer ${tokenRef.current}`,
+          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ device_ids: [deviceIdRef.current], play: false }),
+        body: JSON.stringify({ device_ids: [devId], play: false }),
       });
     } catch (e) {
       console.warn("[Spotify] transfer playback failed:", e);

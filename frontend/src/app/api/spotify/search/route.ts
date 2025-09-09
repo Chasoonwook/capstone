@@ -1,14 +1,28 @@
 // src/app/api/spotify/search/route.ts
 import { NextResponse } from "next/server";
 
+/** ---------- 타입 ---------- */
 type TokenResp = { access_token: string; expires_in?: number };
 
+type SpotifyArtist = { name: string };
+type SpotifyImage = { url: string | null; height?: number; width?: number };
+type SpotifyAlbum = { images?: SpotifyImage[] };
+type SpotifyTrack = {
+  id: string;
+  name: string;
+  artists: SpotifyArtist[];
+  album?: SpotifyAlbum;
+  preview_url?: string | null;
+  uri?: string | null;
+};
+type SpotifySearchResponse = { tracks?: { items?: SpotifyTrack[] } };
+
+/** ---------- 유틸 ---------- */
 function buildBaseUrlFromRequest(req: Request) {
   const proto = req.headers.get("x-forwarded-proto") ?? "http";
-  const host  = req.headers.get("host") ?? "localhost:3000";
+  const host = req.headers.get("host") ?? "localhost:3000";
   return `${proto}://${host}`;
 }
-
 
 async function fetchTokenViaInternal(baseUrl: string): Promise<string> {
   const r = await fetch(`${baseUrl}/api/spotify/token`, { cache: "no-store" });
@@ -68,6 +82,7 @@ async function doSearch(token: string, q: string, limit = 5) {
   });
 }
 
+/** ---------- 핸들러 ---------- */
 export async function GET(req: Request) {
   try {
     const baseUrl = buildBaseUrlFromRequest(req);
@@ -84,6 +99,7 @@ export async function GET(req: Request) {
     let token = await getToken(baseUrl);
     let res = await doSearch(token, q, limit);
 
+    // 토큰 만료 등 401이면 1회 재시도
     if (res.status === 401) {
       token = await getToken(baseUrl);
       res = await doSearch(token, q, limit);
@@ -97,23 +113,27 @@ export async function GET(req: Request) {
       );
     }
 
-    const js = await res.json();
+    const js = (await res.json()) as SpotifySearchResponse;
+
     const items =
-      js?.tracks?.items?.map((t: any) => ({
-        trackId: t.id,
-        title: t.name,
-        artist: t.artists?.map((a: any) => a.name).join(", "),
-        albumImage:
-          t.album?.images?.[0]?.url ||
-          t.album?.images?.[1]?.url ||
-          t.album?.images?.[2]?.url ||
-          null,
-        previewUrl: t.preview_url ?? null,
-        uri: t.uri ?? null,
-      })) ?? [];
+      js.tracks?.items?.map((t: SpotifyTrack) => {
+        const imgs = t.album?.images ?? [];
+        const albumImage = imgs[0]?.url ?? imgs[1]?.url ?? imgs[2]?.url ?? null;
+        const artistNames = t.artists?.map((a: SpotifyArtist) => a.name).join(", ");
+
+        return {
+          trackId: t.id,
+          title: t.name,
+          artist: artistNames,
+          albumImage,
+          previewUrl: t.preview_url ?? null,
+          uri: t.uri ?? null,
+        };
+      }) ?? [];
 
     return NextResponse.json({ items });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? "search_error" }, { status: 500 });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return NextResponse.json({ error: msg || "search_error" }, { status: 500 });
   }
 }

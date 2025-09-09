@@ -111,9 +111,6 @@ async function resolveImageUrl(photoId: string): Promise<string | null> {
   return null;
 }
 
-/** ---------- 프리뷰/커버 보강 ---------- */
-type SpotifyImage = { url: string; height: number; width: number };
-
 /** 
  * 서버 라우트가 query 기반(/api/spotify/search?query=)일 수도,
  * title/artist 기반(/api/spotify/search?title=&artist=)일 수도 있어
@@ -694,7 +691,7 @@ export default function RecommendClient() {
         <div className="overflow-y-auto h-full">
           {recommendations.length > 0 ? (
             <div className="space-y-2">
-              {recommendations.map((song, i) => (
+              {recommendations.map((song) => (
                 <div
                   key={song.id}
                   onClick={() => onClickSong(song)}

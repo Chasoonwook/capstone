@@ -58,7 +58,6 @@ export async function setTokenCookies(access: string, refresh: string, expiresIn
 }
 
 export async function exchangeCodeForToken(code: string, verifier: string): Promise<ExchangeResponse> {
-  const clientId = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID || process.env.SPOTIFY_CLIENT_ID;
   const redirectUri = process.env.NEXT_PUBLIC_SPOTIFY_REDIRECT_URI;
 
   const body = new URLSearchParams({
