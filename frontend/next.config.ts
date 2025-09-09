@@ -18,9 +18,12 @@ const nextConfig: NextConfig = {
       { protocol: "https", hostname: "is3-ssl.mzstatic.com", pathname: "/**" },
       { protocol: "https", hostname: "is4-ssl.mzstatic.com", pathname: "/**" },
       { protocol: "https", hostname: "is5-ssl.mzstatic.com", pathname: "/**" },
+      { protocol: "https", hostname: "is*.mzstatic.com", pathname: "**" }, // 와일드카드 허용
+      { protocol: "https", hostname: "audio-ssl.itunes.apple.com", pathname: "**" },
 
       // --- Deezer cover CDN ---
       { protocol: "https", hostname: "e-cdns-images.dzcdn.net", pathname: "/**" },
+      { protocol: "https", hostname: "cdn-images.dzcdn.net", pathname: "**" },
 
       // --- 우리 백엔드(로컬)에서 이미지 바이너리 프록시할 때 ---
       { protocol: "http", hostname: "localhost", port: "5000", pathname: "/api/**" },

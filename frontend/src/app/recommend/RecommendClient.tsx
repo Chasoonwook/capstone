@@ -114,24 +114,68 @@ async function resolveImageUrl(photoId: string): Promise<string | null> {
 /** ---------- 프리뷰/커버 보강 ---------- */
 type SpotifyImage = { url: string; height: number; width: number };
 
+/** 
+ * 서버 라우트가 query 기반(/api/spotify/search?query=)일 수도,
+ * title/artist 기반(/api/spotify/search?title=&artist=)일 수도 있어
+ * 두 번 시도(폴백)한다.
+ */
 async function findSpotifyInfo(
   title?: string,
   artist?: string
 ): Promise<{ uri: string | null; preview: string | null; cover: string | null }> {
   const term = [title ?? "", artist ?? ""].join(" ").trim();
   if (!term) return { uri: null, preview: null, cover: null };
+
+  // 1차: query 파라미터 방식
   try {
-    const url = new URL("/api/spotify/search", window.location.origin);
-    url.searchParams.set("query", term);
-    url.searchParams.set("markets", "KR,US,JP,GB,DE,FR,CA,AU,BR,MX,SE,NL,ES,IT");
-    url.searchParams.set("limit", "5");
-    const r = await fetch(url.toString(), { cache: "no-store" });
-    if (!r.ok) return { uri: null, preview: null, cover: null };
-    const js = await r.json();
-    if (js?.ok) {
-      return { uri: js.uri ?? null, preview: js.preview_url ?? null, cover: js.image ?? null };
+    const u1 = new URL("/api/spotify/search", window.location.origin);
+    u1.searchParams.set("query", term);
+    u1.searchParams.set("markets", "KR,US,JP,GB,DE,FR,CA,AU,BR,MX,SE,NL,ES,IT");
+    u1.searchParams.set("limit", "5");
+    const r1 = await fetch(u1.toString(), { cache: "no-store" });
+    if (r1.ok) {
+      const js = await r1.json();
+      if (js?.items?.length) {
+        const f = js.items[0];
+        return {
+          uri: f?.trackId ? `spotify:track:${f.trackId}` : f?.uri ?? null,
+          preview: f?.previewUrl ?? f?.preview_url ?? null,
+          cover: f?.albumImage ?? f?.image ?? null,
+        };
+      }
+      if (js?.ok) {
+        return { uri: js.uri ?? null, preview: js.preview_url ?? null, cover: js.image ?? null };
+      }
     }
-    return { uri: null, preview: null, cover: null };
+  } catch {}
+
+  // 2차: title/artist 파라미터 방식
+  try {
+    const u2 = new URL("/api/spotify/search", window.location.origin);
+    if (title) u2.searchParams.set("title", title);
+    if (artist) u2.searchParams.set("artist", artist);
+    u2.searchParams.set("limit", "5");
+    const r2 = await fetch(u2.toString(), { cache: "no-store" });
+    if (!r2.ok) return { uri: null, preview: null, cover: null };
+    const js2 = await r2.json();
+    // 위에서 가공한 형태/그대로 둘 다 지원
+    const first =
+      js2?.items?.[0] ??
+      (js2?.tracks?.items?.[0] && {
+        trackId: js2.tracks.items[0].id,
+        previewUrl: js2.tracks.items[0].preview_url,
+        albumImage:
+          js2.tracks.items[0].album?.images?.[0]?.url ??
+          js2.tracks.items[0].album?.images?.[1]?.url ??
+          js2.tracks.items[0].album?.images?.[2]?.url ??
+          null,
+      });
+
+    return {
+      uri: first?.trackId ? `spotify:track:${first.trackId}` : first?.uri ?? null,
+      preview: first?.previewUrl ?? first?.preview_url ?? null,
+      cover: first?.albumImage ?? first?.image ?? null,
+    };
   } catch {
     return { uri: null, preview: null, cover: null };
   }
@@ -187,7 +231,7 @@ async function resolvePreviewAndCover(
     preview: null,
     cover: sp.cover ?? it.cover ?? dz.cover ?? null,
     uri: sp.uri ?? null,
-    source: null, // 이제 오류 없음
+    source: null,
   };
 }
 
@@ -258,7 +302,6 @@ export default function RecommendClient() {
     try {
       await a.play();
     } catch (e) {
-      // 다른 인터럽트는 무시
       if (!(e instanceof DOMException && e.name === "AbortError")) {
         throw e;
       }
@@ -319,7 +362,7 @@ export default function RecommendClient() {
           if (!seen.has(id)) { seen.add(id); dedup.push(s); }
         });
 
-        // 추천 → Song 매핑: 우선 Spotify로 보강
+        // 추천 → Song 매핑: 1차로 Spotify에서 보강 시도 (네트워크 에러 시엔 빈 값으로 내려올 수 있음)
         const mapped: Song[] = await Promise.all(
           dedup.map(async (it, idx) => {
             const sec = typeof it.duration === "number" ? it.duration :
@@ -331,11 +374,15 @@ export default function RecommendClient() {
             let uri = it.spotify_uri ?? null;
             let preview = it.preview_url ?? null;
 
-            if (!uri || !preview || !image) {
-              const info = await findSpotifyInfo(it.title, it.artist);
-              uri = uri ?? info.uri;
-              preview = preview ?? info.preview;
-              image = image ?? info.cover;
+            try {
+              if (!uri || !preview || !image) {
+                const info = await findSpotifyInfo(it.title, it.artist);
+                uri = uri ?? info.uri;
+                preview = preview ?? info.preview;
+                image = image ?? info.cover;
+              }
+            } catch {
+              // 네트워크 오류 등은 이후 하이드레이션에서 다시 보강
             }
 
             return {
@@ -371,6 +418,69 @@ export default function RecommendClient() {
     fetchRecommendations(ctrl.signal);
     return () => ctrl.abort();
   }, [fetchRecommendations]);
+
+  /** ---------- 새로 추가: 추천 목록 하이드레이션 (클릭 없이 앨범 커버/프리뷰 자동 보강) ---------- */
+  useEffect(() => {
+    if (!recommendations.length) return;
+
+    let cancelled = false;
+    (async () => {
+      const tasks = recommendations.map(async (s, idx) => {
+        if (s.image && s.preview_url && s.spotify_uri) return null; // 이미 충분
+        try {
+          const info = await resolvePreviewAndCover(s.title, s.artist);
+          const next = {
+            image: s.image ?? info.cover ?? null,
+            preview_url: s.preview_url ?? info.preview ?? null,
+            spotify_uri: s.spotify_uri ?? info.uri ?? null,
+          };
+          if (next.image === s.image && next.preview_url === s.preview_url && next.spotify_uri === s.spotify_uri) {
+            return null;
+          }
+
+          // (선택) 커버 사전 로드
+          if (next.image && typeof window !== "undefined") {
+            await new Promise<void>((res) => {
+              const img = new window.Image();
+              img.onload = () => res();
+              img.onerror = () => res();
+              img.src = next.image!;
+            });
+          }
+          return { idx, next };
+        } catch {
+          return null;
+        }
+      });
+
+      const results = await Promise.allSettled(tasks);
+      if (cancelled) return;
+
+      const updates: Array<{ idx: number; next: Partial<Song> }> = [];
+      for (const r of results) {
+        if (r.status === "fulfilled" && r.value) updates.push(r.value);
+      }
+      if (!updates.length) return;
+
+      setRecommendations((prev) => {
+        const copy = [...prev];
+        for (const u of updates) {
+          const cur = copy[u.idx];
+          if (cur) copy[u.idx] = { ...cur, ...u.next };
+        }
+        return copy;
+      });
+
+      setCurrentSong((cur) => {
+        if (!cur) return cur;
+        const hit = updates.find((u) => recommendations[u.idx]?.id === cur.id);
+        return hit ? { ...cur, ...hit.next } : cur;
+      });
+    })();
+
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recommendations.map((s) => s.id).join(",")]); // 목록 구성 변경 시에만 실행
 
   /** 타이머(Spotify일 때는 SDK가 관리하므로 preview만 카운트) */
   useEffect(() => {
@@ -584,7 +694,7 @@ export default function RecommendClient() {
         <div className="overflow-y-auto h-full">
           {recommendations.length > 0 ? (
             <div className="space-y-2">
-              {recommendations.map((song) => (
+              {recommendations.map((song, i) => (
                 <div
                   key={song.id}
                   onClick={() => onClickSong(song)}
@@ -598,15 +708,15 @@ export default function RecommendClient() {
                     const cover = song.image ?? uploadedImage ?? "/placeholder.svg";
                     return cover ? (
                       <Image
-                        key={cover}                                   // src 바뀔 때 강제 재렌더
                         src={cover}
                         alt={song.title ?? "album cover"}
                         width={48}
                         height={48}
                         sizes="48px"
                         className="rounded-lg mr-3 border border-white/10 flex-shrink-0 !w-12 !h-12"
-                        style={{ width: 48, height: 48 }}             // height:auto 경고 방지 (둘 다 명시)
-                        unoptimized={typeof cover === "string" && cover.startsWith("data:")} // 데이터 URL 최적화 끔
+                        style={{ width: 48, height: 48 }}
+                        // 리스트는 lazy 유지: priority/loading prop 제거
+                        unoptimized={typeof cover === "string" && cover.startsWith("data:")}
                       />
                     ) : (
                       <div className="w-12 h-12 rounded-lg mr-3 bg-gray-300/40" />

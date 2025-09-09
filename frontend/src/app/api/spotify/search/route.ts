@@ -1,121 +1,119 @@
 // src/app/api/spotify/search/route.ts
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 
-export const runtime = "nodejs";
+type TokenResp = { access_token: string; expires_in?: number };
 
-/* --------- 타입 --------- */
-type SpotifyImage = { url: string; height?: number; width?: number };
-type SpotifyArtist = { id: string; name: string };
-type SpotifyAlbum  = { images?: SpotifyImage[] };
-type SpotifyTrack  = {
-  id: string;
-  name: string;
-  uri: string;
-  preview_url?: string | null;
-  artists?: SpotifyArtist[];
-  album?: SpotifyAlbum;
-};
-type SpotifySearchResponse = {
-  tracks?: {
-    items: SpotifyTrack[];
-    total?: number;
-  };
-};
+function buildBaseUrlFromRequest(req: Request) {
+  const proto = req.headers.get("x-forwarded-proto") ?? "http";
+  const host  = req.headers.get("host") ?? "localhost:3000";
+  return `${proto}://${host}`;
+}
 
-/* ----- 앱 토큰(클라이언트 자격증명) 캐시 ----- */
-type AppTok = { accessToken: string; expiresAt: number };
-const g = globalThis as unknown as { __spAppTok?: AppTok };
 
-async function getAppToken(): Promise<string> {
-  const now = Date.now();
-  if (g.__spAppTok && g.__spAppTok.expiresAt - 10_000 > now) {
-    return g.__spAppTok.accessToken;
-  }
-  const id = process.env.SPOTIFY_CLIENT_ID;
-  const secret = process.env.SPOTIFY_CLIENT_SECRET;
-  if (!id || !secret) {
-    throw new Error("missing_spotify_env");
-  }
-  const body = new URLSearchParams({ grant_type: "client_credentials" });
+async function fetchTokenViaInternal(baseUrl: string): Promise<string> {
+  const r = await fetch(`${baseUrl}/api/spotify/token`, { cache: "no-store" });
+  if (!r.ok) throw new Error(`internal_token_${r.status}`);
+  const j = (await r.json()) as TokenResp;
+  if (!j?.access_token) throw new Error("internal_token_empty");
+  return j.access_token;
+}
+
+async function fetchTokenDirect(): Promise<string> {
+  const id = process.env.SPOTIFY_CLIENT_ID!;
+  const secret = process.env.SPOTIFY_CLIENT_SECRET!;
+  if (!id || !secret) throw new Error("env_missing");
+
+  const basic = Buffer.from(`${id}:${secret}`).toString("base64");
   const r = await fetch("https://accounts.spotify.com/api/token", {
     method: "POST",
     headers: {
+      Authorization: `Basic ${basic}`,
       "Content-Type": "application/x-www-form-urlencoded",
-      Authorization: "Basic " + Buffer.from(`${id}:${secret}`).toString("base64"),
     },
-    body: body.toString(),
+    body: new URLSearchParams({ grant_type: "client_credentials" }),
     cache: "no-store",
   });
-  if (!r.ok) throw new Error("spotify_app_token_fail");
-  const js: { access_token: string; expires_in?: number } = await r.json();
-  g.__spAppTok = {
-    accessToken: js.access_token,
-    expiresAt: Date.now() + (js.expires_in ?? 3600) * 1000,
-  };
-  return g.__spAppTok.accessToken;
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`direct_token_${r.status}:${t}`);
+  }
+  const j = (await r.json()) as TokenResp;
+  return j.access_token;
 }
 
-/* ----- 유틸 ----- */
-const pickImage = (t: SpotifyTrack): string | null => {
-  const imgs = t.album?.images ?? [];
-  return imgs[1]?.url ?? imgs[0]?.url ?? imgs[2]?.url ?? null;
-};
-
-export async function GET(req: NextRequest) {
-  const q = req.nextUrl.searchParams.get("query")?.trim();
-  const marketsParam = req.nextUrl.searchParams.get("markets") || "KR,US,JP,GB";
-  const limit = Math.max(1, Math.min(5, Number(req.nextUrl.searchParams.get("limit") ?? "5")));
-  if (!q) return NextResponse.json({ ok: false, reason: "missing_query" }, { status: 400 });
-
+async function getToken(baseUrl: string): Promise<string> {
   try {
-    const token = await getAppToken();
-    const markets = marketsParam
-      .split(",")
-      .map((m) => m.trim().toUpperCase())
-      .filter(Boolean);
+    return await fetchTokenViaInternal(baseUrl);
+  } catch {
+    return await fetchTokenDirect();
+  }
+}
 
-    for (const market of markets) {
-      const url = new URL("https://api.spotify.com/v1/search");
-      url.searchParams.set("q", q);
-      url.searchParams.set("type", "track");
-      url.searchParams.set("limit", String(limit));
-      url.searchParams.set("market", market);
+function buildQuery(title?: string | null, artist?: string | null, query?: string | null) {
+  if (query && query.trim()) return query.trim();
+  const parts: string[] = [];
+  if (title) parts.push(`track:${title}`);
+  if (artist) parts.push(`artist:${artist}`);
+  return parts.join(" ");
+}
 
-      const r = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` },
-        cache: "no-store",
-      });
-      if (!r.ok) continue;
+async function doSearch(token: string, q: string, limit = 5) {
+  const url = new URL("https://api.spotify.com/v1/search");
+  url.searchParams.set("q", q);
+  url.searchParams.set("type", "track");
+  url.searchParams.set("limit", String(limit));
+  return fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+}
 
-      const js: SpotifySearchResponse = await r.json();
-      const items: SpotifyTrack[] = js?.tracks?.items ?? [];
-      if (!items.length) continue;
+export async function GET(req: Request) {
+  try {
+    const baseUrl = buildBaseUrlFromRequest(req);
 
-      const withPreview = items.find((t: SpotifyTrack) => Boolean(t.preview_url));
-      const chosen = withPreview || items[0];
+    const { searchParams } = new URL(req.url);
+    const title = searchParams.get("title");
+    const artist = searchParams.get("artist");
+    const query = searchParams.get("query");
+    const limit = Number(searchParams.get("limit") ?? 5);
 
-      return NextResponse.json({
-        ok: true,
-        market,
-        id: chosen?.id ?? null,
-        name: chosen?.name ?? null,
-        uri: chosen?.uri ?? null,
-        preview_url: chosen?.preview_url ?? null,
-        image: pickImage(chosen),
-        items: items.map((x: SpotifyTrack) => ({
-          id: x.id,
-          name: x.name,
-          uri: x.uri,
-          preview_url: x.preview_url ?? null,
-          image: pickImage(x),
-          artists: (x.artists ?? []).map((a: SpotifyArtist) => a.name),
-        })),
-        total: js?.tracks?.total ?? items.length,
-      });
+    const q = buildQuery(title, artist, query);
+    if (!q) return NextResponse.json({ items: [] });
+
+    let token = await getToken(baseUrl);
+    let res = await doSearch(token, q, limit);
+
+    if (res.status === 401) {
+      token = await getToken(baseUrl);
+      res = await doSearch(token, q, limit);
     }
 
-    return NextResponse.json({ ok: false, reason: "not_found" }, { status: 404 });
-  } catch {
-    return NextResponse.json({ ok: false, reason: "server_error" }, { status: 500 });
+    if (!res.ok) {
+      const txt = await res.text();
+      return NextResponse.json(
+        { error: "spotify_search_failed", status: res.status, detail: txt, q },
+        { status: 500 }
+      );
+    }
+
+    const js = await res.json();
+    const items =
+      js?.tracks?.items?.map((t: any) => ({
+        trackId: t.id,
+        title: t.name,
+        artist: t.artists?.map((a: any) => a.name).join(", "),
+        albumImage:
+          t.album?.images?.[0]?.url ||
+          t.album?.images?.[1]?.url ||
+          t.album?.images?.[2]?.url ||
+          null,
+        previewUrl: t.preview_url ?? null,
+        uri: t.uri ?? null,
+      })) ?? [];
+
+    return NextResponse.json({ items });
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message ?? "search_error" }, { status: 500 });
   }
 }
