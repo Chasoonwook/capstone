@@ -93,3 +93,4 @@ misic_id 로 메타데이터 가지고 hisory테이블에 스냅샷 형식으로
 
 # 점수 계산 방식
 점수 = 분위기 가중치 + (곡 피드백 점수 × 가중치) + 인기(popularity) + 최신성(recency)
+# DB users 테이블 spotify_dismiss_until 컬럼 추가(사용자 별로 스포티파이 연동 설정에 필요)
