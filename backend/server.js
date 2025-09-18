@@ -1,20 +1,22 @@
-// server.js (merged)
+// server.js
 // ----------------------------------------------------
 const path = require("path");
 const fs = require("fs");
 const express = require("express");
 const cors = require("cors");
-require("dotenv").config({ debug: true }); // Render/환경변수 우선. 로컬 .env도 자동 탐지
+const cookieParser = require("cookie-parser");
+require("dotenv").config({ debug: true });
 const pool = require("./db");
 
 const app = express();
 app.set("trust proxy", 1);
+
+// ---- parsers
 app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
 
-/* ---------------------------
- * CORS
- * ------------------------- */
+// ---- CORS (credentials 허용)
 const normalize = (s) => (s ? s.replace(/\/+$/, "") : s);
 const envAllow = (process.env.CORS_ORIGINS || "")
   .split(",")
@@ -27,12 +29,10 @@ const defaultAllow = [
   "http://127.0.0.1:3000",
   "https://capstone-front-tau.vercel.app",
 ];
-
 const allowList = envAllow.length ? envAllow : defaultAllow;
 
 const corsOptions = {
   origin(origin, cb) {
-    // 서버-서버/포스트맨/크론 등 Origin 없는 요청 허용
     if (!origin) return cb(null, true);
     try {
       const url = new URL(origin);
@@ -47,27 +47,21 @@ const corsOptions = {
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: [
-    "Content-Type", 
-    "Authorization", 
-    "X-Requested-With", 
+    "Content-Type",
+    "Authorization",
+    "X-Requested-With",
     "x-user-id",
-    "x-preferred-genres"
+    "x-preferred-genres",
   ],
   optionsSuccessStatus: 204,
 };
-
 app.use(cors(corsOptions));
-// 모든 경로에 대해 사전검사(Preflight) 허용
 app.options(/.*/, cors(corsOptions));
 
-
-/* ---------------------------
- * Health
- * ------------------------- */
+// ---- health
 app.get("/", (_req, res) => res.send("정상작동"));
 app.get("/health", async (_req, res) => {
   try {
-    // DB 연결 확인
     await pool.query("SELECT 1");
     res.send("Server & Database connection OK");
   } catch (e) {
@@ -76,19 +70,15 @@ app.get("/health", async (_req, res) => {
   }
 });
 
-/* ---------------------------
- * 라우터 안전 로더 (절대경로 확인)
- * ------------------------- */
+// ---- router loader
 function loadRoute(relPath) {
   try {
     const abs = path.join(__dirname, relPath);
-    // 파일 존재 여부 체크 (.js 확장자까지 고려)
     if (!fs.existsSync(abs) && !fs.existsSync(abs + ".js")) {
       console.warn(`[router] skip: ${relPath} (not found) abs=${abs}`);
       return null;
     }
     const mod = require(abs);
-    // CommonJS/ESM 호환
     const router = (mod && (mod.default || mod)) ?? null;
     if (typeof router !== "function") {
       console.warn(`[router] skip: ${relPath} (export is not a function)`);
@@ -102,21 +92,19 @@ function loadRoute(relPath) {
   }
 }
 
-/* ---------------------------
- * 실제 마운트 (중복 방지: 여기서만 등록)
- * ------------------------- */
+// ---- mount routers (여기에서만 등록)
 const mounts = [
-  ["/api/photos",          "routes/photos"],
+  ["/api/photos", "routes/photos"],
   ["/api/recommendations", "routes/recommendations"],
-  ["/api/images",          "routes/images"],
-  ["/api/users",           "routes/users"],
-  ["/api/musics",          "routes/musics"],
-  ["/api/auth",            "routes/auth"],
-  ["/api",                 "routes/onboarding"],
-  ["/api/history",         "routes/history"],
-  ["/api/music-requests",  "routes/musicRequests"],
-  ["/api/spotify",         "routes/spotify"], // ✅ 팀원 코드의 핵심 라우터 포함
-  ["/api",                 "routes/feedback"], // 좋아요 싫어요 피드백 라우터추가
+  ["/api/images", "routes/images"],
+  ["/api/users", "routes/users"],       // ← /users/me 가 이 라우터에 있어야 함
+  ["/api/musics", "routes/musics"],
+  ["/api/auth", "routes/auth"],         // ← /auth/login, /auth/register, /auth/me
+  ["/api", "routes/onboarding"],
+  ["/api/history", "routes/history"],
+  ["/api/music-requests", "routes/musicRequests"],
+  ["/api/spotify", "routes/spotify"],
+  ["/api", "routes/feedback"],
 ];
 
 const mounted = [];
@@ -129,9 +117,7 @@ for (const [base, rel] of mounts) {
 }
 console.log("[router] mounted:", mounted);
 
-/* ---------------------------
- * /debug/routes : 현재 등록된 라우트 나열
- * ------------------------- */
+// ---- debug routes
 function collectRoutes(layer, prefix = "") {
   const out = [];
   if (layer.route && layer.route.path) {
@@ -142,12 +128,11 @@ function collectRoutes(layer, prefix = "") {
       ? ""
       : (layer.regexp?.toString() || "")
           .replace(/^\/\^\\\//, "/")
-          .replace(/\\\/\?\(\?=\\\/\|\$\)\/[a-z]*$/, ""); // 팀원 버전의 보다 안전한 패턴
+          .replace(/\\\/\?\(\?=\\\/\|\$\)\/[a-z]*$/, "");
     layer.handle.stack.forEach((l) => out.push(...collectRoutes(l, prefix + base)));
   }
   return out;
 }
-
 app.get("/debug/routes", (_req, res) => {
   try {
     const stack = app._router?.stack || [];
@@ -155,67 +140,38 @@ app.get("/debug/routes", (_req, res) => {
     stack.forEach((layer) => routes.push(...collectRoutes(layer)));
     res.json({
       ok: true,
-      version: "routes-v1",
-      env: {
-        PUBLIC_API_BASE: process.env.PUBLIC_API_BASE,
-        AI_BASE_URL: process.env.AI_BASE_URL,
-        SPOTIFY_ID_SET: !!process.env.SPOTIFY_CLIENT_ID,
-        SPOTIFY_SECRET_SET: !!process.env.SPOTIFY_CLIENT_SECRET,
-        cwd: process.cwd(),
-        dirname: __dirname,
-        routesDirExists: fs.existsSync(path.join(__dirname, "routes")),
-      },
-      mounted,
       routes: routes
         .filter((r) => r.path)
         .sort((a, b) => (a.path + a.method).localeCompare(b.path + b.method)),
+      mounted,
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
 
-/* ---------------------------
- * /debug/db : 현재 DB/스키마 점검(선택)
- * ------------------------- */
+// ---- debug db
 app.get("/debug/db", async (_req, res) => {
   try {
-    const url = process.env.DATABASE_URL || "(no env)";
     const who = await pool.query(
       "SELECT current_database() AS db, current_schema() AS schema, current_user AS usr"
     );
-    const cols = await pool.query(`
-      SELECT column_name
-      FROM information_schema.columns
-      WHERE table_schema = current_schema()
-        AND table_name   = 'photo_analysis'
-      ORDER BY ordinal_position
-    `);
-    res.json({
-      DATABASE_URL: url,
-      whoami: who.rows[0],
-      photo_analysis_columns: cols.rows.map((r) => r.column_name),
-    });
+    res.json({ whoami: who.rows[0] });
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }
 });
 
-/* ---------------------------
- * 공통 404 / 500
- * ------------------------- */
+// ---- 404 & 500
 app.use((req, res, next) => {
   if (res.headersSent) return next();
   res.status(404).json({ error: "not found", path: req.originalUrl });
 });
-
 app.use((err, _req, res, _next) => {
   console.error("[error]", err);
   res.status(500).json({ error: "internal error" });
 });
 
-/* ---------------------------
- * Start
- * ------------------------- */
+// ---- start
 const PORT = Number(process.env.PORT || 5000);
 app.listen(PORT, () => console.log(`[server] listening on :${PORT}`));
