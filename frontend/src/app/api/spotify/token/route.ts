@@ -1,64 +1,80 @@
 // src/app/api/spotify/token/route.ts
 import { NextResponse } from "next/server";
 
-/** ---------- 타입 ---------- */
-type SpotifyTokenResponse = {
-  access_token: string;
-  token_type: string;
-  expires_in: number;
-};
+export const runtime = "nodejs";
 
-let cached: { access_token: string; expires_at: number } | null = null;
+type SameSite = "lax" | "strict" | "none";
+type CookieOpts = { httpOnly?: boolean; secure?: boolean; path?: string; sameSite?: SameSite; maxAge?: number };
 
-/** ---------- 내부 함수 ---------- */
-async function fetchNewToken(): Promise<string> {
-  const id = process.env.SPOTIFY_CLIENT_ID;
-  const secret = process.env.SPOTIFY_CLIENT_SECRET;
+function parseCookieHeader(h: string | null): Record<string, string> {
+  if (!h) return {};
+  return Object.fromEntries(
+    h.split(";").map(v => v.trim()).filter(Boolean).map(v => {
+      const i = v.indexOf("="); 
+      return i === -1 ? [v, ""] : [v.slice(0, i), decodeURIComponent(v.slice(i + 1))];
+    })
+  );
+}
+function serializeCookie(name: string, value: string, opts: CookieOpts = {}): string {
+  const segs = [`${name}=${encodeURIComponent(value)}`];
+  if (opts.maxAge !== undefined) segs.push(`Max-Age=${opts.maxAge}`);
+  segs.push(`Path=${opts.path ?? "/"}`);
+  if (opts.httpOnly) segs.push("HttpOnly");
+  if (opts.secure) segs.push("Secure");
+  if (opts.sameSite) segs.push(`SameSite=${opts.sameSite}`);
+  return segs.join("; ");
+}
 
-  if (!id || !secret) {
-    throw new Error("Spotify client id/secret missing in env");
+const isProd = process.env.NODE_ENV === "production";
+
+type RefreshResp = { access_token: string; token_type: "Bearer"; expires_in: number; scope?: string; refresh_token?: string };
+
+export async function GET(req: Request) {
+  const jar = parseCookieHeader(req.headers.get("cookie"));
+  const at = jar["sp_at"];
+  if (at) return NextResponse.json({ access_token: at });
+
+  const rt = jar["sp_rt"];
+  if (!rt) return new NextResponse(null, { status: 204 });
+
+  const params = new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: rt,
+    client_id: process.env.SPOTIFY_CLIENT_ID ?? "",
+  });
+  if (process.env.SPOTIFY_CLIENT_SECRET) {
+    params.set("client_secret", process.env.SPOTIFY_CLIENT_SECRET);
   }
 
-  const basic = Buffer.from(`${id}:${secret}`).toString("base64");
-
-  const res = await fetch("https://accounts.spotify.com/api/token", {
+  const r = await fetch("https://accounts.spotify.com/api/token", {
     method: "POST",
-    headers: {
-      Authorization: `Basic ${basic}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: new URLSearchParams({ grant_type: "client_credentials" }),
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params,
     cache: "no-store",
   });
 
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`spotify_token_fetch_failed_${res.status}:${txt}`);
+  if (!r.ok) {
+    const resErr = NextResponse.json({ error: "refresh_failed" }, { status: 500 });
+    resErr.headers.append("Set-Cookie", serializeCookie("sp_rt", "", { path: "/", maxAge: 0 }));
+    resErr.headers.append("Set-Cookie", serializeCookie("sp_at", "", { path: "/", maxAge: 0 }));
+    return resErr;
   }
 
-  const json = (await res.json()) as SpotifyTokenResponse;
-  // 1분 여유를 두고 만료 처리
-  cached = {
-    access_token: json.access_token,
-    expires_at: Date.now() + (json.expires_in - 60) * 1000,
-  };
-  return cached.access_token;
-}
-
-async function getToken(): Promise<string> {
-  if (cached && Date.now() < cached.expires_at) {
-    return cached.access_token;
+  const js = (await r.json()) as RefreshResp;
+  const res = NextResponse.json({ access_token: js.access_token });
+  res.headers.append(
+    "Set-Cookie",
+    serializeCookie("sp_at", js.access_token, {
+      httpOnly: true, secure: isProd, sameSite: "lax", path: "/", maxAge: Math.max(60, (js.expires_in ?? 3600) - 60),
+    })
+  );
+  if (js.refresh_token) {
+    res.headers.append(
+      "Set-Cookie",
+      serializeCookie("sp_rt", js.refresh_token, {
+        httpOnly: true, secure: isProd, sameSite: "lax", path: "/", maxAge: 60 * 60 * 24 * 30,
+      })
+    );
   }
-  return fetchNewToken();
-}
-
-/** ---------- 핸들러 ---------- */
-export async function GET() {
-  try {
-    const token = await getToken();
-    return NextResponse.json({ access_token: token });
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ error: msg }, { status: 500 });
-  }
+  return res;
 }

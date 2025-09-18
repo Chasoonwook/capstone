@@ -1,57 +1,91 @@
-// src/app/api/spotify/callback/route.ts
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import {
-  VERIFIER_COOKIE,
-  exchangeCodeForToken,
-  setTokenCookies,
-} from "@/lib/spotify";
 
-// 필요하면 Node 런타임 고정
-// export const runtime = "nodejs";
+export const runtime = "nodejs";
+
+type SameSite = "lax" | "strict" | "none";
+type CookieOpts = { httpOnly?: boolean; secure?: boolean; path?: string; sameSite?: SameSite; maxAge?: number };
+function parseCookieHeader(h: string | null): Record<string, string> {
+  if (!h) return {};
+  return Object.fromEntries(
+    h.split(";").map(v => v.trim()).filter(Boolean).map(v => {
+      const i = v.indexOf("="); 
+      return i === -1 ? [v, ""] : [v.slice(0, i), decodeURIComponent(v.slice(i + 1))];
+    })
+  );
+}
+function serializeCookie(name: string, value: string, opts: CookieOpts = {}): string {
+  const segs = [`${name}=${encodeURIComponent(value)}`];
+  if (opts.maxAge !== undefined) segs.push(`Max-Age=${opts.maxAge}`);
+  segs.push(`Path=${opts.path ?? "/"}`);
+  if (opts.httpOnly) segs.push("HttpOnly");
+  if (opts.secure) segs.push("Secure");
+  if (opts.sameSite) segs.push(`SameSite=${opts.sameSite}`);
+  return segs.join("; ");
+}
+
+const isProd = process.env.NODE_ENV === "production";
+
+type PkceCookie = { state: string; verifier: string; redirectUri: string };
+type TokenResp = { access_token: string; token_type: "Bearer"; expires_in: number; refresh_token?: string; scope: string };
+
+function parsePkce(raw: string | undefined): PkceCookie | null {
+  if (!raw) return null;
+  try {
+    const obj = JSON.parse(raw) as unknown;
+    if (!obj || typeof obj !== "object") return null;
+    const o = obj as Record<string, unknown>;
+    if (typeof o.state !== "string" || typeof o.verifier !== "string" || typeof o.redirectUri !== "string") return null;
+    return { state: o.state, verifier: o.verifier, redirectUri: o.redirectUri } as PkceCookie;
+  } catch { return null; }
+}
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const code = url.searchParams.get("code");
-  const err = url.searchParams.get("error");
+  const state = url.searchParams.get("state");
 
-  // 에러 콜백
-  if (err) {
-    return NextResponse.redirect(new URL("/?spotify=error", url));
-  }
-  if (!code) {
-    return NextResponse.redirect(new URL("/?spotify=missing_code", url));
+  const jar = parseCookieHeader(req.headers.get("cookie"));
+  const pk = parsePkce(jar["sp_pkce"]);
+  if (!code || !state || !pk || state !== pk.state) {
+    return NextResponse.json({ ok: false, reason: "pkce_mismatch" }, { status: 400 });
   }
 
-  // PKCE verifier 쿠키 읽기 (반드시 await cookies())
-  const store = await cookies();
-  const verifier = store.get(VERIFIER_COOKIE)?.value;
-  if (!verifier) {
-    return NextResponse.redirect(new URL("/?spotify=missing_verifier", url));
+  const params = new URLSearchParams({
+    grant_type: "authorization_code",
+    code,
+    redirect_uri: pk.redirectUri,
+    client_id: process.env.SPOTIFY_CLIENT_ID ?? "",
+    code_verifier: pk.verifier,
+  });
+  if (process.env.SPOTIFY_CLIENT_SECRET) {
+    params.set("client_secret", process.env.SPOTIFY_CLIENT_SECRET);
   }
 
-  try {
-    // 1) code + verifier로 토큰 교환
-    const token = await exchangeCodeForToken(code, verifier);
-    // token: { access_token, refresh_token?, token_type, scope?, expires_in }
+  const r = await fetch("https://accounts.spotify.com/api/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params,
+    cache: "no-store",
+  });
+  if (!r.ok) return NextResponse.json({ ok: false, reason: "token_exchange_failed" }, { status: 500 });
 
-    // 2) 액세스/리프레시 쿠키 저장 (expires_in은 초 단위)
-    await setTokenCookies(token.access_token, token.refresh_token ?? "", token.expires_in);
+  const t = (await r.json()) as TokenResp;
 
-    // 3) 일회성 verifier 쿠키 제거
-    store.set({
-      name: VERIFIER_COOKIE,
-      value: "",
-      path: "/",
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      expires: new Date(0),
-    });
-
-    // 4) 성공 리다이렉트
-    return NextResponse.redirect(new URL("/?spotify=ok", url));
-  } catch {
-    return NextResponse.redirect(new URL("/?spotify=exchange_failed", url));
+  const res = NextResponse.redirect("/");
+  res.headers.append(
+    "Set-Cookie",
+    serializeCookie("sp_at", t.access_token, {
+      httpOnly: true, secure: isProd, sameSite: "lax", path: "/", maxAge: Math.max(60, (t.expires_in ?? 3600) - 60),
+    })
+  );
+  if (t.refresh_token) {
+    res.headers.append(
+      "Set-Cookie",
+      serializeCookie("sp_rt", t.refresh_token, {
+        httpOnly: true, secure: isProd, sameSite: "lax", path: "/", maxAge: 60 * 60 * 24 * 30,
+      })
+    );
   }
+  res.headers.append("Set-Cookie", serializeCookie("sp_pkce", "", { path: "/", maxAge: 0 }));
+  return res;
 }

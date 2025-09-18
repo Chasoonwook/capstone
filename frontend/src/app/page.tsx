@@ -1,26 +1,106 @@
-"use client"
+"use client";
 
-import { useState } from "react"
-import { useRouter } from "next/navigation"
-import UserHeader from "@/components/header/UserHeader"
-import HistoryCarousel from "@/components/history/HistoryCarousel"
-import PhotoUpload from "@/components/upload/PhotoUpload"
-import SearchAndRequest from "@/components/search/SearchAndRequest"
-import MoodBadges from "@/components/mood/MoodBadges"
-import { useAuthUser } from "@/hooks/useAuthUser"
-import { useMusics } from "@/hooks/useMusics"
-import { useHistory } from "@/hooks/useHistory"
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import UserHeader from "@/components/header/UserHeader";
+import HistoryCarousel from "@/components/history/HistoryCarousel";
+import PhotoUpload from "@/components/upload/PhotoUpload";
+import SearchAndRequest from "@/components/search/SearchAndRequest";
+import MoodBadges from "@/components/mood/MoodBadges";
+import { useAuthUser } from "@/hooks/useAuthUser";
+import { useMusics } from "@/hooks/useMusics";
+import { useHistory } from "@/hooks/useHistory";
+import SpotifyConnectModal from "@/components/modals/SpotifyConnectModal";
 
 export default function Page() {
-  const { user, isLoggedIn, logout } = useAuthUser()
-  const router = useRouter()
-  const { musics, loading: musicsLoading, error: musicsError } = useMusics()
-  const { history, loading: historyLoading, error: historyError } = useHistory(isLoggedIn)
-  const [selectedGenres, setSelectedGenres] = useState<string[]>([])
+  const { user, isLoggedIn, logout } = useAuthUser();
+  const router = useRouter();
+  const { musics, loading: musicsLoading, error: musicsError } = useMusics();
+  const { history, loading: historyLoading, error: historyError } = useHistory(isLoggedIn);
+  const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
+
+  /**
+   * 계정 식별자: email > id > uid > userId > "guest"
+   * - user 타입에 id/uid가 없을 수 있으므로 안전하게 any 캐스팅 후 접근
+   */
+  const accountId = useMemo(() => {
+    const anyUser = (user ?? {}) as {
+      email?: string | null;
+      id?: string | null;
+      uid?: string | null;
+      userId?: string | null;
+    };
+    return (
+      (anyUser.email?.trim() || null) ??
+      (anyUser.id?.trim() || null) ??
+      (anyUser.uid?.trim() || null) ??
+      (anyUser.userId?.trim() || null) ??
+      "guest"
+    );
+  }, [user]);
+
+  // 계정별 DISMISS 키(prefix + accountId)
+  const dismissKey = useMemo(
+    () => `spotify_connect_modal_dismissed_until::${accountId}`,
+    [accountId]
+  );
+
+  // Spotify 연결 상태 (localStorage 기준)
+  const [isSpotifyConnected, setIsSpotifyConnected] = useState(false);
+
+  // 팝업 노출 상태
+  const [showSpotifyModal, setShowSpotifyModal] = useState(false);
+
+  useEffect(() => {
+    // 계정이 바뀌면(로그인/로그아웃/다른 계정) 다시 평가
+    const read = () => {
+      try {
+        const token = localStorage.getItem("spotify_access_token");
+        const dismissedUntil = Number(localStorage.getItem(dismissKey) || "0");
+        const now = Date.now();
+        const connected = !!(token && token.trim());
+        setIsSpotifyConnected(connected);
+
+        // 계정별: 로그인 상태에서만 노출 관리
+        if (isLoggedIn) {
+          setShowSpotifyModal(!connected && now > dismissedUntil);
+        } else {
+          setShowSpotifyModal(false);
+        }
+      } catch {
+        setIsSpotifyConnected(false);
+        setShowSpotifyModal(isLoggedIn); // 실패 시 로그인돼 있으면 일단 보여줌
+      }
+    };
+
+    read();
+
+    // 스토리지 동기화: 토큰/해당 계정의 dismiss 키만 관찰
+    const onStorage = (e: StorageEvent) => {
+      try {
+        if (e.key === "spotify_access_token") {
+          const connected = !!(e.newValue && e.newValue.trim());
+          setIsSpotifyConnected(connected);
+          if (connected) setShowSpotifyModal(false);
+        }
+        if (e.key === dismissKey) {
+          const now = Date.now();
+          const dismissedUntil = Number(localStorage.getItem(dismissKey) || "0");
+          // 유예가 끝났으면 (다른 탭에서 key 제거/만료 변경 시) 다시 표시
+          setShowSpotifyModal(isLoggedIn && !isSpotifyConnected && now > dismissedUntil);
+        }
+      } catch {}
+    };
+
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [dismissKey, isLoggedIn, isSpotifyConnected]);
 
   const toggleGenre = (genre: string) => {
-    setSelectedGenres((prev) => (prev.includes(genre) ? prev.filter((g) => g !== genre) : [...prev, genre]))
-  }
+    setSelectedGenres((prev) =>
+      prev.includes(genre) ? prev.filter((g) => g !== genre) : [...prev, genre]
+    );
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-100 via-pink-100 to-blue-100 relative overflow-hidden">
@@ -43,12 +123,13 @@ export default function Page() {
         user={user}
         isLoggedIn={isLoggedIn}
         onLogout={() => {
-          logout()
-          router.push("/login")
+          logout();
+          router.push("/login");
         }}
       />
 
       <main className="max-w-5xl mx-auto px-6 py-16 relative z-10">
+        {/* 배너 없음 — 모달만 */}
         <HistoryCarousel user={user} items={history} loading={historyLoading} error={historyError} />
 
         <PhotoUpload
@@ -61,6 +142,22 @@ export default function Page() {
 
         <MoodBadges selected={selectedGenres} onToggle={toggleGenre} />
       </main>
+
+      {/* 계정별 7일 유예 팝업 */}
+      <SpotifyConnectModal
+        open={isLoggedIn && !isSpotifyConnected && showSpotifyModal}
+        onClose={() => {
+          try {
+            const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+            const expireAt = Date.now() + sevenDaysMs; // 7일 후
+            localStorage.setItem(dismissKey, String(expireAt));
+          } catch {}
+          setShowSpotifyModal(false);
+        }}
+        onConnect={() => {
+          window.location.href = "/account/spotify";
+        }}
+      />
     </div>
-  )
+  );
 }

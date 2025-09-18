@@ -1,23 +1,49 @@
-"use client"
-import { Button } from "@/components/ui/button"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+"use client";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import { Music, UserCircle, CreditCard, User, History as HistoryIcon, Settings, LogOut } from "lucide-react"
-import type { UserInfo } from "@/types/music"
+} from "@/components/ui/dropdown-menu";
+import {
+  Music, UserCircle, CreditCard, User, History as HistoryIcon,
+  Settings, LogOut, Link, Unlink
+} from "lucide-react";
+import type { UserInfo } from "@/types/music";
 
 type Props = {
-  user: UserInfo
-  isLoggedIn: boolean
-  onLogout: () => void
-}
+  user: UserInfo;
+  isLoggedIn: boolean;
+  onLogout: () => void;
+};
 
 export default function UserHeader({ user, isLoggedIn, onLogout }: Props) {
+  const router = useRouter();
+
+  // Spotify 연결 상태(localStorage 기준)
+  const [isSpotifyConnected, setIsSpotifyConnected] = useState(false);
+  useEffect(() => {
+    const read = () => {
+      try {
+        const t = localStorage.getItem("spotify_access_token");
+        setIsSpotifyConnected(!!(t && t.trim()));
+      } catch {
+        setIsSpotifyConnected(false);
+      }
+    };
+    read();
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "spotify_access_token") read();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
   return (
     <header className="bg-gradient-to-r from-white/90 via-purple-50/90 to-pink-50/90 backdrop-blur-sm border-b border-purple-100 relative z-10">
       <div className="max-w-6xl mx-auto px-6 py-6">
@@ -28,6 +54,7 @@ export default function UserHeader({ user, isLoggedIn, onLogout }: Props) {
             </div>
             <h1 className="text-xl font-medium text-gray-900">Photo_Music</h1>
           </div>
+
           {isLoggedIn ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -40,6 +67,7 @@ export default function UserHeader({ user, isLoggedIn, onLogout }: Props) {
                   </Avatar>
                 </Button>
               </DropdownMenuTrigger>
+
               <DropdownMenuContent className="w-64" align="end" forceMount>
                 <div className="flex items-center justify-start gap-2 p-2">
                   <Avatar className="h-10 w-10">
@@ -53,26 +81,59 @@ export default function UserHeader({ user, isLoggedIn, onLogout }: Props) {
                     <p className="text-xs text-muted-foreground">{user.email || ""}</p>
                   </div>
                 </div>
+
                 <DropdownMenuSeparator />
                 <DropdownMenuItem><UserCircle className="mr-2 h-4 w-4" /><span>내 채널</span></DropdownMenuItem>
                 <DropdownMenuItem><CreditCard className="mr-2 h-4 w-4" /><span>유료 멤버십</span></DropdownMenuItem>
                 <DropdownMenuItem><User className="mr-2 h-4 w-4" /><span>개인 정보</span></DropdownMenuItem>
                 <DropdownMenuItem><HistoryIcon className="mr-2 h-4 w-4" /><span>시청 기록</span></DropdownMenuItem>
                 <DropdownMenuItem><Settings className="mr-2 h-4 w-4" /><span>설정</span></DropdownMenuItem>
+
+                {/* Spotify 연동/해제 */}
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={onLogout}>
+                <DropdownMenuItem
+                  disabled={isSpotifyConnected}
+                  onSelect={() => {
+                    // 라우팅은 router.push가 더 안전합니다.
+                    router.push("/account/spotify");
+                  }}
+                  className="cursor-pointer"
+                >
+                  <Link className="mr-2 h-4 w-4" />
+                  <span>{isSpotifyConnected ? "Spotify 연동됨" : "Spotify 연동하기"}</span>
+                </DropdownMenuItem>
+
+                <DropdownMenuItem
+                  disabled={!isSpotifyConnected}
+                  onSelect={() => {
+                    try {
+                      localStorage.removeItem("spotify_access_token");
+                      setIsSpotifyConnected(false);
+                    } catch {}
+                  }}
+                  className="cursor-pointer"
+                >
+                  <Unlink className="mr-2 h-4 w-4" />
+                  <span>Spotify 연결 해제</span>
+                </DropdownMenuItem>
+
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={onLogout}>
                   <LogOut className="mr-2 h-4 w-4" />
                   <span>로그아웃</span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           ) : (
-            <Button className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-full px-6 shadow-md hover:shadow-lg transition-all">
+            <Button
+              onClick={() => router.push("/login")}
+              className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-full px-6 shadow-md hover:shadow-lg transition-all"
+            >
               로그인
             </Button>
           )}
         </div>
       </div>
     </header>
-  )
+  );
 }
