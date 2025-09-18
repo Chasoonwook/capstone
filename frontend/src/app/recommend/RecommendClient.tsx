@@ -1,10 +1,11 @@
+// src/app/recommend/RecommendClient.tsx
 "use client";
 
 import type React from "react";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { RotateCcw, X, ChevronLeft, ChevronRight } from "lucide-react";
+import { RotateCcw, X, ChevronLeft, ChevronRight, ThumbsUp, ThumbsDown } from "lucide-react";
 import { API_BASE } from "@/lib/api";
 
 import { useSpotifyPlayer } from "@/hooks/useSpotifyPlayer";
@@ -19,26 +20,89 @@ import {
 } from "./utils/media";
 import type { Song, BackendSong, ByPhotoResponse } from "./types";
 
-/** 업로드 이미지 URL */
-async function resolveImageUrl(photoId: string): Promise<string | null> {
-  const candidates = [`${API_BASE}/api/photos/${photoId}/binary`, `${API_BASE}/photos/${photoId}/binary`];
-  for (const url of candidates) {
+/* ------------------------------------------------------------------ */
+/*                       로그인 토큰 / 유저 확인 유틸                   */
+/* ------------------------------------------------------------------ */
+
+// 1) (서비스에 맞춰 필요한 키들 추가 가능)
+const APP_TOKEN_KEYS = ["app_token", "auth_token", "token", "access_token"];
+
+// 2) Bearer 로 보낼 앱 토큰 읽기
+function readAppBearerToken(): string | null {
+  for (const key of APP_TOKEN_KEYS) {
     try {
-      const r = await fetch(url, { method: "GET" });
-      if (r.ok) return url;
+      const v = localStorage.getItem(key);
+      if (v && v.length > 10) return v;
     } catch {}
   }
   return null;
 }
+
+// 3) me 호출(Authorization 우선, 실패 시 쿠키 기반)
+async function fetchMe(): Promise<{ id: number } | null> {
+  // (a) Authorization 헤더 우선
+  try {
+    const t = readAppBearerToken();
+    if (t) {
+      const r = await fetch(`${API_BASE}/api/auth/me`, {
+        method: "GET",
+        headers: { Accept: "application/json", Authorization: `Bearer ${t}` },
+      });
+      if (r.ok) {
+        const me = await r.json().catch(() => null);
+        const id = me?.id ?? me?.user_id ?? me?.user?.id ?? null;
+        return id ? { id: Number(id) } : null;
+      }
+    }
+  } catch {}
+
+  // (b) 쿠키 기반(서버에 httpOnly 쿠키가 설정된 경우)
+  try {
+    const r = await fetch(`${API_BASE}/api/auth/me`, {
+      method: "GET",
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    });
+    if (r.ok) {
+      const me = await r.json().catch(() => null);
+      const id = me?.id ?? me?.user_id ?? me?.user?.id ?? null;
+      return id ? { id: Number(id) } : null;
+    }
+  } catch {}
+
+  // (c) (프로젝트에 따라 /api/users/me 를 병행)
+  try {
+    const t = readAppBearerToken();
+    const r = await fetch(`${API_BASE}/api/users/me`, {
+      method: "GET",
+      credentials: "include",
+      headers: {
+        Accept: "application/json",
+        ...(t ? { Authorization: `Bearer ${t}` } : {}),
+      },
+    });
+    if (r.ok) {
+      const me = await r.json().catch(() => null);
+      const id = me?.id ?? me?.user_id ?? me?.user?.id ?? null;
+      return id ? { id: Number(id) } : null;
+    }
+  } catch {}
+
+  return null;
+}
+
+/* ------------------------------------------------------------------ */
+/*                            컴포넌트 본문                            */
+/* ------------------------------------------------------------------ */
 
 export default function RecommendClient() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const photoId = searchParams.get("photoId");
 
-  // 메뉴 탭에서 연동된 토큰만 사용
+  // Spotify 전체듣기 토큰(재생용) — 로그인/피드백과는 별개
   const [accessToken, setAccessToken] = useState<string | null>(null);
-  const isLoggedIn = !!accessToken;
+  const isLoggedInSpotify = !!accessToken;
   useEffect(() => {
     const read = () => {
       try {
@@ -59,11 +123,12 @@ export default function RecommendClient() {
   const { ready, activate, transferToThisDevice, playUris, resume, pause } =
     useSpotifyPlayer(accessToken);
 
-  // 미리듣기 전용 오디오
+  // 미리듣기 오디오
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const playReqIdRef = useRef(0);
   const [source, setSource] = useState<"preview" | "spotify" | null>(null);
 
+  // 화면 상태
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   const [recommendations, setRecommendations] = useState<Song[]>([]);
   const [currentSong, setCurrentSong] = useState<Song | null>(null);
@@ -81,6 +146,22 @@ export default function RecommendClient() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLandscape, setIsLandscape] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // 피드백 상태 & 컨텍스트
+  const [feedbackMap, setFeedbackMap] = useState<Record<string | number, 1 | -1 | 0>>({});
+  const [contextMainMood, setContextMainMood] = useState<string | null>(null);
+  const [contextSubMood, setContextSubMood] = useState<string | null>(null);
+
+  // 로그인 확인(보여주기 용도 — user_id 본문 전송은 더 이상 안 함)
+  const [isLoggedInApp, setIsLoggedInApp] = useState<boolean>(false);
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const me = await fetchMe();
+      if (mounted) setIsLoggedInApp(!!me?.id);
+    })();
+    return () => { mounted = false; };
+  }, []);
 
   // 오디오 태그 준비
   useEffect(() => {
@@ -118,18 +199,27 @@ export default function RecommendClient() {
     }
   }, []);
 
-  // 1) 업로드 이미지 URL
+  /* ---------------- 이미지 로드 ---------------- */
   useEffect(() => {
     let mounted = true;
     (async () => {
       if (!photoId) { setUploadedImage(null); return; }
-      const url = await resolveImageUrl(photoId);
+      const candidates = [
+        `${API_BASE}/api/photos/${photoId}/binary`,
+        `${API_BASE}/photos/${photoId}/binary`,
+      ];
+      let url: string | null = null;
+      for (const u of candidates) {
+        try {
+          const r = await fetch(u, { method: "GET" });
+          if (r.ok) { url = u; break; }
+        } catch {}
+      }
       if (mounted) setUploadedImage(url ?? "/placeholder.svg");
     })();
     return () => { mounted = false; };
   }, [photoId]);
 
-  // 가로/세로 판별
   useEffect(() => {
     if (!uploadedImage) { setIsLandscape(null); return; }
     const img = new window.Image();
@@ -137,14 +227,23 @@ export default function RecommendClient() {
     img.onload = () => setIsLandscape(img.naturalWidth > img.naturalHeight);
   }, [uploadedImage]);
 
-  // 2) 추천 불러오기
+  /* ---------------- 추천 불러오기 ---------------- */
   const fetchRecommendations = useCallback(
     async (signal?: AbortSignal) => {
-      if (!photoId) { setRecommendations([]); setCurrentSong(null); return; }
-
+      if (!photoId) {
+        setRecommendations([]); setCurrentSong(null); setContextMainMood(null); setContextSubMood(null);
+        return;
+      }
       try {
-        const r = await fetch(`${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(photoId)}?debug=1`, { signal });
-        if (!r.ok) { console.error("[by-photo] 실패:", r.status, await r.text()); setRecommendations([]); setCurrentSong(null); return; }
+        const r = await fetch(
+          `${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(photoId)}?debug=1`,
+          { signal, credentials: "include" }
+        );
+        if (!r.ok) {
+          console.error("[by-photo] 실패:", r.status, await r.text());
+          setRecommendations([]); setCurrentSong(null); setContextMainMood(null); setContextSubMood(null);
+          return;
+        }
 
         const raw: unknown = await r.json();
         const obj = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
@@ -158,6 +257,9 @@ export default function RecommendClient() {
               preferred_songs: toBackendSongArray(obj["preferred_songs"]),
             }
           : { main_songs: [], sub_songs: [], preferred_songs: [] };
+
+        setContextMainMood(data.main_mood ?? null);
+        setContextSubMood(data.sub_mood ?? null);
 
         const merged: BackendSong[] = [
           ...(data.main_songs ?? []),
@@ -212,9 +314,12 @@ export default function RecommendClient() {
         setIsPlaying(false);
         setDuration(parseDurationToSec(first?.duration));
         setSource(null);
+        setFeedbackMap({});
       } catch (e) {
         console.error("추천 불러오기 오류:", e);
         setRecommendations([]); setCurrentSong(null);
+        setContextMainMood(null); setContextSubMood(null);
+        setFeedbackMap({});
       }
     },
     [photoId]
@@ -290,11 +395,11 @@ export default function RecommendClient() {
     [currentSong?.spotify_uri]
   );
 
-  // 로그인 + SDK 준비 + URI 있으면 자동 전체듣기
+  /* ---------------- 자동 전체듣기(Spotify) ---------------- */
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!isLoggedIn || !accessToken || !ready) return;
+      if (!isLoggedInSpotify || !accessToken || !ready) return;
       if (!normalizedCurrentUri) return;
       if (source === "spotify" && isPlayingRef.current) return;
 
@@ -311,7 +416,7 @@ export default function RecommendClient() {
       }
     })();
     return () => { cancelled = true; };
-  }, [isLoggedIn, accessToken, ready, normalizedCurrentUri, source, activate, transferToThisDevice, playUris]);
+  }, [isLoggedInSpotify, accessToken, ready, normalizedCurrentUri, source, activate, transferToThisDevice, playUris]);
 
   // preview 타이머
   useEffect(() => {
@@ -322,14 +427,14 @@ export default function RecommendClient() {
     return () => clearInterval(id);
   }, [isPlaying, duration, source]);
 
-  /** --------- 재생 로직 --------- */
+  /* ---------------- 재생 로직 ---------------- */
   const playSong = async (song: Song) => {
     setCurrentSong(song);
     setCurrentTime(0);
     setDuration(parseDurationToSec(song.duration));
     const songUri = toSpotifyUri(song.spotify_uri ?? null);
 
-    if (isLoggedIn && accessToken && ready && songUri) {
+    if (isLoggedInSpotify && accessToken && ready && songUri) {
       try {
         await activate();
         await transferToThisDevice();
@@ -354,9 +459,19 @@ export default function RecommendClient() {
       uri     = uri     ?? toSpotifyUri(info.uri);
 
       setRecommendations((prev) =>
-        prev.map((s) => s.id === song.id ? { ...s, preview_url: preview ?? s.preview_url, image: cover ?? s.image, spotify_uri: uri ?? s.spotify_uri } : s)
+        prev.map((s) => s.id === song.id ? {
+          ...s,
+          preview_url: preview ?? s.preview_url,
+          image: cover ?? s.image,
+          spotify_uri: uri ?? s.spotify_uri
+        } : s)
       );
-      setCurrentSong((prev) => (prev ? { ...prev, preview_url: preview ?? prev.preview_url, image: cover ?? prev.image, spotify_uri: uri ?? prev.spotify_uri } : prev));
+      setCurrentSong((prev) => (prev ? {
+        ...prev,
+        preview_url: preview ?? prev.preview_url,
+        image: cover ?? prev.image,
+        spotify_uri: uri ?? prev.spotify_uri
+      } : prev));
     }
 
     if (preview) {
@@ -382,7 +497,6 @@ export default function RecommendClient() {
     }
 
     if (source === "spotify") {
-      if (!accessToken) return;
       try {
         if (isPlaying) { await pause(); setIsPlaying(false); }
         else { await resume(); setIsPlaying(true); }
@@ -391,7 +505,7 @@ export default function RecommendClient() {
     }
 
     const tryUri = normalizedCurrentUri;
-    if (isLoggedIn && accessToken && ready && tryUri) {
+    if (isLoggedInSpotify && accessToken && ready && tryUri) {
       try {
         await activate(); await transferToThisDevice(); await playUris([tryUri]);
         setSource("spotify"); setIsPlaying(true); return;
@@ -429,7 +543,72 @@ export default function RecommendClient() {
     } finally { setBusy(false); }
   };
 
-  /** ---------- 뷰 ---------- */
+  /* ---------------- 피드백 전송(Authorization 헤더 고정) ---------------- */
+  const sendFeedback = useCallback(
+    async (musicId: string | number, value: 1 | -1) => {
+      const token = readAppBearerToken();
+      if (!token) {
+        // 쿠키 세션이 있다면 통과시켜도 되지만, UX상 명확히 알림
+        const me = await fetchMe();
+        if (!me) {
+          alert("로그인이 필요합니다. (앱 토큰이 없습니다)");
+          return false;
+        }
+      }
+
+      const payload = {
+        // user_id 제거: 서버가 토큰에서 식별
+        music_id: Number(musicId),
+        feedback: value,
+        photo_id: photoId ?? null,
+        context_main_mood: contextMainMood ?? null,
+        context_sub_mood: contextSubMood ?? null,
+      };
+
+      try {
+        const r = await fetch(`${API_BASE}/api/feedback`, {
+          method: "POST",
+          credentials: "include", // 쿠키 병행 허용
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify(payload),
+        });
+        if (!r.ok) {
+          const t = await r.text().catch(() => "");
+          console.error("feedback failed:", r.status, t);
+          alert("피드백 전송에 실패했습니다.");
+          return false;
+        }
+        return true;
+      } catch (e) {
+        console.error("feedback error:", e);
+        alert("네트워크 오류로 피드백 전송을 실패했습니다.");
+        return false;
+      }
+    },
+    [photoId, contextMainMood, contextSubMood]
+  );
+
+  const handleFeedback = useCallback(
+    async (value: 1 | -1) => {
+      if (!currentSong) return;
+      const key = currentSong.id;
+      const prev = feedbackMap[key] ?? 0;
+
+      const nextVal: 1 | -1 | 0 = prev === value ? 0 : value;
+      setFeedbackMap((m) => ({ ...m, [key]: nextVal }));
+
+      if (nextVal === 0) return;
+
+      const ok = await sendFeedback(key, nextVal);
+      if (!ok) setFeedbackMap((m) => ({ ...m, [key]: prev }));
+    },
+    [currentSong, feedbackMap, sendFeedback]
+  );
+
+  /* ---------------- 뷰 ---------------- */
   const safeImageSrc = useMemo(() => uploadedImage || "/placeholder.svg", [uploadedImage]);
   const safeBgStyle = useMemo(() => ({ backgroundImage: `url(${safeImageSrc})` }), [safeImageSrc]);
 
@@ -449,7 +628,7 @@ export default function RecommendClient() {
   const rightPane = (
     <div className="flex flex-col justify-center flex-1 h-full ml-8">
       {/* 곡 정보 */}
-      <div className="flex flex-col items-center mb-6">
+      <div className="flex flex-col items-center mb-4">
         <div
           className="w-24 h-24 rounded-lg overflow-hidden mb-4 bg-center bg-cover border border-white/20"
           style={{ backgroundImage: `url(${currentSong?.image ?? safeImageSrc})` }}
@@ -458,6 +637,12 @@ export default function RecommendClient() {
           <h3 className="text-white text-2xl font-semibold mb-1">{currentSong?.title ?? "—"}</h3>
           <p className="text-slate-300 text-lg">{currentSong?.artist ?? "—"}</p>
         </div>
+
+        {(contextMainMood || contextSubMood) && (
+          <div className="text-xs text-slate-400 mb-2">
+            context: {contextMainMood ?? "—"}{contextSubMood ? ` / ${contextSubMood}` : ""}
+          </div>
+        )}
 
         {/* 타임 라벨 */}
         <div className="w-full max-w-md mb-2 text-slate-300 text-sm flex justify-between">
@@ -479,6 +664,34 @@ export default function RecommendClient() {
           onNext={playNextSong}
           onPrev={playPreviousSong}
         />
+
+        {/* 재생 바 아래: Like/Dislike */}
+        {currentSong && (
+          <div className="mt-4 flex items-center gap-3">
+            <Button
+              type="button"
+              title="Like"
+              className={`h-9 px-3 border text-white bg-white/10 hover:bg-white/20 border-white/25 ${
+                feedbackMap[currentSong.id] === 1 ? "bg-white/30 border-white/40" : ""
+              }`}
+              onClick={() => handleFeedback(1)}
+            >
+              <ThumbsUp className="h-4 w-4 mr-2" />
+              Like
+            </Button>
+            <Button
+              type="button"
+              title="Dislike"
+              className={`h-9 px-3 border text-white bg-white/10 hover:bg-white/20 border-white/25 ${
+                feedbackMap[currentSong.id] === -1 ? "bg-white/30 border-white/40" : ""
+              }`}
+              onClick={() => handleFeedback(-1)}
+            >
+              <ThumbsDown className="h-4 w-4 mr-2" />
+              Dislike
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* 추천 목록 */}

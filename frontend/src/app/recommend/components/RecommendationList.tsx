@@ -49,7 +49,10 @@ export default function RecommendationList({
               <p className="text-slate-300 text-xs truncate">{song.artist}</p>
             </div>
             <div className="flex-shrink-0 ml-2">
-              <Badge variant="secondary" className="bg-white/10 text-slate-300 text-xs px-2 py-0.5 border-0">
+              <Badge
+                variant="secondary"
+                className="bg-white/10 text-slate-300 text-xs px-2 py-0.5 border-0"
+              >
                 {song.genre}
               </Badge>
             </div>
