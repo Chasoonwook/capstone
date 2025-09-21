@@ -38,3 +38,4 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
 ## 패키지 설치
 npm i next react react-dom lucide-react
 npm i -D typescript @types/react @types/react-dom @types/node
+npm i -D @typescript-eslint/parser @typescript-eslint/eslint-plugin
