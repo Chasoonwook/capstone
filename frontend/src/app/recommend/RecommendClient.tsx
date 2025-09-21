@@ -28,7 +28,7 @@ import type { Song, BackendSong, ByPhotoResponse } from "./types";
 // 1) (서비스에 맞춰 필요한 키들 추가 가능)
 const APP_TOKEN_KEYS = ["app_token", "auth_token", "token", "access_token"];
 
-// 2) Bearer 로 보낼 앱 토큰 읽기
+// 2) 로컬 스토리지의 토큰 읽기
 function readAppBearerToken(): string | null {
   for (const key of APP_TOKEN_KEYS) {
     try {
@@ -39,15 +39,25 @@ function readAppBearerToken(): string | null {
   return null;
 }
 
+// 2-a) Authorization 헤더 표준화 (중복 'Bearer ' 제거)
+function buildAuthHeaderFromLocalStorage(): Record<string, string> {
+  const raw = readAppBearerToken();
+  if (!raw) return {};
+  // 저장된 값이 'Bearer abc...' 형태여도 안전하게 정규화
+  const normalized = raw.replace(/^bearer\s+/i, "").trim();
+  if (!normalized) return {};
+  return { Authorization: `Bearer ${normalized}` };
+}
+
 // 3) me 호출(Authorization 우선, 실패 시 쿠키 기반)
 async function fetchMe(): Promise<{ id: number } | null> {
   // (a) Authorization 헤더 우선
   try {
-    const t = readAppBearerToken();
-    if (t) {
+    const authHeader = buildAuthHeaderFromLocalStorage();
+    if (authHeader.Authorization) {
       const r = await fetch(`${API_BASE}/api/auth/me`, {
         method: "GET",
-        headers: { Accept: "application/json", Authorization: `Bearer ${t}` },
+        headers: { Accept: "application/json", ...authHeader },
       });
       if (r.ok) {
         const me = await r.json().catch(() => null);
@@ -73,14 +83,11 @@ async function fetchMe(): Promise<{ id: number } | null> {
 
   // (c) (프로젝트에 따라 /api/users/me 를 병행)
   try {
-    const t = readAppBearerToken();
+    const authHeader = buildAuthHeaderFromLocalStorage();
     const r = await fetch(`${API_BASE}/api/users/me`, {
       method: "GET",
       credentials: "include",
-      headers: {
-        Accept: "application/json",
-        ...(t ? { Authorization: `Bearer ${t}` } : {}),
-      },
+      headers: { Accept: "application/json", ...authHeader },
     });
     if (r.ok) {
       const me = await r.json().catch(() => null);
@@ -148,19 +155,6 @@ export default function RecommendClient() {
   const [isLandscape, setIsLandscape] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // (불필요한 미사용 state 제거: isLoggedInApp 경고 원인)
-  // 로그인 여부를 화면에서 활용하지 않으므로 제거했습니다.
-  // 필요해지면 아래 주석을 해제하고 실제 UI에 사용하세요.
-  // const [isLoggedInApp, setIsLoggedInApp] = useState<boolean>(false);
-  // useEffect(() => {
-  //   let mounted = true;
-  //   (async () => {
-  //     const me = await fetchMe();
-  //     if (mounted) setIsLoggedInApp(!!me?.id);
-  //   })();
-  //   return () => { mounted = false; };
-  // }, []);
-
   // 오디오 태그 준비
   useEffect(() => {
     if (!audioRef.current) audioRef.current = new Audio();
@@ -226,6 +220,9 @@ export default function RecommendClient() {
   }, [uploadedImage]);
 
   /* ---------------- 추천 불러오기 ---------------- */
+  const [contextMainMood, setContextMainMood] = useState<string | null>(null);
+  const [contextSubMood, setContextSubMood] = useState<string | null>(null);
+
   const fetchRecommendations = useCallback(
     async (signal?: AbortSignal) => {
       if (!photoId) {
@@ -543,24 +540,11 @@ export default function RecommendClient() {
 
   // 피드백 상태 & 컨텍스트
   const [feedbackMap, setFeedbackMap] = useState<Record<string | number, 1 | -1 | 0>>({});
-  const [contextMainMood, setContextMainMood] = useState<string | null>(null);
-  const [contextSubMood, setContextSubMood] = useState<string | null>(null);
 
-  /* ---------------- 피드백 전송(Authorization 헤더 고정) ---------------- */
+  /* ---------------- 피드백 전송(Authorization 정규화 + 401 재시도) ---------------- */
   const sendFeedback = useCallback(
     async (musicId: string | number, value: 1 | -1) => {
-      const token = readAppBearerToken();
-      if (!token) {
-        // 쿠키 세션이 있다면 통과시켜도 되지만, UX상 명확히 알림
-        const me = await fetchMe();
-        if (!me) {
-          alert("로그인이 필요합니다. (앱 토큰이 없습니다)");
-          return false;
-        }
-      }
-
       const payload = {
-        // user_id 제거: 서버가 토큰에서 식별
         music_id: Number(musicId),
         feedback: value,
         photo_id: photoId ?? null,
@@ -568,23 +552,40 @@ export default function RecommendClient() {
         context_sub_mood: contextSubMood ?? null,
       };
 
+      // 1차: Authorization(정규화) + 쿠키 동시
+      const authHeader = buildAuthHeaderFromLocalStorage();
       try {
         const r = await fetch(`${API_BASE}/api/feedback`, {
           method: "POST",
-          credentials: "include", // 쿠키 병행 허용
-          headers: {
-            "Content-Type": "application/json",
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
+          credentials: "include",
+          headers: { "Content-Type": "application/json", ...authHeader },
           body: JSON.stringify(payload),
         });
-        if (!r.ok) {
-          const t = await r.text().catch(() => "");
-          console.error("feedback failed:", r.status, t);
-          alert("피드백 전송에 실패했습니다.");
-          return false;
+
+        if (r.ok) return true;
+
+        // 401이면 Authorization 제거 후 '쿠키만' 재시도
+        if (r.status === 401) {
+          const r2 = await fetch(`${API_BASE}/api/feedback`, {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (r2.ok) return true;
+
+          // 여전히 401이면 로그인 상태 확인
+          const me = await fetchMe();
+          if (!me) {
+            alert("로그인이 필요합니다. (토큰이 유효하지 않거나 만료)");
+            return false;
+          }
         }
-        return true;
+
+        const t = await r.text().catch(() => "");
+        console.error("feedback failed:", r.status, t);
+        alert("피드백 전송에 실패했습니다.");
+        return false;
       } catch (e) {
         console.error("feedback error:", e);
         alert("네트워크 오류로 피드백 전송을 실패했습니다.");
