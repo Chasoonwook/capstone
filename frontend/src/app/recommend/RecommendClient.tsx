@@ -4,6 +4,7 @@
 import type React from "react";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
+import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { RotateCcw, X, ChevronLeft, ChevronRight, ThumbsUp, ThumbsDown } from "lucide-react";
 import { API_BASE } from "@/lib/api";
@@ -147,21 +148,18 @@ export default function RecommendClient() {
   const [isLandscape, setIsLandscape] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // 피드백 상태 & 컨텍스트
-  const [feedbackMap, setFeedbackMap] = useState<Record<string | number, 1 | -1 | 0>>({});
-  const [contextMainMood, setContextMainMood] = useState<string | null>(null);
-  const [contextSubMood, setContextSubMood] = useState<string | null>(null);
-
-  // 로그인 확인(보여주기 용도 — user_id 본문 전송은 더 이상 안 함)
-  const [isLoggedInApp, setIsLoggedInApp] = useState<boolean>(false);
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      const me = await fetchMe();
-      if (mounted) setIsLoggedInApp(!!me?.id);
-    })();
-    return () => { mounted = false; };
-  }, []);
+  // (불필요한 미사용 state 제거: isLoggedInApp 경고 원인)
+  // 로그인 여부를 화면에서 활용하지 않으므로 제거했습니다.
+  // 필요해지면 아래 주석을 해제하고 실제 UI에 사용하세요.
+  // const [isLoggedInApp, setIsLoggedInApp] = useState<boolean>(false);
+  // useEffect(() => {
+  //   let mounted = true;
+  //   (async () => {
+  //     const me = await fetchMe();
+  //     if (mounted) setIsLoggedInApp(!!me?.id);
+  //   })();
+  //   return () => { mounted = false; };
+  // }, []);
 
   // 오디오 태그 준비
   useEffect(() => {
@@ -543,6 +541,11 @@ export default function RecommendClient() {
     } finally { setBusy(false); }
   };
 
+  // 피드백 상태 & 컨텍스트
+  const [feedbackMap, setFeedbackMap] = useState<Record<string | number, 1 | -1 | 0>>({});
+  const [contextMainMood, setContextMainMood] = useState<string | null>(null);
+  const [contextSubMood, setContextSubMood] = useState<string | null>(null);
+
   /* ---------------- 피드백 전송(Authorization 헤더 고정) ---------------- */
   const sendFeedback = useCallback(
     async (musicId: string | number, value: 1 | -1) => {
@@ -727,11 +730,19 @@ export default function RecommendClient() {
     <div className="flex items-center justify-between w-full h-full px-8">
       <div className="flex items-center justify-center flex-1">
         {uploadedImage && (
-          <img
-            src={uploadedImage}
-            alt="uploaded photo"
-            className={`${isLandscape ? "w-[44rem] h-[28rem]" : "w-[36rem] h-[36rem]"} max-w-[90vw] max-h-[80vh] rounded-3xl shadow-2xl border border-white/20 object-cover`}
-          />
+          <div
+            className={`${isLandscape ? "w-[44rem] h-[28rem]" : "w-[36rem] h-[36rem]"} max-w-[90vw] max-h-[80vh] rounded-3xl shadow-2xl border border-white/20 overflow-hidden relative`}
+          >
+            {/* next/image로 교체 (ESLint: no-img-element 해결) */}
+            <Image
+              src={uploadedImage}
+              alt="uploaded photo"
+              fill
+              unoptimized
+              className="object-cover"
+              sizes="(max-width: 1024px) 90vw, 44rem"
+            />
+          </div>
         )}
       </div>
       {rightPane}
