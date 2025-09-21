@@ -22,36 +22,58 @@ import {
 import type { Song, BackendSong, ByPhotoResponse } from "./types";
 
 /* ------------------------------------------------------------------ */
-/*                       로그인 토큰 / 유저 확인 유틸                   */
+/*                   로그인 토큰 유틸 (로컬/세션/JSON 모두)             */
 /* ------------------------------------------------------------------ */
+const APP_TOKEN_KEYS = [
+  "app_token",
+  "auth_token",
+  "token",
+  "access_token",
+  "id_token",
+  "jwt",
+];
 
-// 1) (서비스에 맞춰 필요한 키들 추가 가능)
-const APP_TOKEN_KEYS = ["app_token", "auth_token", "token", "access_token"];
-
-// 2) 로컬 스토리지의 토큰 읽기
+// 로컬/세션스토리지에서 토큰 읽기 (순수 문자열 또는 {"access_token": "..."} 지원)
 function readAppBearerToken(): string | null {
-  for (const key of APP_TOKEN_KEYS) {
-    try {
-      const v = localStorage.getItem(key);
-      if (v && v.length > 10) return v;
-    } catch {}
-  }
-  return null;
+  const readFrom = (get: (k: string) => string | null) => {
+    for (const key of APP_TOKEN_KEYS) {
+      try {
+        const raw = get(key);
+        if (!raw) continue;
+
+        // JSON 형태면 access_token / token / id_token / jwt 순으로 꺼냄
+        try {
+          const obj = JSON.parse(raw);
+          const candidate =
+            obj?.access_token ?? obj?.token ?? obj?.id_token ?? obj?.jwt ?? null;
+          if (candidate && String(candidate).length > 20) return String(candidate);
+        } catch {
+          // 문자열이면 그대로 후보
+          if (raw.length > 20) return raw;
+        }
+      } catch {}
+    }
+    return null;
+  };
+
+  return (
+    readFrom(localStorage.getItem.bind(localStorage)) ??
+    readFrom(sessionStorage.getItem.bind(sessionStorage)) ??
+    null
+  );
 }
 
-// 2-a) Authorization 헤더 표준화 (중복 'Bearer ' 제거)
+// Authorization 헤더 생성 (저장값이 'Bearer ...'여도 중복 제거)
 function buildAuthHeaderFromLocalStorage(): Record<string, string> {
   const raw = readAppBearerToken();
   if (!raw) return {};
-  // 저장된 값이 'Bearer abc...' 형태여도 안전하게 정규화
   const normalized = raw.replace(/^bearer\s+/i, "").trim();
-  if (!normalized) return {};
+  if (!normalized || normalized.length < 20) return {};
   return { Authorization: `Bearer ${normalized}` };
 }
 
-// 3) me 호출(Authorization 우선, 실패 시 쿠키 기반)
+// me 호출: Authorization 우선, 실패 시 쿠키
 async function fetchMe(): Promise<{ id: number } | null> {
-  // (a) Authorization 헤더 우선
   try {
     const authHeader = buildAuthHeaderFromLocalStorage();
     if (authHeader.Authorization) {
@@ -67,7 +89,6 @@ async function fetchMe(): Promise<{ id: number } | null> {
     }
   } catch {}
 
-  // (b) 쿠키 기반(서버에 httpOnly 쿠키가 설정된 경우)
   try {
     const r = await fetch(`${API_BASE}/api/auth/me`, {
       method: "GET",
@@ -81,7 +102,7 @@ async function fetchMe(): Promise<{ id: number } | null> {
     }
   } catch {}
 
-  // (c) (프로젝트에 따라 /api/users/me 를 병행)
+  // (선택 경로) /api/users/me 지원
   try {
     const authHeader = buildAuthHeaderFromLocalStorage();
     const r = await fetch(`${API_BASE}/api/users/me`, {
@@ -146,7 +167,9 @@ export default function RecommendClient() {
   const [duration, setDuration] = useState(180);
 
   const isPlayingRef = useRef(isPlaying);
-  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
 
   const [currentViewIndex, setCurrentViewIndex] = useState(0);
   const views = ["photo", "cd", "instagram", "default"] as const;
@@ -168,25 +191,34 @@ export default function RecommendClient() {
     return () => {
       a.removeEventListener("timeupdate", onTime);
       a.removeEventListener("ended", onEnd);
-      try { a.pause(); } catch {}
+      try {
+        a.pause();
+      } catch {}
     };
   }, []);
 
   const safePlayPreview = useCallback(async (src: string) => {
     const a = audioRef.current!;
     const myId = ++playReqIdRef.current;
-    try { a.pause(); } catch {}
+    try {
+      a.pause();
+    } catch {}
     a.src = src;
     a.currentTime = 0;
 
     await new Promise<void>((res) => {
-      const onCanPlay = () => { a.removeEventListener("canplay", onCanPlay); res(); };
+      const onCanPlay = () => {
+        a.removeEventListener("canplay", onCanPlay);
+        res();
+      };
       a.addEventListener("canplay", onCanPlay);
       a.load();
     });
 
     if (myId !== playReqIdRef.current) return;
-    try { await a.play(); } catch (e) {
+    try {
+      await a.play();
+    } catch (e) {
       if (!(e instanceof DOMException && e.name === "AbortError")) throw e;
     }
   }, []);
@@ -195,7 +227,10 @@ export default function RecommendClient() {
   useEffect(() => {
     let mounted = true;
     (async () => {
-      if (!photoId) { setUploadedImage(null); return; }
+      if (!photoId) {
+        setUploadedImage(null);
+        return;
+      }
       const candidates = [
         `${API_BASE}/api/photos/${photoId}/binary`,
         `${API_BASE}/photos/${photoId}/binary`,
@@ -204,16 +239,24 @@ export default function RecommendClient() {
       for (const u of candidates) {
         try {
           const r = await fetch(u, { method: "GET" });
-          if (r.ok) { url = u; break; }
+          if (r.ok) {
+            url = u;
+            break;
+          }
         } catch {}
       }
       if (mounted) setUploadedImage(url ?? "/placeholder.svg");
     })();
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+    };
   }, [photoId]);
 
   useEffect(() => {
-    if (!uploadedImage) { setIsLandscape(null); return; }
+    if (!uploadedImage) {
+      setIsLandscape(null);
+      return;
+    }
     const img = new window.Image();
     img.src = uploadedImage;
     img.onload = () => setIsLandscape(img.naturalWidth > img.naturalHeight);
@@ -226,7 +269,10 @@ export default function RecommendClient() {
   const fetchRecommendations = useCallback(
     async (signal?: AbortSignal) => {
       if (!photoId) {
-        setRecommendations([]); setCurrentSong(null); setContextMainMood(null); setContextSubMood(null);
+        setRecommendations([]);
+        setCurrentSong(null);
+        setContextMainMood(null);
+        setContextSubMood(null);
         return;
       }
       try {
@@ -236,12 +282,18 @@ export default function RecommendClient() {
         );
         if (!r.ok) {
           console.error("[by-photo] 실패:", r.status, await r.text());
-          setRecommendations([]); setCurrentSong(null); setContextMainMood(null); setContextSubMood(null);
+          setRecommendations([]);
+          setCurrentSong(null);
+          setContextMainMood(null);
+          setContextSubMood(null);
           return;
         }
 
         const raw: unknown = await r.json();
-        const obj = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+        const obj =
+          raw && typeof raw === "object" && !Array.isArray(raw)
+            ? (raw as Record<string, unknown>)
+            : null;
 
         const data: ByPhotoResponse = obj
           ? {
@@ -266,13 +318,20 @@ export default function RecommendClient() {
         const dedup: BackendSong[] = [];
         merged.forEach((s, i) => {
           const id = (s.music_id ?? s.id ?? i) as string | number;
-          if (!seen.has(id)) { seen.add(id); dedup.push(s); }
+          if (!seen.has(id)) {
+            seen.add(id);
+            dedup.push(s);
+          }
         });
 
         const mapped: Song[] = await Promise.all(
           dedup.map(async (it, idx) => {
-            const sec = typeof it.duration === "number" ? it.duration :
-                        typeof it.duration_sec === "number" ? it.duration_sec : 180;
+            const sec =
+              typeof it.duration === "number"
+                ? it.duration
+                : typeof it.duration_sec === "number"
+                ? it.duration_sec
+                : 180;
             const mm = Math.floor(sec / 60);
             const ss = String(sec % 60).padStart(2, "0");
 
@@ -312,8 +371,10 @@ export default function RecommendClient() {
         setFeedbackMap({});
       } catch (e) {
         console.error("추천 불러오기 오류:", e);
-        setRecommendations([]); setCurrentSong(null);
-        setContextMainMood(null); setContextSubMood(null);
+        setRecommendations([]);
+        setCurrentSong(null);
+        setContextMainMood(null);
+        setContextSubMood(null);
         setFeedbackMap({});
       }
     },
@@ -340,7 +401,11 @@ export default function RecommendClient() {
             preview_url: s.preview_url ?? info.preview ?? null,
             spotify_uri: s.spotify_uri ?? toSpotifyUri(info.uri) ?? null,
           };
-          if (next.image === s.image && next.preview_url === s.preview_url && next.spotify_uri === s.spotify_uri) {
+          if (
+            next.image === s.image &&
+            next.preview_url === s.preview_url &&
+            next.spotify_uri === s.spotify_uri
+          ) {
             return null;
           }
           if (next.image && typeof window !== "undefined") {
@@ -381,7 +446,9 @@ export default function RecommendClient() {
         return hit ? { ...cur, ...hit.next } : cur;
       });
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recommendations.map((s) => s.id).join(",")]);
 
@@ -410,8 +477,19 @@ export default function RecommendClient() {
         console.error("Auto full playback failed:", e);
       }
     })();
-    return () => { cancelled = true; };
-  }, [isLoggedInSpotify, accessToken, ready, normalizedCurrentUri, source, activate, transferToThisDevice, playUris]);
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    isLoggedInSpotify,
+    accessToken,
+    ready,
+    normalizedCurrentUri,
+    source,
+    activate,
+    transferToThisDevice,
+    playUris,
+  ]);
 
   // preview 타이머
   useEffect(() => {
@@ -450,23 +528,31 @@ export default function RecommendClient() {
     if (!preview || !cover || !uri) {
       const info = await resolvePreviewAndCover(song.title, song.artist);
       preview = preview ?? info.preview;
-      cover   = cover   ?? info.cover;
-      uri     = uri     ?? toSpotifyUri(info.uri);
+      cover = cover ?? info.cover;
+      uri = uri ?? toSpotifyUri(info.uri);
 
       setRecommendations((prev) =>
-        prev.map((s) => s.id === song.id ? {
-          ...s,
-          preview_url: preview ?? s.preview_url,
-          image: cover ?? s.image,
-          spotify_uri: uri ?? s.spotify_uri
-        } : s)
+        prev.map((s) =>
+          s.id === song.id
+            ? {
+                ...s,
+                preview_url: preview ?? s.preview_url,
+                image: cover ?? s.image,
+                spotify_uri: uri ?? s.spotify_uri,
+              }
+            : s
+        )
       );
-      setCurrentSong((prev) => (prev ? {
-        ...prev,
-        preview_url: preview ?? prev.preview_url,
-        image: cover ?? prev.image,
-        spotify_uri: uri ?? prev.spotify_uri
-      } : prev));
+      setCurrentSong((prev) =>
+        prev
+          ? {
+              ...prev,
+              preview_url: preview ?? prev.preview_url,
+              image: cover ?? prev.image,
+              spotify_uri: uri ?? prev.spotify_uri,
+            }
+          : prev
+      );
     }
 
     if (preview) {
@@ -479,7 +565,9 @@ export default function RecommendClient() {
         setIsPlaying(false);
       }
     } else {
-      alert("이 곡은 미리듣기 음원이 없습니다. 전체 듣기는 상단 사용자 메뉴에서 Spotify 연동 후 이용하세요.");
+      alert(
+        "이 곡은 미리듣기 음원이 없습니다. 전체 듣기는 상단 사용자 메뉴에서 Spotify 연동 후 이용하세요."
+      );
       setIsPlaying(false);
     }
   };
@@ -493,55 +581,94 @@ export default function RecommendClient() {
 
     if (source === "spotify") {
       try {
-        if (isPlaying) { await pause(); setIsPlaying(false); }
-        else { await resume(); setIsPlaying(true); }
-      } catch (e) { console.error("[togglePlay][spotify] failed:", e); }
+        if (isPlaying) {
+          await pause();
+          setIsPlaying(false);
+        } else {
+          await resume();
+          setIsPlaying(true);
+        }
+      } catch (e) {
+        console.error("[togglePlay][spotify] failed:", e);
+      }
       return;
     }
 
     const tryUri = normalizedCurrentUri;
     if (isLoggedInSpotify && accessToken && ready && tryUri) {
       try {
-        await activate(); await transferToThisDevice(); await playUris([tryUri]);
-        setSource("spotify"); setIsPlaying(true); return;
-      } catch (e) { console.warn("[togglePlay] upgrade to Spotify failed, fallback preview:", e); }
+        await activate();
+        await transferToThisDevice();
+        await playUris([tryUri]);
+        setSource("spotify");
+        setIsPlaying(true);
+        return;
+      } catch (e) {
+        console.warn(
+          "[togglePlay] upgrade to Spotify failed, fallback preview:",
+          e
+        );
+      }
     }
 
     const a = audioRef.current!;
-    try { if (isPlaying) { a.pause(); setIsPlaying(false); } else { await a.play(); setIsPlaying(true); } }
-    catch (e) { console.error("[togglePlay][preview] play failed:", e); }
+    try {
+      if (isPlaying) {
+        a.pause();
+        setIsPlaying(false);
+      } else {
+        await a.play();
+        setIsPlaying(true);
+      }
+    } catch (e) {
+      console.error("[togglePlay][preview] play failed:", e);
+    }
   };
 
   const playNextSong = async () => {
     if (busy || recommendations.length === 0) return;
     setBusy(true);
     try {
-      const curIdx = currentSong ? recommendations.findIndex(s => s.id === currentSong.id) : -1;
+      const curIdx = currentSong
+        ? recommendations.findIndex((s) => s.id === currentSong.id)
+        : -1;
       const nextIdx = curIdx < 0 ? 0 : (curIdx + 1) % recommendations.length;
       await playSong(recommendations[nextIdx]);
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+    }
   };
 
   const onClickSong = async (song: Song) => {
     if (busy) return;
     setBusy(true);
-    try { await playSong(song); } finally { setBusy(false); }
+    try {
+      await playSong(song);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const playPreviousSong = async () => {
     if (busy || recommendations.length === 0) return;
     setBusy(true);
     try {
-      const curIdx = currentSong ? recommendations.findIndex(s => s.id === currentSong.id) : 0;
+      const curIdx = currentSong
+        ? recommendations.findIndex((s) => s.id === currentSong.id)
+        : 0;
       const prevIdx = curIdx <= 0 ? recommendations.length - 1 : curIdx - 1;
       await playSong(recommendations[prevIdx]);
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+    }
   };
 
-  // 피드백 상태 & 컨텍스트
-  const [feedbackMap, setFeedbackMap] = useState<Record<string | number, 1 | -1 | 0>>({});
+  /* ---------------- 피드백 상태 & 전송 ---------------- */
+  const [feedbackMap, setFeedbackMap] = useState<
+    Record<string | number, 1 | -1 | 0>
+  >({});
 
-  /* ---------------- 피드백 전송(Authorization 정규화 + 401 재시도) ---------------- */
+  // 피드백 전송: 쿠키 우선 → 401이면 Authorization 재시도
   const sendFeedback = useCallback(
     async (musicId: string | number, value: 1 | -1) => {
       const payload = {
@@ -552,42 +679,53 @@ export default function RecommendClient() {
         context_sub_mood: contextSubMood ?? null,
       };
 
-      // 1차: Authorization(정규화) + 쿠키 동시
-      const authHeader = buildAuthHeaderFromLocalStorage();
+      // (A) 쿠키만으로 시도 (배포 환경에서 httpOnly 쿠키 인증만 허용되는 경우)
       try {
         const r = await fetch(`${API_BASE}/api/feedback`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (r.ok) return true;
+        if (r.status !== 401) {
+          console.error("feedback(A) failed:", r.status, await r.text().catch(() => ""));
+          alert("피드백 전송에 실패했습니다.");
+          return false;
+        }
+      } catch (e) {
+        // 쿠키 경로 실패 → Authorization로 재시도
+      }
+
+      // (B) Authorization 헤더(정규화된 토큰)로 재시도
+      const authHeader = buildAuthHeaderFromLocalStorage();
+      if (!authHeader.Authorization) {
+        const me = await fetchMe();
+        if (!me) {
+          alert("로그인이 필요합니다. (토큰이 유효하지 않거나 만료)");
+          return false;
+        }
+      }
+
+      try {
+        const r2 = await fetch(`${API_BASE}/api/feedback`, {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json", ...authHeader },
           body: JSON.stringify(payload),
         });
+        if (r2.ok) return true;
 
-        if (r.ok) return true;
-
-        // 401이면 Authorization 제거 후 '쿠키만' 재시도
-        if (r.status === 401) {
-          const r2 = await fetch(`${API_BASE}/api/feedback`, {
-            method: "POST",
-            credentials: "include",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
-          if (r2.ok) return true;
-
-          // 여전히 401이면 로그인 상태 확인
-          const me = await fetchMe();
-          if (!me) {
-            alert("로그인이 필요합니다. (토큰이 유효하지 않거나 만료)");
-            return false;
-          }
+        const t = await r2.text().catch(() => "");
+        console.error("feedback(B) failed:", r2.status, t);
+        if (r2.status === 401) {
+          alert("로그인이 필요합니다. (토큰이 유효하지 않거나 만료)");
+        } else {
+          alert("피드백 전송에 실패했습니다.");
         }
-
-        const t = await r.text().catch(() => "");
-        console.error("feedback failed:", r.status, t);
-        alert("피드백 전송에 실패했습니다.");
         return false;
       } catch (e) {
-        console.error("feedback error:", e);
+        console.error("feedback(B) error:", e);
         alert("네트워크 오류로 피드백 전송을 실패했습니다.");
         return false;
       }
@@ -613,8 +751,14 @@ export default function RecommendClient() {
   );
 
   /* ---------------- 뷰 ---------------- */
-  const safeImageSrc = useMemo(() => uploadedImage || "/placeholder.svg", [uploadedImage]);
-  const safeBgStyle = useMemo(() => ({ backgroundImage: `url(${safeImageSrc})` }), [safeImageSrc]);
+  const safeImageSrc = useMemo(
+    () => uploadedImage || "/placeholder.svg",
+    [uploadedImage]
+  );
+  const safeBgStyle = useMemo(
+    () => ({ backgroundImage: `url(${safeImageSrc})` }),
+    [safeImageSrc]
+  );
 
   const handleRefresh = async () => {
     if (isRefreshing) return;
@@ -638,13 +782,16 @@ export default function RecommendClient() {
           style={{ backgroundImage: `url(${currentSong?.image ?? safeImageSrc})` }}
         />
         <div className="text-center mb-2">
-          <h3 className="text-white text-2xl font-semibold mb-1">{currentSong?.title ?? "—"}</h3>
+          <h3 className="text-white text-2xl font-semibold mb-1">
+            {currentSong?.title ?? "—"}
+          </h3>
           <p className="text-slate-300 text-lg">{currentSong?.artist ?? "—"}</p>
         </div>
 
         {(contextMainMood || contextSubMood) && (
           <div className="text-xs text-slate-400 mb-2">
-            context: {contextMainMood ?? "—"}{contextSubMood ? ` / ${contextSubMood}` : ""}
+            context: {contextMainMood ?? "—"}
+            {contextSubMood ? ` / ${contextSubMood}` : ""}
           </div>
         )}
 
@@ -662,7 +809,8 @@ export default function RecommendClient() {
           duration={duration}
           onSeek={(v) => {
             setCurrentTime(v);
-            if (source === "preview" && audioRef.current) audioRef.current.currentTime = v;
+            if (source === "preview" && audioRef.current)
+              audioRef.current.currentTime = v;
           }}
           onTogglePlay={togglePlay}
           onNext={playNextSong}
@@ -676,7 +824,9 @@ export default function RecommendClient() {
               type="button"
               title="Like"
               className={`h-9 px-3 border text-white bg-white/10 hover:bg-white/20 border-white/25 ${
-                feedbackMap[currentSong.id] === 1 ? "bg-white/30 border-white/40" : ""
+                feedbackMap[currentSong.id] === 1
+                  ? "bg-white/30 border-white/40"
+                  : ""
               }`}
               onClick={() => handleFeedback(1)}
             >
@@ -687,7 +837,9 @@ export default function RecommendClient() {
               type="button"
               title="Dislike"
               className={`h-9 px-3 border text-white bg-white/10 hover:bg-white/20 border-white/25 ${
-                feedbackMap[currentSong.id] === -1 ? "bg-white/30 border-white/40" : ""
+                feedbackMap[currentSong.id] === -1
+                  ? "bg-white/30 border-white/40"
+                  : ""
               }`}
               onClick={() => handleFeedback(-1)}
             >
@@ -703,11 +855,16 @@ export default function RecommendClient() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-white font-bold text-lg">추천 음악</h2>
           <Button
-            variant="ghost" size="sm" onClick={handleRefresh} disabled={isRefreshing}
+            variant="ghost"
+            size="sm"
+            onClick={handleRefresh}
+            disabled={isRefreshing}
             className="text-slate-200 hover:bg-white/10 border border-white/10"
           >
             <RotateCcw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
-            <span className="ml-2 text-xs">{isRefreshing ? "새로고침 중…" : "새로고침"}</span>
+            <span className="ml-2 text-xs">
+              {isRefreshing ? "새로고침 중…" : "새로고침"}
+            </span>
           </Button>
         </div>
 
@@ -720,7 +877,9 @@ export default function RecommendClient() {
               onClickItem={onClickSong}
             />
           ) : (
-            <div className="text-center text-slate-400 py-8">추천 음악이 없습니다.</div>
+            <div className="text-center text-slate-400 py-8">
+              추천 음악이 없습니다.
+            </div>
           )}
         </div>
       </div>
@@ -732,7 +891,9 @@ export default function RecommendClient() {
       <div className="flex items-center justify-center flex-1">
         {uploadedImage && (
           <div
-            className={`${isLandscape ? "w-[44rem] h-[28rem]" : "w-[36rem] h-[36rem]"} max-w-[90vw] max-h-[80vh] rounded-3xl shadow-2xl border border-white/20 overflow-hidden relative`}
+            className={`${
+              isLandscape ? "w-[44rem] h-[28rem]" : "w-[36rem] h-[36rem]"
+            } max-w-[90vw] max-h-[80vh] rounded-3xl shadow-2xl border border-white/20 overflow-hidden relative`}
           >
             {/* next/image로 교체 (ESLint: no-img-element 해결) */}
             <Image
@@ -776,20 +937,32 @@ export default function RecommendClient() {
   );
 
   const currentView =
-    views[currentViewIndex] === "photo" ? photoPlayerView :
-    views[currentViewIndex] === "cd"    ? cdPlayerView :
-    views[currentViewIndex] === "instagram" ? instagramView :
-    defaultView;
+    views[currentViewIndex] === "photo"
+      ? photoPlayerView
+      : views[currentViewIndex] === "cd"
+      ? cdPlayerView
+      : views[currentViewIndex] === "instagram"
+      ? instagramView
+      : defaultView;
 
   const handleClose = () => {
-    try { router.replace("/"); } catch { (window as unknown as { location: Location }).location.href = "/"; }
+    try {
+      router.replace("/");
+    } catch {
+      (window as unknown as { location: Location }).location.href = "/";
+    }
   };
-  const handlePrevView = () => setCurrentViewIndex((prev) => (prev - 1 + views.length) % views.length);
-  const handleNextView = () => setCurrentViewIndex((prev) => (prev + 1) % views.length);
+  const handlePrevView = () =>
+    setCurrentViewIndex((prev) => (prev - 1 + views.length) % views.length);
+  const handleNextView = () =>
+    setCurrentViewIndex((prev) => (prev + 1) % views.length);
 
   return (
     <div className="fixed inset-0 z-40 bg-black bg-opacity-95 flex items-center justify-center">
-      <div className="absolute inset-0 bg-cover bg-center blur-md scale-110 pointer-events-none" style={safeBgStyle} />
+      <div
+        className="absolute inset-0 bg-cover bg-center blur-md scale-110 pointer-events-none"
+        style={safeBgStyle}
+      />
       <div className="absolute inset-0 bg-gradient-to-br from-purple-900/30 via-black/50 to-pink-900/30 pointer-events-none" />
       <div className="absolute top-6 right-6 z-50">
         <button
