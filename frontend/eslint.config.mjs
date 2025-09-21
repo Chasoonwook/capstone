@@ -1,4 +1,4 @@
-// eslint.config.mjs (ESLint 9 + Flat Config)
+// eslint.config.mjs  (ESLint v9 + Flat Config 기준)
 import { dirname } from "path";
 import { fileURLToPath } from "url";
 import { FlatCompat } from "@eslint/eslintrc";
@@ -13,10 +13,10 @@ const compat = new FlatCompat({
   baseDirectory: __dirname,
 });
 
-// 1) Next 프리셋을 Flat으로 변환
+// Next 프리셋을 Flat으로 변환
 const nextPresets = compat.extends("next/core-web-vitals", "next/typescript");
 
-// 2) 변환된 각 preset에 TS 파서/플러그인 주입
+// 변환된 preset 각각에 TS 파서/플러그인 주입 (중요!)
 const nextPresetsWithTs = nextPresets.map((cfg) => ({
   ...cfg,
   languageOptions: {
@@ -35,13 +35,14 @@ const nextPresetsWithTs = nextPresets.map((cfg) => ({
 
 export default [
   ...nextPresetsWithTs,
+  // 공통 규칙 커스터마이즈
   {
     files: ["**/*.{ts,tsx,js,jsx}"],
     rules: {
-      // 문제가 되는 규칙은 끄거나 원하는 수준으로 조정
+      // 문제가 되는 규칙을 비활성화(원하면 warn/설정으로 바꿔도 됨)
       "@typescript-eslint/ban-types": "off",
-      // 불필요한 경우 경고만:
-      // "@typescript-eslint/no-unused-vars": ["warn", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],
+      // 언더스코어 변수는 미사용 허용
+      "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
     },
   },
 ];

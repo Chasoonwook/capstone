@@ -39,3 +39,4 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
 npm i next react react-dom lucide-react
 npm i -D typescript @types/react @types/react-dom @types/node
 npm i -D @typescript-eslint/parser @typescript-eslint/eslint-plugin
+npm i -D eslint@^9 @eslint/js@^9 @typescript-eslint/parser@^8 @typescript-eslint/eslint-plugin@^8
