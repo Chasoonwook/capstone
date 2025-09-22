@@ -1,6 +1,6 @@
 // routes/recommendations.js
 // 배포 로그에서 로드 여부 확인용
-console.log("[recs] router loaded v5");
+console.log("[recs] router loaded v6");
 
 const express = require("express");
 const pool = require("../db");
@@ -65,7 +65,7 @@ async function fetchCandidatesByLabels({ candidates, limit, genres }) {
   params.push(limit);
   const sql = `
     SELECT COALESCE(music_id) AS music_id, title, artist, label, genre,
-           popularity, released_at
+           popularity, released_at, mood
       FROM music
      WHERE ${where}
   ORDER BY created_at DESC
@@ -75,11 +75,26 @@ async function fetchCandidatesByLabels({ candidates, limit, genres }) {
   return rows;
 }
 
+/** mood(예: mountain, beach)로 후보 풀 가져오기 (랜덤 샘플용) */
+async function fetchCandidatesByMood({ mood, limit }) {
+  if (!mood || !limit) return [];
+  const sql = `
+    SELECT COALESCE(music_id) AS music_id, title, artist, label, genre,
+           popularity, released_at, mood
+      FROM music
+     WHERE lower(trim(mood)) = lower($1)
+  ORDER BY created_at DESC
+     LIMIT $2
+  `;
+  const { rows } = await pool.query(sql, [mood, limit]);
+  return rows;
+}
+
 /** 아무 조건 없이 후보 풀 가져오기(폴백용) */
 async function fetchAnyCandidates(limit) {
   const { rows } = await pool.query(
     `SELECT COALESCE(music_id) AS music_id, title, artist, label, genre,
-            popularity, released_at
+            popularity, released_at, mood
        FROM music
    ORDER BY created_at DESC
       LIMIT $1`,
@@ -156,6 +171,7 @@ function makeScorer(songScoreMap, bucket) {
   };
 }
 
+/** 가중치 샘플링 (중복 제거) */
 function weightedSampleK(arr, k, weightFn, used) {
   const out = [];
   const pool = arr.filter((x) => !used.has(x.music_id));
@@ -193,12 +209,26 @@ function weightedSampleK(arr, k, weightFn, used) {
   return out;
 }
 
+/** 순수 랜덤 샘플링 (중복 제거) */
+function randomSampleK(arr, k, used) {
+  const out = [];
+  const pool = arr.filter((x) => !used.has(x.music_id));
+  if (!pool.length || k <= 0) return out;
+  while (out.length < Math.min(k, pool.length)) {
+    const r = Math.floor(Math.random() * pool.length);
+    const itm = pool.splice(r, 1)[0];
+    out.push(itm);
+    used.add(itm.music_id);
+  }
+  return out;
+}
+
 /* ===================== 핑 ===================== */
 router.get("/__ping", (_req, res) => {
-  res.json({ ok: true, from: "routes/recommendations.js", version: "recs-v5" });
+  res.json({ ok: true, from: "routes/recommendations.js", version: "recs-v6" });
 });
 
-/* =============== by-photo: 5 + 2 + 3 = 10 (가중치 샘플링) =============== */
+/* =============== by-photo: 5 + 2 + 3 = 10 (가중치/랜덤 혼합) =============== */
 router.get("/by-photo/:photoId", async (req, res) => {
   const debug = String(req.query.debug || "") === "1";
   try {
@@ -207,9 +237,9 @@ router.get("/by-photo/:photoId", async (req, res) => {
       return res.status(400).json({ error: "bad photoId" });
     }
 
-    // 1) 사진의 최신 분석값
+    // 1) 사진의 최신 분석값(배경 포함)
     const { rows: aRows } = await pool.query(
-      `SELECT main_mood, sub_mood
+      `SELECT main_mood, sub_mood, background
          FROM photo_analysis
         WHERE photo_id = $1
      ORDER BY analyzed_at DESC
@@ -231,6 +261,7 @@ router.get("/by-photo/:photoId", async (req, res) => {
 
     const main_mood = norm(aRows[0].main_mood);
     const sub_mood  = norm(aRows[0].sub_mood);
+    const background = lowTrim(aRows[0].background); // ex) 'mountain', 'beach'
     const preferred_genres = getPreferredGenres(req);
     const userId = getUserId(req);
 
@@ -255,9 +286,10 @@ router.get("/by-photo/:photoId", async (req, res) => {
     const allIds = Array.from(idSet);
     const songScoreMap = await loadFeedbackScores(userId, allIds);
 
-    // 4) 가중치 샘플링 (메인5 / 서브2 / 선호3). 부족하면 ANY로 보충
+    // 4) 가중치/랜덤 샘플링
     const used = new Set();
 
+    // 메인 5 (가중치)
     const mainPicked = weightedSampleK(
       mainPool,
       5,
@@ -265,13 +297,38 @@ router.get("/by-photo/:photoId", async (req, res) => {
       used
     );
 
-    const subPicked = weightedSampleK(
-      subPool,
-      2,
-      makeScorer(songScoreMap, "sub"),
-      used
-    );
+    // 서브 2: background가 'mountain' 또는 'beach'면 music.mood로 랜덤 2, 아니면 기존 sub_mood 가중치 2
+    const BG_SET = new Set(["mountain", "beach"]);
+    let subPicked = [];
 
+    if (background && BG_SET.has(background)) {
+      // mood=background 후보 수집 후 랜덤 2
+      const bgPool = await fetchCandidatesByMood({ mood: background, limit: 200 });
+      subPicked = randomSampleK(bgPool, 2, used);
+
+      // 후보가 부족하면 아무 곡으로 보충
+      if (subPicked.length < 2) {
+        const anyPool = await fetchAnyCandidates(100);
+        const extra = randomSampleK(anyPool, 2 - subPicked.length, used);
+        subPicked = subPicked.concat(extra);
+      }
+    } else {
+      // 기존 로직: sub_mood 기반 가중치 샘플링
+      subPicked = weightedSampleK(
+        subPool,
+        2,
+        makeScorer(songScoreMap, "sub"),
+        used
+      );
+      if (subPicked.length < 2) {
+        // 부족하면 아무 곡으로 보충
+        const anyPool = await fetchAnyCandidates(100);
+        const extra = randomSampleK(anyPool, 2 - subPicked.length, used);
+        subPicked = subPicked.concat(extra);
+      }
+    }
+
+    // 선호 3 (가중치) — 부족하면 메인+서브 풀에서 보충
     let prefPicked = [];
     if (preferred_genres.length) {
       prefPicked = weightedSampleK(
@@ -282,7 +339,6 @@ router.get("/by-photo/:photoId", async (req, res) => {
       );
     }
 
-    // 선호가 부족/없으면 메인+서브 풀에서 보충 (가중치 유지)
     if (prefPicked.length < 3) {
       const remain = [...mainPool, ...subPool].filter((x) => !used.has(x.music_id));
       const extra = weightedSampleK(
@@ -298,6 +354,7 @@ router.get("/by-photo/:photoId", async (req, res) => {
     const payload = {
       main_mood,
       sub_mood,
+      background,
       preferred_genres,
       main_songs: mainPicked,
       sub_songs: subPicked,
@@ -313,6 +370,7 @@ router.get("/by-photo/:photoId", async (req, res) => {
       payload.debug = {
         main_candidates: mainCandsKey,
         sub_candidates: subCandsKey,
+        background_matched: Boolean(background && BG_SET.has(background)),
         counts: { main: mCnt, sub: sCnt, preferred: pCnt },
         selected_counts: {
           main: payload.main_songs.length,
