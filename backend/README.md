@@ -98,3 +98,12 @@ misic_id 로 메타데이터 가지고 hisory테이블에 스냅샷 형식으로
 
 # Backend auth.js, feedback.js, server.js 수정(0918) 패키지 추가 설치 필요
 
+
+### 결과 출력 로직 변경 (0922)
+> mountain, beach 결과에 따른 출력 로직 변경
+_music_ 테이블의 mood 칼럼과 _photo.analysis_ 테이블의 background를 비교한 뒤, 결과 출력
+추후 배경에 따른 노래 장소 추가시 recommendation.js 의
+``` const BG_SET = new Set(["mountain", "beach"]); ``` 
+부분에 장소 추가 입력
+
+```로직 : 기존의 5+2+3 방식을 고수하되, 배경 조건이 맞을 경우, sub_mood 대신 background에 맞는 노래 출력 ```
