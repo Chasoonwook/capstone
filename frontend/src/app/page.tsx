@@ -1,9 +1,9 @@
+// src/app/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import UserHeader from "@/components/header/UserHeader";
-import HistoryCarousel from "@/components/history/HistoryCarousel";
 import PhotoUpload from "@/components/upload/PhotoUpload";
 import SearchAndRequest from "@/components/search/SearchAndRequest";
 import MoodBadges from "@/components/mood/MoodBadges";
@@ -11,6 +11,154 @@ import { useAuthUser } from "@/hooks/useAuthUser";
 import { useMusics } from "@/hooks/useMusics";
 import { useHistory } from "@/hooks/useHistory";
 import SpotifyConnectModal from "@/components/modals/SpotifyConnectModal";
+import { API_BASE } from "@/lib/api";
+
+/* 이미지 URL 빌더 + 폴백 */
+const buildPhotoSrc = (photoId: string | number) => {
+  const id = encodeURIComponent(String(photoId));
+  return {
+    primary: `${API_BASE}/api/photos/${id}/binary`,
+    fallback: `${API_BASE}/photos/${id}/binary`,
+  };
+};
+
+/* 히스토리 아이템에서 날짜 후보를 꺼내 파싱 */
+function extractDate(item: any): Date | null {
+  const v =
+    item?.created_at ??
+    item?.createdAt ??
+    item?.history_created_at ??
+    item?.saved_at ??
+    item?.analyzed_at ??
+    item?.updated_at ??
+    item?.timestamp ??
+    item?.date ??
+    item?.time ??
+    null;
+
+  if (v == null) return null;
+  const d = typeof v === "number" ? new Date(v) : new Date(String(v));
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/* 날짜 포맷 */
+const fmtDateBadge = (d: Date) =>
+  d.toLocaleDateString("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" });
+
+/* 이미지가 확실히 뜨는 히스토리 스트립 */
+function HistoryStrip({
+  user,
+  items,
+  loading,
+  error,
+}: {
+  user: any;
+  items: any[] | undefined;
+  loading: boolean;
+  error: string | null;
+}) {
+  if (loading) {
+    return (
+      <section className="mt-6">
+        <div className="h-6 w-40 rounded bg-black/10 animate-pulse mb-4" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-5">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="rounded-2xl bg-white/60 shadow-sm p-4">
+              <div className="aspect-square rounded-xl bg-black/10 animate-pulse" />
+              <div className="h-4 w-2/3 bg-black/10 rounded mt-3 animate-pulse" />
+              <div className="h-3 w-1/2 bg-black/10 rounded mt-2 animate-pulse" />
+            </div>
+          ))}
+        </div>
+      </section>
+    );
+  }
+
+  if (error) {
+    return (
+      <section className="mt-6">
+        <h2 className="text-xl font-semibold text-slate-800 mb-2">
+          {user?.name ?? "내"} 추억
+        </h2>
+        <div className="text-red-600 text-sm">히스토리를 불러오지 못했습니다: {error}</div>
+      </section>
+    );
+  }
+
+  const list = items ?? [];
+  if (list.length === 0) {
+    return (
+      <section className="mt-6">
+        <h2 className="text-xl font-semibold text-slate-800 mb-2">
+          {user?.name ?? "내"} 추억
+        </h2>
+        <div className="text-slate-500 text-sm">아직 저장된 추억이 없어요.</div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="mt-6">
+      <div className="flex items-end justify-between mb-3">
+        <div>
+          <h2 className="text-2xl font-semibold text-slate-800">
+            {user?.name ?? "내"}님의 추억
+          </h2>
+          <p className="text-slate-500 text-sm">최근에 들었던 음악들</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-5">
+        {list.map((it, idx) => {
+          const pid = it.photo_id ?? it.photoId ?? it.id;
+          const { primary, fallback } = buildPhotoSrc(pid);
+          const title = it.title_snapshot ?? it.title ?? "제목 없음";
+          const artist = it.artist_snapshot ?? it.artist ?? "Various";
+          const dateObj = extractDate(it);
+          const badge = dateObj ? fmtDateBadge(dateObj) : null;
+
+          return (
+            <div
+              key={`${pid}-${idx}`}
+              className="rounded-2xl bg-white/70 shadow-sm p-4 hover:shadow-md transition"
+            >
+              <div className="relative aspect-square rounded-xl overflow-hidden bg-black/5">
+                <img
+                  src={primary}
+                  alt={title}
+                  className="w-full h-full object-cover"
+                  crossOrigin="anonymous"
+                  onError={(e) => {
+                    const img = e.currentTarget as HTMLImageElement;
+                    if (!(img as any).__fb) {
+                      (img as any).__fb = true;
+                      img.src = fallback;
+                    } else {
+                      img.src = "/placeholder.svg";
+                    }
+                  }}
+                />
+                {badge && (
+                  <span
+                    className="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-black/60 text-white text-[11px] leading-5 shadow-sm"
+                    title={dateObj!.toLocaleString()}
+                  >
+                    {badge}
+                  </span>
+                )}
+              </div>
+
+              <div className="mt-3">
+                <div className="text-slate-900 font-medium truncate">{title}</div>
+                <div className="text-slate-500 text-sm truncate">{artist}</div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
 
 export default function Page() {
   const { user, isLoggedIn, logout } = useAuthUser();
@@ -19,16 +167,14 @@ export default function Page() {
   const { history, loading: historyLoading, error: historyError } = useHistory(isLoggedIn);
   const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
 
-  /**
-   * 계정 식별자: email > id > uid > userId > "guest"
-   * - user 타입에 id/uid가 없을 수 있으므로 안전하게 any 캐스팅 후 접근
-   */
+  // 계정 식별자
   const accountId = useMemo(() => {
     const anyUser = (user ?? {}) as {
       email?: string | null;
       id?: string | null;
       uid?: string | null;
       userId?: string | null;
+      name?: string | null;
     };
     return (
       (anyUser.email?.trim() || null) ??
@@ -39,20 +185,15 @@ export default function Page() {
     );
   }, [user]);
 
-  // 계정별 DISMISS 키(prefix + accountId)
   const dismissKey = useMemo(
     () => `spotify_connect_modal_dismissed_until::${accountId}`,
     [accountId]
   );
 
-  // Spotify 연결 상태 (localStorage 기준)
   const [isSpotifyConnected, setIsSpotifyConnected] = useState(false);
-
-  // 팝업 노출 상태
   const [showSpotifyModal, setShowSpotifyModal] = useState(false);
 
   useEffect(() => {
-    // 계정이 바뀌면(로그인/로그아웃/다른 계정) 다시 평가
     const read = () => {
       try {
         const token = localStorage.getItem("spotify_access_token");
@@ -60,22 +201,14 @@ export default function Page() {
         const now = Date.now();
         const connected = !!(token && token.trim());
         setIsSpotifyConnected(connected);
-
-        // 계정별: 로그인 상태에서만 노출 관리
-        if (isLoggedIn) {
-          setShowSpotifyModal(!connected && now > dismissedUntil);
-        } else {
-          setShowSpotifyModal(false);
-        }
+        setShowSpotifyModal(isLoggedIn ? !connected && now > dismissedUntil : false);
       } catch {
         setIsSpotifyConnected(false);
-        setShowSpotifyModal(isLoggedIn); // 실패 시 로그인돼 있으면 일단 보여줌
+        setShowSpotifyModal(isLoggedIn);
       }
     };
-
     read();
 
-    // 스토리지 동기화: 토큰/해당 계정의 dismiss 키만 관찰
     const onStorage = (e: StorageEvent) => {
       try {
         if (e.key === "spotify_access_token") {
@@ -86,7 +219,6 @@ export default function Page() {
         if (e.key === dismissKey) {
           const now = Date.now();
           const dismissedUntil = Number(localStorage.getItem(dismissKey) || "0");
-          // 유예가 끝났으면 (다른 탭에서 key 제거/만료 변경 시) 다시 표시
           setShowSpotifyModal(isLoggedIn && !isSpotifyConnected && now > dismissedUntil);
         }
       } catch {}
@@ -129,8 +261,7 @@ export default function Page() {
       />
 
       <main className="max-w-5xl mx-auto px-6 py-16 relative z-10">
-        {/* 배너 없음 — 모달만 */}
-        <HistoryCarousel user={user} items={history} loading={historyLoading} error={historyError} />
+        <HistoryStrip user={user} items={history} loading={historyLoading} error={historyError} />
 
         <PhotoUpload
           isLoggedIn={isLoggedIn}
@@ -143,13 +274,12 @@ export default function Page() {
         <MoodBadges selected={selectedGenres} onToggle={toggleGenre} />
       </main>
 
-      {/* 계정별 7일 유예 팝업 */}
       <SpotifyConnectModal
         open={isLoggedIn && !isSpotifyConnected && showSpotifyModal}
         onClose={() => {
           try {
             const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-            const expireAt = Date.now() + sevenDaysMs; // 7일 후
+            const expireAt = Date.now() + sevenDaysMs;
             localStorage.setItem(dismissKey, String(expireAt));
           } catch {}
           setShowSpotifyModal(false);
