@@ -3,11 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --turbopack",
-    "dev:open": "next dev --turbopack & sleep 1 && start http://localhost:3000",
-    "build": "next build",
-    "start": "next start",
-    "lint": "next lint"
+    "lint": "eslint \"**/*.{js,jsx,ts,tsx,mjs,cjs}\"",
+    "lint:fix": "eslint \"**/*.{js,jsx,ts,tsx,mjs,cjs}\" --fix"
   },
   "dependencies": {
     "@radix-ui/react-avatar": "^1.1.10",
