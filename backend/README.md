@@ -107,3 +107,5 @@ _music_ 테이블의 mood 칼럼과 _photo.analysis_ 테이블의 background를 
 부분에 장소 추가 입력
 
 ```로직 : 기존의 5+2+3 방식을 고수하되, 배경 조건이 맞을 경우, sub_mood 대신 background에 맞는 노래 출력 ```
+
+### photo.js 편집본 저장 수정 (0923)
