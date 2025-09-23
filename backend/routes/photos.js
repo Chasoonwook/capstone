@@ -22,6 +22,16 @@ function apiBase(req) {
   return `${req.protocol}://${req.get("host")}/api`;
 }
 
+/* ── 공통 CORS 헬퍼 ─────────────────────────────────────────────── */
+function allowCORS(req, res) {
+  const origin = req.headers.origin || "*";
+  res.set("Access-Control-Allow-Origin", origin);
+  res.set("Vary", "Origin");
+  res.set("Access-Control-Allow-Credentials", "true");
+  res.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.set("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
+}
+
 /* ── mood 매핑: 소문자/trim + 점진 매칭 ─────────────────────────── */
 async function resolveMood(client, timeLabel, background, emotion, prefer) {
   if (prefer?.main_mood) {
@@ -77,14 +87,19 @@ router.get("/_who", (_req,res) =>
   res.json({ from:"routes/photos.js", analyzePath:"/api/photos/analyze" })
 );
 
-/* 디버그용 바이너리 */
+/* 바이너리 내려주기 (CORS 포함) */
 router.get("/:photoId/binary", async (req,res)=>{
   try {
     const { photoId } = req.params;
     const r = await pool.query(
-      "SELECT mime_type, content FROM photos WHERE photo_id=$1", [photoId]
+      "SELECT mime_type, content FROM photos WHERE photo_id=$1",
+      [photoId]
     );
     if (!r.rows.length) return res.status(404).send("Not found");
+
+    allowCORS(req, res);
+    res.set("Cache-Control", "no-store");
+    res.set("Cross-Origin-Resource-Policy", "cross-origin");
     res.set("Content-Type", r.rows[0].mime_type || "application/octet-stream");
     res.send(r.rows[0].content);
   } catch (e) {
@@ -92,6 +107,46 @@ router.get("/:photoId/binary", async (req,res)=>{
     res.status(500).send("Error");
   }
 });
+
+/* 업로더(업서트) – 편집본 저장: multipart/form-data 의 file 필드 사용 */
+async function upsertBinary(req, res) {
+  const photoId = Number(req.params.photoId);
+  if (!Number.isFinite(photoId)) {
+    return res.status(400).json({ error: "bad photoId" });
+  }
+  if (!req.file) {
+    return res.status(400).json({ error: "file field is required" });
+  }
+
+  const { buffer, mimetype, originalname } = req.file;
+
+  try {
+    const sql = `
+      INSERT INTO photos (photo_id, temp_name, original_name, mime_type, content, created_at)
+      VALUES ($1, NULL, $2, $3, $4, NOW())
+      ON CONFLICT (photo_id) DO UPDATE SET
+        original_name = EXCLUDED.original_name,
+        mime_type     = EXCLUDED.mime_type,
+        content       = EXCLUDED.content
+      RETURNING photo_id
+    `;
+    const { rows } = await pool.query(sql, [
+      photoId,
+      originalname || null,
+      mimetype || "image/png",
+      buffer,
+    ]);
+
+    allowCORS(req, res);
+    res.json({ ok: true, photo_id: rows[0].photo_id });
+  } catch (e) {
+    console.error("[photos][binary upsert] failed:", e);
+    res.status(500).json({ error: "binary upsert failed" });
+  }
+}
+router.options("/:photoId/binary", (req,res) => { allowCORS(req,res); res.sendStatus(200); });
+router.post("/:photoId/binary", upload.single("file"), upsertBinary);
+router.put("/:photoId/binary",  upload.single("file"), upsertBinary);
 
 /* 서명 URL 발급 */
 router.get("/:photoId/signed-url", (req,res)=>{
@@ -131,10 +186,10 @@ router.get("/photo-analysis/:photoId", async (req, res) => {
   if (!Number.isFinite(photoId)) return res.status(400).json({ error: "bad id" });
   const { rows } = await pool.query(
     `SELECT time_label, background, emotion, main_mood, sub_mood
-     FROM photo_analysis
-     WHERE photo_id = $1
-     ORDER BY analyzed_at DESC
-     LIMIT 1`,
+       FROM photo_analysis
+      WHERE photo_id = $1
+   ORDER BY analyzed_at DESC
+      LIMIT 1`,
     [photoId]
   );
   if (!rows.length) return res.status(404).json({ error: "not found" });
@@ -190,7 +245,6 @@ router.post("/analyze", upload.single("file"), async (req,res)=>{
     );
     await client.query("COMMIT");
 
-    // ✅ 추천은 포함하지 않고, 프론트가 /api/recommendations/by-photo/:photoId 를 호출하도록 유지
     return res.json({
       photoId,
       analysis: { time_label: time, background: back, emotion: emo, main_mood, sub_mood },
