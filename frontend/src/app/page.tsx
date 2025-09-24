@@ -45,7 +45,7 @@ function extractDate(item: any): Date | null {
 const fmtDateBadge = (d: Date) =>
   d.toLocaleDateString("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" });
 
-/* Digimon-style 캐러셀 (가운데 카드 강조, 스크롤바 숨김) */
+/* Digimon-style 캐러셀: 가운데 카드 강조 + 인디케이터 고정 + 스크롤바 숨김 */
 function HistoryStrip({
   user,
   items,
@@ -59,45 +59,73 @@ function HistoryStrip({
 }) {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const [active, setActive] = useState(0);
+  const [sideGap, setSideGap] = useState(0); // 양 끝 여유 공간(px)
 
-  // ★ 모든 Hook은 최상단에서 먼저 호출 (return보다 위)
+  /* 중앙 카드 인덱스 계산 (scrollLeft / offset 기반 — transform 영향 X) */
+  const computeActiveByOffset = () => {
+    const track = trackRef.current;
+    if (!track) return 0;
+    const cards = Array.from(track.querySelectorAll<HTMLElement>("[data-card-idx]"));
+    if (!cards.length) return 0;
+
+    const center = track.scrollLeft + track.clientWidth / 2;
+    let bestIdx = 0;
+    let bestDist = Infinity;
+    cards.forEach((card, i) => {
+      const cardCenter = card.offsetLeft + card.offsetWidth / 2;
+      const dist = Math.abs(cardCenter - center);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestIdx = i;
+      }
+    });
+    return bestIdx;
+  };
+
+  /* rAF 루프로 스크롤 추적하여 active 지속 갱신 */
+  useEffect(() => {
+    const track = trackRef.current;
+    if (!track) return;
+    let rafId = 0;
+    const loop = () => {
+      const idx = computeActiveByOffset();
+      setActive((prev) => (prev !== idx ? idx : prev));
+      rafId = requestAnimationFrame(loop);
+    };
+    rafId = requestAnimationFrame(loop);
+
+    const onResize = () => setActive(computeActiveByOffset());
+    window.addEventListener("resize", onResize);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener("resize", onResize);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* 카드/트랙 크기에 맞춰 양 끝 여유 공간(sideGap) 계산 */
   useEffect(() => {
     const track = trackRef.current;
     if (!track) return;
 
-    const computeActive = () => {
-      const rect = track.getBoundingClientRect();
-      const centerX = rect.left + rect.width / 2;
-
-      let bestIdx = 0;
-      let bestDist = Infinity;
-      const cards = Array.from(track.querySelectorAll<HTMLElement>("[data-card-idx]"));
-      cards.forEach((card) => {
-        const idx = Number(card.dataset.cardIdx || 0);
-        const cr = card.getBoundingClientRect();
-        const cardCenter = cr.left + cr.width / 2;
-        const dist = Math.abs(cardCenter - centerX);
-        if (dist < bestDist) {
-          bestDist = dist;
-          bestIdx = idx;
-        }
-      });
-      setActive(bestIdx);
+    const measure = () => {
+      const firstCard = track.querySelector<HTMLElement>("[data-card-idx='0']");
+      if (!firstCard) return setSideGap(0);
+      const gap = Math.max(0, (track.clientWidth - firstCard.offsetWidth) / 2);
+      setSideGap(gap);
     };
 
-    computeActive();
-    const onScroll = () => computeActive();
-    const onResize = () => computeActive();
-
-    track.addEventListener("scroll", onScroll, { passive: true });
-    window.addEventListener("resize", onResize);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(track);
+    window.addEventListener("resize", measure);
     return () => {
-      track.removeEventListener("scroll", onScroll);
-      window.removeEventListener("resize", onResize);
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
     };
-  }, []);
+  }, [items?.length]);
 
-  // ── 이하 분기 렌더 (Hook 호출 이후에만 return)
   if (loading) {
     return (
       <section className="mt-6">
@@ -138,19 +166,15 @@ function HistoryStrip({
     );
   }
 
-  const scrollToIndex = (idx: number) => {
+  /* 지정 인덱스를 정확히 중앙으로 */
+  const scrollToIndex = (idx: number, smooth = true) => {
     const track = trackRef.current;
     if (!track) return;
-    const cards = Array.from(track.querySelectorAll<HTMLElement>("[data-card-idx]"));
-    const target = cards[idx];
-    if (!target) return;
+    const card = track.querySelector<HTMLElement>(`[data-card-idx="${idx}"]`);
+    if (!card) return;
 
-    const trackRect = track.getBoundingClientRect();
-    const targetRect = target.getBoundingClientRect();
-    const delta =
-      targetRect.left + targetRect.width / 2 - (trackRect.left + trackRect.width / 2);
-
-    track.scrollBy({ left: delta, behavior: "smooth" });
+    const left = card.offsetLeft + card.offsetWidth / 2 - track.clientWidth / 2;
+    track.scrollTo({ left, behavior: smooth ? "smooth" : ("instant" as any) });
   };
 
   return (
@@ -183,102 +207,117 @@ function HistoryStrip({
         </div>
       </div>
 
-      {/* 캐러셀 트랙 — 스크롤바 숨김(모든 브라우저) */}
-      <div
-        ref={trackRef}
-        className={[
-          "relative -mx-6 px-6 overflow-x-auto snap-x snap-mandatory",
-          "[scrollbar-width:none]",    // Firefox
-          "[ms-overflow-style:none]",  // 구형 Edge/IE
-          "[&::-webkit-scrollbar]:hidden",
-          "[&::-webkit-scrollbar]:w-0",
-          "[&::-webkit-scrollbar]:h-0",
-        ].join(" ")}
-      >
-        <div className="flex gap-6 py-2">
-          {list.map((it, idx) => {
-            const pid = it.photo_id ?? it.photoId ?? it.id;
-            const { primary, fallback } = buildPhotoSrc(pid);
-            const title = it.title_snapshot ?? it.title ?? "제목 없음";
-            const artist = it.artist_snapshot ?? it.artist ?? "Various";
-            const dateObj = extractDate(it);
-            const badge = dateObj ? fmtDateBadge(dateObj) : null;
+      {/* 캐러셀 래퍼 (인디케이터 고정용) */}
+      <div className="relative pb-10">
+        {/* 트랙 */}
+        <div
+          ref={trackRef}
+          className={[
+            "relative -mx-6 px-6 overflow-x-auto snap-x snap-mandatory",
+            "[scrollbar-width:none]",
+            "[ms-overflow-style:none]",
+            "[&::-webkit-scrollbar]:hidden",
+            "[&::-webkit-scrollbar]:w-0",
+            "[&::-webkit-scrollbar]:h-0",
+          ].join(" ")}
+        >
+          <div className="flex gap-6 py-2">
+            {/* 왼쪽 고스트 공간 */}
+            <div className="shrink-0" style={{ width: sideGap }} aria-hidden />
 
-            const isActive = idx === active;
-            const isNeighbor = Math.abs(idx - active) === 1;
+            {list.map((it, idx) => {
+              const pid = it.photo_id ?? it.photoId ?? it.id;
+              const { primary, fallback } = buildPhotoSrc(pid);
+              const title = it.title_snapshot ?? it.title ?? "제목 없음";
+              const artist = it.artist_snapshot ?? it.artist ?? "Various";
+              const dateObj = extractDate(it);
+              const badge = dateObj ? fmtDateBadge(dateObj) : null;
 
-            const scaleClass = isActive ? "scale-100" : "scale-[0.92]";
-            const opacityClass = isActive ? "opacity-100" : isNeighbor ? "opacity-80" : "opacity-60";
-            const blurClass = isActive ? "blur-0" : "blur-[0.3px]";
+              const isActive = idx === active;
+              const isNeighbor = Math.abs(idx - active) === 1;
 
-            return (
-              <div
-                key={`${pid}-${idx}`}
-                data-card-idx={idx}
-                className="snap-center shrink-0 w-[82%] sm:w-[60%] md:w-[46%] lg:w-[38%]"
-                onClick={() => scrollToIndex(idx)}
-                role="button"
-                aria-label={`${title} 카드`}
-              >
+              return (
                 <div
-                  className={[
-                    "rounded-2xl bg-white/80 shadow-sm p-4 transition-all duration-300 ease-out border border-white/70",
-                    scaleClass,
-                    opacityClass,
-                  ].join(" ")}
+                  key={`${pid}-${idx}`}
+                  data-card-idx={idx}
+                  className="snap-center shrink-0 w-[82%] sm:w-[60%] md:w-[46%] lg:w-[38%]"
+                  onClick={() => scrollToIndex(idx)}
+                  role="button"
+                  aria-label={`${title} 카드`}
                 >
-                  <div className="relative aspect-[4/5] rounded-xl overflow-hidden bg-black/5">
-                    <img
-                      src={primary}
-                      alt={title}
-                      className={["w-full h-full object-cover transition", blurClass].join(" ")}
-                      crossOrigin="anonymous"
-                      onError={(e) => {
-                        const img = e.currentTarget as HTMLImageElement;
-                        if (!(img as any).__fb) {
-                          (img as any).__fb = true;
-                          img.src = fallback;
-                        } else {
-                          img.src = "/placeholder.svg";
-                        }
-                      }}
-                    />
-                    {badge && (
-                      <span
-                        className="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-black/60 text-white text-[11px] leading-5 shadow-sm"
-                        title={dateObj!.toLocaleString()}
-                      >
-                        {badge}
-                      </span>
-                    )}
-                    {isActive && (
-                      <div className="pointer-events-none absolute -top-2 left-4 right-4 h-2 bg-gradient-to-r from-fuchsia-400/60 via-sky-400/60 to-emerald-400/60 blur opacity-70" />
-                    )}
-                  </div>
+                  <div
+                    className={[
+                      "rounded-2xl bg-white/80 shadow-sm p-4 transition-all duration-300 ease-out border border-white/70",
+                      isActive
+                        ? "scale-100 opacity-100"
+                        : isNeighbor
+                        ? "scale-[0.95] opacity-80"
+                        : "scale-[0.9] opacity-60",
+                    ].join(" ")}
+                  >
+                    <div className="relative aspect-[4/5] rounded-xl overflow-hidden bg-black/5">
+                      <img
+                        src={primary}
+                        alt={title}
+                        className={[
+                          "w-full h-full object-cover transition",
+                          isActive ? "blur-0" : "blur-[0.3px]",
+                        ].join(" ")}
+                        crossOrigin="anonymous"
+                        onError={(e) => {
+                          const img = e.currentTarget as HTMLImageElement;
+                          if (!(img as any).__fb) {
+                            (img as any).__fb = true;
+                            img.src = fallback;
+                          } else {
+                            img.src = "/placeholder.svg";
+                          }
+                        }}
+                      />
+                      {badge && (
+                        <span
+                          className="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-black/60 text-white text-[11px] leading-5 shadow-sm"
+                          title={dateObj!.toLocaleString()}
+                        >
+                          {badge}
+                        </span>
+                      )}
+                      {isActive && (
+                        <div className="pointer-events-none absolute -top-2 left-4 right-4 h-2 bg-gradient-to-r from-fuchsia-400/60 via-sky-400/60 to-emerald-400/60 blur opacity-70" />
+                      )}
+                    </div>
 
-                  <div className="mt-3">
-                    <div className="text-slate-900 font-semibold truncate">{title}</div>
-                    <div className="text-slate-500 text-sm truncate">{artist}</div>
+                    <div className="mt-3">
+                      <div className="text-slate-900 font-semibold truncate">{title}</div>
+                      <div className="text-slate-500 text-sm truncate">{artist}</div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+
+            {/* 오른쪽 고스트 공간 */}
+            <div className="shrink-0" style={{ width: sideGap }} aria-hidden />
+          </div>
         </div>
 
-        {/* 인디케이터 */}
-        <div className="mt-3 flex items-center justify-center gap-2">
-          {list.map((_, i) => (
-            <button
-              key={i}
-              aria-label={`인덱스 ${i + 1}`}
-              onClick={() => scrollToIndex(i)}
-              className={[
-                "h-2 rounded-full transition-all",
-                i === active ? "w-5 bg-slate-700" : "w-2.5 bg-slate-400/60 hover:bg-slate-500/70",
-              ].join(" ")}
-            />
-          ))}
+        {/* 하단 중앙 고정 인디케이터 */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-1 flex justify-center">
+          <div className="pointer-events-auto rounded-full bg-white/70 backdrop-blur px-3 py-1 shadow border border-white/60">
+            <div className="flex items-center gap-2">
+              {list.map((_, i) => (
+                <button
+                  key={i}
+                  aria-label={`인덱스 ${i + 1}`}
+                  onClick={() => scrollToIndex(i)}
+                  className={[
+                    "h-2 rounded-full transition-all",
+                    i === active ? "w-6 bg-slate-800" : "w-2.5 bg-slate-400/70 hover:bg-slate-500/80",
+                  ].join(" ")}
+                />
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     </section>
