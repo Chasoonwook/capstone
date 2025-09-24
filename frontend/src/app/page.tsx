@@ -260,7 +260,7 @@ function HistoryStrip({
             "relative -mx-6 px-6 overflow-x-auto snap-x snap-mandatory",
             "[scrollbar-width:none]",
             "[ms-overflow-style:none]",
-            "[&::-webkit-scrollbar]:hidden]",
+            "[&::-webkit-scrollbar]:hidden",
             "[&::-webkit-scrollbar]:w-0",
             "[&::-webkit-scrollbar]:h-0",
           ].join(" ")}
@@ -284,7 +284,7 @@ function HistoryStrip({
                 <div
                   key={`${pid}-${idx}`}
                   data-card-idx={idx}
-                  className="snap-center shrink-0 w-[88%] sm:w-[64%] md:w-[48%] lg:w-[40%]"
+                  className="snap-center shrink-0 w-[28%] sm:w-[26%] md:w-[24%] lg:w-[22%]"
                   onClick={() => centerTo(idx)}
                   role="button"
                   aria-label={`${title} 카드`}
