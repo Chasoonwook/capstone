@@ -22,7 +22,7 @@ function apiBase(req) {
   return `${req.protocol}://${req.get("host")}/api`;
 }
 
-/* ── 공통 CORS 헬퍼 ─────────────────────────────────────────────── */
+/* ── CORS ─────────────────────────────────────────────────────── */
 function allowCORS(req, res) {
   const origin = req.headers.origin || "*";
   res.set("Access-Control-Allow-Origin", origin);
@@ -32,7 +32,7 @@ function allowCORS(req, res) {
   res.set("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
 }
 
-/* ── mood 매핑: 소문자/trim + 점진 매칭 ─────────────────────────── */
+/* ── mood 매핑 ─────────────────────────────────────────────────── */
 async function resolveMood(client, timeLabel, background, emotion, prefer) {
   if (prefer?.main_mood) {
     return {
@@ -87,17 +87,16 @@ router.get("/_who", (_req,res) =>
   res.json({ from:"routes/photos.js", analyzePath:"/api/photos/analyze" })
 );
 
-/* ────────────────────────────────────────────────────────────────
- * 바이너리 내려주기 (CORS 포함)
- *  - DB bytea 가 Buffer 인 경우 그대로
- *  - '\x....' (hex 문자열)인 경우 Buffer.from(hex, 'hex')
- *  - data:URL / base64 문자열 방어
+/* ───────────────────────────────────────────────────────────────
+ * GET /api/photos/:photoId/binary
+ * - photos(photo_id, mime_type, content(bytea))
+ * - bytea가 Buffer 또는 '\x..'(hex) 문자열로 올 수 있음 → Buffer로 변환
  * ─────────────────────────────────────────────────────────────── */
 router.get("/:photoId/binary", async (req,res)=>{
   try {
     const { photoId } = req.params;
     const r = await pool.query(
-      "SELECT mime_type, content FROM photos WHERE photo_id=$1 OR id=$1 LIMIT 1",
+      "SELECT mime_type, content FROM photos WHERE photo_id=$1 LIMIT 1",
       [photoId]
     );
     if (!r.rows.length) return res.status(404).send("Not found");
@@ -109,13 +108,11 @@ router.get("/:photoId/binary", async (req,res)=>{
       buf = content;
     } else if (typeof content === "string") {
       if (content.startsWith("\\x")) {
-        // bytea hex string
-        buf = Buffer.from(content.slice(2), "hex");
+        buf = Buffer.from(content.slice(2), "hex");     // bytea hex
       } else if (content.startsWith("data:")) {
         buf = Buffer.from(content.split(",")[1] || "", "base64");
       } else {
-        // 안전망: base64 로 간주
-        try { buf = Buffer.from(content, "base64"); }
+        try { buf = Buffer.from(content, "base64"); }   // 안전망
         catch { buf = Buffer.from(content); }
       }
     } else {
@@ -134,7 +131,10 @@ router.get("/:photoId/binary", async (req,res)=>{
   }
 });
 
-/* 업로더(업서트) – 편집본/원본 저장: multipart/form-data 의 file 필드 사용 */
+/* ───────────────────────────────────────────────────────────────
+ * POST/PUT /api/photos/:photoId/binary
+ * - 원본/편집본을 해당 photo_id로 덮어쓰기 (필드명: file)
+ * ─────────────────────────────────────────────────────────────── */
 async function upsertBinary(req, res) {
   const photoId = Number(req.params.photoId);
   if (!Number.isFinite(photoId)) {
@@ -174,18 +174,17 @@ router.options("/:photoId/binary", (req,res) => { allowCORS(req,res); res.sendSt
 router.post("/:photoId/binary", upload.single("file"), upsertBinary);
 router.put("/:photoId/binary",  upload.single("file"), upsertBinary);
 
-/* ────────────────────────────────────────────────────────────────
- * 편집본 저장 엔드포인트 (프론트에서 호출하던 /api/photos/edited 제공)
- *  - multipart/form-data
- *  - fields: file(또는 edited_image), photo_id(required), music_id(optional), selected_from(optional)
- *  - history 테이블에 edited_image / edited_mime_type 로 저장
+/* ───────────────────────────────────────────────────────────────
+ * POST /api/photos/edited
+ * - 편집본을 history.edited_image / edited_mime_type 에 저장
+ * - multipart/form-data
+ *   - file(필수), photo_id(필수), music_id?(선택), selected_from?('main'|'sub'|그외 null)
  * ─────────────────────────────────────────────────────────────── */
 router.options("/edited", (req,res)=>{ allowCORS(req,res); res.sendStatus(200); });
 router.post("/edited", upload.single("file"), async (req,res) => {
   try {
     allowCORS(req, res);
 
-    // 파일 필드명이 edited_image 로 올 수도 있으니 보완
     const file = req.file || (req.files && req.files.edited_image);
     if (!file) return res.status(400).json({ error: "file field is required" });
 
@@ -194,13 +193,12 @@ router.post("/edited", upload.single("file"), async (req,res) => {
 
     const music_id = req.body.music_id ? Number(req.body.music_id) :
                      req.body.musicId ? Number(req.body.musicId) : null;
+
     const selected_from =
       req.body.selected_from === "sub" ? "sub" :
-      req.body.selected_from === "main" ? "main" :
-      // preferred/null/기타 → null
-      null;
+      req.body.selected_from === "main" ? "main" : null; // preferred/null→null
 
-    // 사용자 식별은 환경에 맞게 (세션/토큰 미들웨어가 있으면 거기서 가져오세요)
+    // 프로젝트 인증 미들웨어에 맞춰 조정
     const user_id =
       (req.user && (req.user.id || req.user.user_id)) ||
       (req.session && req.session.user && req.session.user.id) ||
@@ -226,7 +224,9 @@ router.post("/edited", upload.single("file"), async (req,res) => {
   }
 });
 
-/* 서명 URL 발급 */
+/* ───────────────────────────────────────────────────────────────
+ * 서명 URL 발급 (AI 호출용)
+ * ─────────────────────────────────────────────────────────────── */
 router.get("/:photoId/signed-url", (req,res)=>{
   try {
     const { photoId } = req.params;
@@ -239,7 +239,7 @@ router.get("/:photoId/signed-url", (req,res)=>{
   }
 });
 
-/* 내부 유틸: 이미지가 실제로 200 나오는지 짧게 확인 (최대 5회, 80ms 간격) */
+/* 내부 유틸: 이미지 200 확인(최대 5회, 80ms 간격) */
 async function waitImageVisible(imageUrl) {
   for (let i = 0; i < 5; i++) {
     try {
@@ -258,7 +258,7 @@ async function waitImageVisible(imageUrl) {
   return false;
 }
 
-// GET /api/photo-analysis/:photoId (프론트 디버깅용)
+/* 프론트 디버깅용 */
 router.get("/photo-analysis/:photoId", async (req, res) => {
   const photoId = Number(req.params.photoId);
   if (!Number.isFinite(photoId)) return res.status(400).json({ error: "bad id" });
@@ -274,7 +274,7 @@ router.get("/photo-analysis/:photoId", async (req, res) => {
   res.json(rows[0]);
 });
 
-/* 업로드 + 즉시 분석 (추천은 recommendations 라우터에서 별도로 조회) */
+/* 업로드 + 즉시 분석 */
 router.post("/analyze", upload.single("file"), async (req,res)=>{
   let imageUrl;
   const client = await pool.connect();
@@ -347,7 +347,7 @@ router.post("/:photoId/analyze", async (req,res)=>{
     const { photoId } = req.params;
     const userId = req.body.userId || "00000000-0000-0000-0000-000000000000";
 
-    const ex = await client.query(`SELECT 1 FROM photos WHERE photo_id=$1 OR id=$1`, [photoId]);
+    const ex = await client.query(`SELECT 1 FROM photos WHERE photo_id=$1`, [photoId]);
     if (!ex.rows.length) return res.status(404).json({ error:"photo not found" });
 
     const token = jwt.sign({ id:String(photoId) }, process.env.IMG_TOKEN_SECRET, { expiresIn: IMG_TOKEN_TTL });
