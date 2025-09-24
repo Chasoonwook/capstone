@@ -45,10 +45,7 @@ function extractDate(item: any): Date | null {
 const fmtDateBadge = (d: Date) =>
   d.toLocaleDateString("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" });
 
-/* ──────────────────────────────────────────────────────────────
-   히스토리 섹션: Digimon-style 캐러셀 (가운데 카드 강조)
-   + 스크롤바 숨김(마우스/터치 스크롤 가능)
-   ────────────────────────────────────────────────────────────── */
+/* Digimon-style 캐러셀 (가운데 카드 강조, 스크롤바 숨김) */
 function HistoryStrip({
   user,
   items,
@@ -63,6 +60,44 @@ function HistoryStrip({
   const trackRef = useRef<HTMLDivElement | null>(null);
   const [active, setActive] = useState(0);
 
+  // ★ 모든 Hook은 최상단에서 먼저 호출 (return보다 위)
+  useEffect(() => {
+    const track = trackRef.current;
+    if (!track) return;
+
+    const computeActive = () => {
+      const rect = track.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+
+      let bestIdx = 0;
+      let bestDist = Infinity;
+      const cards = Array.from(track.querySelectorAll<HTMLElement>("[data-card-idx]"));
+      cards.forEach((card) => {
+        const idx = Number(card.dataset.cardIdx || 0);
+        const cr = card.getBoundingClientRect();
+        const cardCenter = cr.left + cr.width / 2;
+        const dist = Math.abs(cardCenter - centerX);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestIdx = idx;
+        }
+      });
+      setActive(bestIdx);
+    };
+
+    computeActive();
+    const onScroll = () => computeActive();
+    const onResize = () => computeActive();
+
+    track.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onResize);
+    return () => {
+      track.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onResize);
+    };
+  }, []);
+
+  // ── 이하 분기 렌더 (Hook 호출 이후에만 return)
   if (loading) {
     return (
       <section className="mt-6">
@@ -118,42 +153,6 @@ function HistoryStrip({
     track.scrollBy({ left: delta, behavior: "smooth" });
   };
 
-  useEffect(() => {
-    const track = trackRef.current;
-    if (!track) return;
-
-    const computeActive = () => {
-      const rect = track.getBoundingClientRect();
-      const centerX = rect.left + rect.width / 2;
-
-      let bestIdx = 0;
-      let bestDist = Infinity;
-      const cards = Array.from(track.querySelectorAll<HTMLElement>("[data-card-idx]"));
-      cards.forEach((card) => {
-        const idx = Number(card.dataset.cardIdx || 0);
-        const cr = card.getBoundingClientRect();
-        const cardCenter = cr.left + cr.width / 2;
-        const dist = Math.abs(cardCenter - centerX);
-        if (dist < bestDist) {
-          bestDist = dist;
-          bestIdx = idx;
-        }
-      });
-      setActive(bestIdx);
-    };
-
-    computeActive();
-    const onScroll = () => computeActive();
-    const onResize = () => computeActive();
-
-    track.addEventListener("scroll", onScroll, { passive: true });
-    window.addEventListener("resize", onResize);
-    return () => {
-      track.removeEventListener("scroll", onScroll);
-      window.removeEventListener("resize", onResize);
-    };
-  }, []);
-
   return (
     <section className="mt-6">
       <div className="flex items-end justify-between mb-3">
@@ -184,15 +183,17 @@ function HistoryStrip({
         </div>
       </div>
 
-      {/* 캐러셀 트랙 — 스크롤바 숨김 */}
+      {/* 캐러셀 트랙 — 스크롤바 숨김(모든 브라우저) */}
       <div
         ref={trackRef}
-        data-history-track
-        className="relative -mx-6 px-6 overflow-x-auto snap-x snap-mandatory"
-        style={{
-          scrollbarWidth: "none",       // Firefox
-          msOverflowStyle: "none" as any, // IE/Edge 레거시
-        }}
+        className={[
+          "relative -mx-6 px-6 overflow-x-auto snap-x snap-mandatory",
+          "[scrollbar-width:none]",    // Firefox
+          "[ms-overflow-style:none]",  // 구형 Edge/IE
+          "[&::-webkit-scrollbar]:hidden",
+          "[&::-webkit-scrollbar]:w-0",
+          "[&::-webkit-scrollbar]:h-0",
+        ].join(" ")}
       >
         <div className="flex gap-6 py-2">
           {list.map((it, idx) => {
@@ -214,7 +215,7 @@ function HistoryStrip({
               <div
                 key={`${pid}-${idx}`}
                 data-card-idx={idx}
-                className="snap-center shrink-0 w-[82%] xs:w-[75%] sm:w-[60%] md:w-[46%] lg:w-[38%]"
+                className="snap-center shrink-0 w-[82%] sm:w-[60%] md:w-[46%] lg:w-[38%]"
                 onClick={() => scrollToIndex(idx)}
                 role="button"
                 aria-label={`${title} 카드`}
@@ -280,16 +281,6 @@ function HistoryStrip({
           ))}
         </div>
       </div>
-
-      {/* WebKit 전용 스크롤바 숨김 (이 컴포넌트 내 track에만 적용) */}
-      <style jsx global>{`
-        [data-history-track]::-webkit-scrollbar {
-          display: none;
-          width: 0;
-          height: 0;
-          background: transparent;
-        }
-      `}</style>
     </section>
   );
 }
@@ -301,6 +292,7 @@ export default function Page() {
   const { history, loading: historyLoading, error: historyError } = useHistory(isLoggedIn);
   const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
 
+  // 계정 식별자
   const accountId = useMemo(() => {
     const anyUser = (user ?? {}) as {
       email?: string | null;
