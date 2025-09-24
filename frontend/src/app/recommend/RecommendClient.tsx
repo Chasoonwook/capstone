@@ -21,10 +21,6 @@ import {
 import type { Song, BackendSong, ByPhotoResponse, SelectedFrom } from "./types";
 import { buildAuthHeaderFromLocalStorage, fetchMe } from "./hooks/useAuthMe";
 
-/* ------------------------------------------------------------------ */
-/*                            컴포넌트 본문                            */
-/* ------------------------------------------------------------------ */
-
 export default function RecommendClient() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -78,10 +74,8 @@ export default function RecommendClient() {
   const [contextMainMood, setContextMainMood] = useState<string | null>(null);
   const [contextSubMood, setContextSubMood] = useState<string | null>(null);
 
-  // ✅ 사용자가 고른 "선택 곡" (이 값만 저장 대상)
-  const [selectedSongId, setSelectedSongId] = useState<string | number | null>(
-    null
-  );
+  // 사용자가 고른 "선택 곡" (이 값만 에디터로 전달)
+  const [selectedSongId, setSelectedSongId] = useState<string | number | null>(null);
 
   // Init audio
   useEffect(() => {
@@ -121,12 +115,10 @@ export default function RecommendClient() {
     if (myId !== playReqIdRef.current) return;
     try {
       await a.play();
-    } catch (e) {
-      /* ignore AbortError */
-    }
+    } catch {}
   }, []);
 
-  /* ---------------- 이미지 로드 ---------------- */
+  // 이미지 로드
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -165,7 +157,7 @@ export default function RecommendClient() {
     img.onload = () => setIsLandscape(img.naturalWidth > img.naturalHeight);
   }, [uploadedImage]);
 
-  /* ---------------- 추천 불러오기 ---------------- */
+  // 추천 불러오기
   const fetchRecommendations = useCallback(
     async (signal?: AbortSignal) => {
       if (!photoId) {
@@ -177,9 +169,7 @@ export default function RecommendClient() {
       }
       try {
         const r = await fetch(
-          `${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(
-            photoId
-          )}?debug=1`,
+          `${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(photoId)}?debug=1`,
           { signal, credentials: "include" }
         );
         if (!r.ok) {
@@ -190,10 +180,7 @@ export default function RecommendClient() {
           return;
         }
         const raw = await r.json();
-        const obj =
-          raw && typeof raw === "object" && !Array.isArray(raw)
-            ? (raw as Record<string, unknown>)
-            : null;
+        const obj = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
         const data: ByPhotoResponse = obj
           ? {
               main_mood: obj["main_mood"] as string | null,
@@ -208,23 +195,16 @@ export default function RecommendClient() {
         setContextSubMood(data.sub_mood ?? null);
 
         const mark = (arr: BackendSong[], tag: SelectedFrom) =>
-          (arr ?? []).map((s) => ({
-            ...s,
-            __selected_from__: tag as SelectedFrom,
-          }));
+          (arr ?? []).map((s) => ({ ...s, __selected_from__: tag as SelectedFrom }));
 
-        const merged: (BackendSong & {
-          __selected_from__?: SelectedFrom;
-        })[] = [
+        const merged: (BackendSong & { __selected_from__?: SelectedFrom })[] = [
           ...mark(data.main_songs ?? [], "main"),
           ...mark(data.preferred_songs ?? [], "preferred"),
           ...mark(data.sub_songs ?? [], "sub"),
         ];
 
         const seen = new Set<string | number>();
-        const dedup: (BackendSong & {
-          __selected_from__?: SelectedFrom;
-        })[] = [];
+        const dedup: (BackendSong & { __selected_from__?: SelectedFrom })[] = [];
         merged.forEach((s, i) => {
           const id = (s.music_id ?? s.id ?? i) as string | number;
           if (!seen.has(id)) {
@@ -250,10 +230,7 @@ export default function RecommendClient() {
 
             try {
               if (!uri || !preview || !image) {
-                const info = await resolvePreviewAndCover(
-                  it.title as any,
-                  it.artist as any
-                );
+                const info = await resolvePreviewAndCover(it.title as any, it.artist as any);
                 uri = uri ?? toSpotifyUri(info.uri);
                 preview = preview ?? info.preview;
                 image = image ?? info.cover;
@@ -282,7 +259,7 @@ export default function RecommendClient() {
         setDuration(parseDurationToSec(first?.duration ?? "3:00"));
         setSource(null);
         setFeedbackMap({});
-        setSelectedSongId(null); // ✅ 자동 선택 금지 (사용자가 직접 고르게)
+        setSelectedSongId(null);
       } catch {
         setRecommendations([]);
         setCurrentSong(null);
@@ -339,8 +316,7 @@ export default function RecommendClient() {
       const results = await Promise.allSettled(tasks);
       if (cancelled) return;
       const updates: Array<{ idx: number; next: Partial<Song> }> = [];
-      for (const r of results)
-        if (r.status === "fulfilled" && r.value) updates.push(r.value);
+      for (const r of results) if (r.status === "fulfilled" && r.value) updates.push(r.value);
 
       if (!updates.length) return;
       setRecommendations((prev) => {
@@ -368,7 +344,7 @@ export default function RecommendClient() {
     [currentSong?.spotify_uri]
   );
 
-  /* ---------------- 자동 전체듣기(Spotify) ---------------- */
+  // 자동 전체듣기(Spotify)
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -388,16 +364,7 @@ export default function RecommendClient() {
     return () => {
       cancelled = true;
     };
-  }, [
-    isLoggedInSpotify,
-    accessToken,
-    ready,
-    normalizedCurrentUri,
-    source,
-    activate,
-    transferToThisDevice,
-    playUris,
-  ]);
+  }, [isLoggedInSpotify, accessToken, ready, normalizedCurrentUri, source, activate, transferToThisDevice, playUris]);
 
   // preview 타이머
   useEffect(() => {
@@ -408,7 +375,7 @@ export default function RecommendClient() {
     return () => clearInterval(id);
   }, [isPlaying, duration, source]);
 
-  /* ---------------- 재생 로직 ---------------- */
+  // 재생 로직
   const playSong = async (song: Song) => {
     setCurrentSong(song);
     setCurrentTime(0);
@@ -470,9 +437,7 @@ export default function RecommendClient() {
         setIsPlaying(false);
       }
     } else {
-      alert(
-        "이 곡은 미리듣기 음원이 없습니다. 전체 듣기는 상단 사용자 메뉴에서 Spotify 연동 후 이용하세요."
-      );
+      alert("이 곡은 미리듣기 음원이 없습니다. 전체 듣기는 상단 사용자 메뉴에서 Spotify 연동 후 이용하세요.");
       setIsPlaying(false);
     }
   };
@@ -522,12 +487,10 @@ export default function RecommendClient() {
     if (busy || recommendations.length === 0) return;
     setBusy(true);
     try {
-      const curIdx = currentSong
-        ? recommendations.findIndex((s) => s.id === currentSong.id)
-        : -1;
+      const curIdx = currentSong ? recommendations.findIndex((s) => s.id === currentSong.id) : -1;
       const nextIdx = curIdx < 0 ? 0 : (curIdx + 1) % recommendations.length;
       const nextSong = recommendations[nextIdx];
-      setSelectedSongId(nextSong.id); // ✅ 사용자 의도: 선택 처리
+      setSelectedSongId(nextSong.id);
       await playSong(nextSong);
     } finally {
       setBusy(false);
@@ -538,7 +501,7 @@ export default function RecommendClient() {
     if (busy) return;
     setBusy(true);
     try {
-      setSelectedSongId(song.id); // ✅ 목록 클릭 시 선택
+      setSelectedSongId(song.id);
       await playSong(song);
     } finally {
       setBusy(false);
@@ -549,22 +512,18 @@ export default function RecommendClient() {
     if (busy || recommendations.length === 0) return;
     setBusy(true);
     try {
-      const curIdx = currentSong
-        ? recommendations.findIndex((s) => s.id === currentSong.id)
-        : 0;
+      const curIdx = currentSong ? recommendations.findIndex((s) => s.id === currentSong.id) : 0;
       const prevIdx = curIdx <= 0 ? recommendations.length - 1 : curIdx - 1;
       const prevSong = recommendations[prevIdx];
-      setSelectedSongId(prevSong.id); // ✅ 선택 처리
+      setSelectedSongId(prevSong.id);
       await playSong(prevSong);
     } finally {
       setBusy(false);
     }
   };
 
-  /* ---------------- 피드백 ---------------- */
-  const [feedbackMap, setFeedbackMap] = useState<
-    Record<string | number, 1 | -1 | 0>
-  >({});
+  // 피드백
+  const [feedbackMap, setFeedbackMap] = useState<Record<string | number, 1 | -1 | 0>>({});
   const sendFeedback = useCallback(
     async (musicId: string | number, value: 1 | -1) => {
       const payload = {
@@ -628,87 +587,25 @@ export default function RecommendClient() {
     [currentSong, feedbackMap, sendFeedback]
   );
 
-  /* ---------------- History 저장 → 편집 이동 ---------------- */
-  const saveHistoryAndGoEdit = useCallback(async () => {
+  // 저장 제거 → 에디터로 이동만
+  const goEditOnly = useCallback(async () => {
     if (!photoId) {
       alert("photoId가 없습니다.");
       return;
     }
     if (!selectedSongId) {
-      // ✅ 선택되지 않았으면 저장 금지
-      alert("저장할 곡을 선택해 주세요.");
+      alert("편집할 곡을 먼저 선택해 주세요.");
       return;
     }
+    const q = new URLSearchParams();
+    q.set("photoId", String(photoId));
+    q.set("musicId", String(selectedSongId));
+    router.push(`/editor?${q.toString()}`);
+  }, [photoId, selectedSongId, router]);
 
-    const me = await fetchMe();
-    if (!me?.id) {
-      alert("로그인이 필요합니다.");
-      return;
-    }
-
-    // 선택된 곡 객체(출처 표시 위해)
-    const selSong =
-      recommendations.find((s) => s.id === selectedSongId) ?? currentSong;
-
-    const payload = {
-      user_id: me.id,
-      photo_id: Number(photoId),
-      music_id: Number(selectedSongId), // ✅ 선택된 곡만 저장
-      selected_from:
-        selSong?.selected_from === "preferred"
-          ? null
-          : selSong?.selected_from ?? null,
-    };
-
-    let saved: any = null;
-    try {
-      const r = await fetch(`${API_BASE}/api/history`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (r.ok) saved = await r.json();
-    } catch {}
-    if (!saved) {
-      const authHeader = buildAuthHeaderFromLocalStorage();
-      if (!authHeader.Authorization) {
-        alert("로그인이 필요합니다.");
-        return;
-      }
-      const r2 = await fetch(`${API_BASE}/api/history`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json", ...authHeader },
-        body: JSON.stringify(payload),
-      });
-      if (!r2.ok) {
-        alert("이력 저장에 실패했습니다.");
-        return;
-      }
-      saved = await r2.json();
-    }
-
-    const historyId = saved?.history_id ?? null;
-    router.push(
-      `/editor?photoId=${encodeURIComponent(String(photoId))}${
-        historyId ? `&historyId=${historyId}` : ""
-      }${
-        // ✅ 선택한 곡 id 추가(편집 저장 시 재업서트에 사용)
-        selectedSongId ? `&musicId=${encodeURIComponent(String(selectedSongId))}` : ""
-      }`
-);
-  }, [photoId, selectedSongId, recommendations, currentSong, router]);
-
-  /* ---------------- View 조립 ---------------- */
-  const safeImageSrc = useMemo(
-    () => uploadedImage || "/placeholder.svg",
-    [uploadedImage]
-  );
-  const safeBgStyle = useMemo(
-    () => ({ backgroundImage: `url(${safeImageSrc})` }),
-    [safeImageSrc]
-  );
+  // View 조립
+  const safeImageSrc = useMemo(() => uploadedImage || "/placeholder.svg", [uploadedImage]);
+  const safeBgStyle = useMemo(() => ({ backgroundImage: `url(${safeImageSrc})` }), [safeImageSrc]);
 
   const handleRefresh = async () => {
     if (isRefreshing) return;
@@ -736,8 +633,7 @@ export default function RecommendClient() {
       source={source}
       onSeek={(v) => {
         setCurrentTime(v);
-        if (source === "preview" && audioRef.current)
-          audioRef.current.currentTime = v;
+        if (source === "preview" && audioRef.current) audioRef.current.currentTime = v;
       }}
       onTogglePlay={togglePlay}
       onNext={playNextSong}
@@ -747,8 +643,8 @@ export default function RecommendClient() {
       onRefresh={handleRefresh}
       feedback={feedbackMap}
       onFeedback={handleFeedback}
-      onSaveAndEdit={saveHistoryAndGoEdit}
-      showSaveButtonInPane={false} // 오른쪽 패널에서는 숨김
+      onSaveAndEdit={goEditOnly}
+      showSaveButtonInPane={false}
       recommendationsCount={recommendations.length}
       RecommendationList={
         <RecommendationList
@@ -767,8 +663,8 @@ export default function RecommendClient() {
         uploadedImage={uploadedImage}
         isLandscape={isLandscape}
         rightPane={rightPane}
-        onSaveAndEdit={saveHistoryAndGoEdit}
-        saveEnabled={Boolean(selectedSongId && photoId)} // ✅ 선택된 곡 있어야 활성화
+        onSaveAndEdit={goEditOnly}
+        saveEnabled={Boolean(selectedSongId && photoId)}
       />
     ) : views[currentViewIndex] === "cd" ? (
       <CdPlayerView rightPane={rightPane} />
