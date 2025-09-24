@@ -107,26 +107,6 @@ router.get("/:photoId/binary", async (req,res)=>{
     res.status(500).send("Error");
   }
 });
-router.get("/api/photos/:photoId/binary", async (req, res) => {
-  const id = Number(req.params.photoId);
-  const { rows } = await pool.query(
-    "SELECT mime_type, content FROM photos WHERE photo_id = $1 LIMIT 1",
-    [id]
-  );
-  if (!rows.length) return res.sendStatus(404);
-
-  let { mime_type, content } = rows[0];
-  let buf;
-  if (Buffer.isBuffer(content)) buf = content;
-  else if (typeof content === "string" && content.startsWith("\\x")) buf = Buffer.from(content.slice(2), "hex");
-  else if (typeof content === "string" && content.startsWith("data:")) buf = Buffer.from(content.split(",")[1], "base64");
-  else buf = Buffer.from(content, "base64");
-
-  res.setHeader("Content-Type", mime_type || "image/png");
-  res.setHeader("Cache-Control", "no-store");
-  res.setHeader("Content-Length", String(buf.length));
-  res.end(buf);
-});
 
 /* 업로더(업서트) – 편집본 저장: multipart/form-data 의 file 필드 사용 */
 async function upsertBinary(req, res) {
