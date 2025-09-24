@@ -97,4 +97,67 @@ router.get('/', async (req, res) => {
   }
 });
 
+// 0924 편집본 저장
+const multer = require("multer");
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 },
+});
+
+/** 편집본 바이너리: GET /api/history/:id/edited-image/binary */
+router.get("/:id/edited-image/binary", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ error: "invalid id" });
+
+    const { rows } = await pool.query(
+      "SELECT edited_mime_type, edited_image FROM history WHERE history_id=$1",
+      [id]
+    );
+    if (!rows[0] || !rows[0].edited_image) return res.status(404).send("Not found");
+
+    res.set("Content-Type", rows[0].edited_mime_type || "application/octet-stream");
+    return res.send(rows[0].edited_image);
+  } catch (e) {
+    console.error("[history/edited/binary]", e);
+    return res.status(500).json({ error: "binary failed" });
+  }
+});
+
+/** 편집본 업로드: POST /api/history/:id/edited-image (form-data: file)
+ * - 새 테이블 없이 history 테이블에 바로 저장
+ */
+router.post("/:id/edited-image", upload.single("file"), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ error: "invalid id" });
+    if (!req.file) return res.status(400).json({ error: "no file" });
+
+    const { buffer, mimetype } = req.file;
+    if (!/^image\/(png|webp|jpeg)$/.test(mimetype)) {
+      return res.status(400).json({ error: "image/png, image/webp, image/jpeg only" });
+    }
+
+    await pool.query(
+      `UPDATE history
+         SET edited_image=$1,
+             edited_mime_type=$2,
+             edited_at=now()
+       WHERE history_id=$3`,
+      [buffer, mimetype, id]
+    );
+
+    // 프론트에서 <img src>로 바로 쓰게 /binary URL 반환
+    const base = `${req.protocol}://${req.get("host")}`;
+    const editedUrl = `${base}/api/history/${id}/edited-image/binary`;
+    // URL 컬럼을 추가해 쓰고 싶다면 아래 한 줄도 가능(선택)
+    // await pool.query(`UPDATE history SET edited_image_url=$1 WHERE history_id=$2`, [editedUrl, id]);
+
+    return res.json({ edited_image_url: editedUrl });
+  } catch (e) {
+    console.error("[history/edited/upload]", e);
+    return res.status(500).json({ error: "upload failed" });
+  }
+});
+
 module.exports = router;
