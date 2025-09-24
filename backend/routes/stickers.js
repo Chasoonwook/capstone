@@ -10,11 +10,7 @@ router.get("/stickers", async (req, res) => {
   try {
     const { rows } = await pool.query("SELECT sticker_id, name FROM stickers ORDER BY sticker_id DESC");
     const base = `${req.protocol}://${req.get("host")}`;
-    res.json(rows.map(r => ({
-      sticker_id: r.sticker_id,
-      name: r.name,
-      url: `${base}/api/stickers/${r.sticker_id}/binary`,
-    })));
+    res.json(rows.map(r => ({ sticker_id: r.sticker_id, name: r.name, url: `${base}/api/stickers/${r.sticker_id}/binary` })));
   } catch (e) {
     console.error("[stickers/list]", e);
     res.status(500).json({ error: "list failed" });
@@ -25,7 +21,6 @@ router.get("/stickers/:id/binary", async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ error: "invalid id" });
-
     const { rows } = await pool.query("SELECT mime_type, content FROM stickers WHERE sticker_id=$1", [id]);
     if (!rows[0]) return res.status(404).send("Not found");
     res.set("Content-Type", rows[0].mime_type || "application/octet-stream");
@@ -40,15 +35,15 @@ router.post("/stickers", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "no file" });
     const { buffer, originalname, mimetype } = req.file;
-    if (!/^image\/(png|webp|jpeg)$/.test(mimetype)) {
-      return res.status(400).json({ error: "image/png, image/webp, image/jpeg only" });
-    }
+    if (!/^image\/(png|webp|jpeg)$/.test(mimetype)) return res.status(400).json({ error: "image/png, image/webp, image/jpeg only" });
+
     const { rows } = await pool.query(
       `INSERT INTO stickers (name, mime_type, content, uploader_user_id, created_at)
        VALUES ($1,$2,$3,$4, now())
        RETURNING sticker_id, name`,
       [originalname, mimetype, buffer, null]
     );
+
     const id = rows[0].sticker_id;
     const base = `${req.protocol}://${req.get("host")}`;
     const url = `${base}/api/stickers/${id}/binary`;
