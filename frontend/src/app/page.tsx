@@ -22,7 +22,6 @@ const buildPhotoSrc = (photoId: string | number) => {
   };
 };
 
-/* 히스토리 아이템에서 날짜 후보를 꺼내 파싱 */
 function extractDate(item: any): Date | null {
   const v =
     item?.created_at ??
@@ -41,11 +40,10 @@ function extractDate(item: any): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
-/* 날짜 포맷 */
 const fmtDateBadge = (d: Date) =>
   d.toLocaleDateString("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" });
 
-/* Digimon-style 캐러셀: 가운데 카드 강조 + 인디케이터 고정 + 스크롤바 숨김 */
+/* ================== 캐러셀 ================== */
 function HistoryStrip({
   user,
   items,
@@ -59,72 +57,131 @@ function HistoryStrip({
 }) {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const [active, setActive] = useState(0);
-  const [sideGap, setSideGap] = useState(0); // 양 끝 여유 공간(px)
+  const [sideGap, setSideGap] = useState(0);
 
-  /* 중앙 카드 인덱스 계산 (scrollLeft / offset 기반 — transform 영향 X) */
-  const computeActiveByOffset = () => {
+  // rAF 스케줄러 상태
+  const rafIdRef = useRef<number | null>(null);
+  const lastLeftRef = useRef(0);
+  const lastTsRef = useRef(0);
+  const runningRef = useRef(false);
+
+  const computeActive = () => {
     const track = trackRef.current;
     if (!track) return 0;
     const cards = Array.from(track.querySelectorAll<HTMLElement>("[data-card-idx]"));
     if (!cards.length) return 0;
 
     const center = track.scrollLeft + track.clientWidth / 2;
-    let bestIdx = 0;
+    let best = 0;
     let bestDist = Infinity;
-    cards.forEach((card, i) => {
-      const cardCenter = card.offsetLeft + card.offsetWidth / 2;
-      const dist = Math.abs(cardCenter - center);
+    cards.forEach((el, i) => {
+      const c = el.offsetLeft + el.offsetWidth / 2;
+      const dist = Math.abs(c - center);
       if (dist < bestDist) {
         bestDist = dist;
-        bestIdx = i;
+        best = i;
       }
     });
-    return bestIdx;
+    return best;
   };
 
-  /* rAF 루프로 스크롤 추적하여 active 지속 갱신 */
+  const ensureRafLoop = () => {
+    const track = trackRef.current;
+    if (!track || runningRef.current) return;
+
+    runningRef.current = true;
+    const tick = () => {
+      const t = trackRef.current;
+      if (!t) {
+        runningRef.current = false;
+        return;
+      }
+      const now = performance.now();
+      const left = t.scrollLeft;
+
+      const idx = computeActive();
+      setActive((p) => (p === idx ? p : idx));
+
+      if (left !== lastLeftRef.current) {
+        lastLeftRef.current = left;
+        lastTsRef.current = now;
+      }
+      if (now - lastTsRef.current < 120) {
+        rafIdRef.current = requestAnimationFrame(tick);
+      } else {
+        runningRef.current = false;
+        rafIdRef.current = null;
+      }
+    };
+
+    lastLeftRef.current = track.scrollLeft;
+    lastTsRef.current = performance.now();
+    rafIdRef.current = requestAnimationFrame(tick);
+  };
+
+  const measureSideGap = () => {
+    const track = trackRef.current;
+    if (!track) return;
+    const first = track.querySelector<HTMLElement>("[data-card-idx='0']");
+    if (!first) {
+      setSideGap(0);
+      return;
+    }
+    const gap = Math.max(0, (track.clientWidth - first.offsetWidth) / 2);
+    setSideGap(gap);
+  };
+
   useEffect(() => {
     const track = trackRef.current;
     if (!track) return;
-    let rafId = 0;
-    const loop = () => {
-      const idx = computeActiveByOffset();
-      setActive((prev) => (prev !== idx ? idx : prev));
-      rafId = requestAnimationFrame(loop);
-    };
-    rafId = requestAnimationFrame(loop);
 
-    const onResize = () => setActive(computeActiveByOffset());
+    const onScroll = () => ensureRafLoop();
+    const onResize = () => {
+      measureSideGap();
+      setActive(computeActive());
+    };
+
+    track.addEventListener("scroll", onScroll, { passive: true });
     window.addEventListener("resize", onResize);
 
+    measureSideGap();
+    requestAnimationFrame(() => {
+      setActive(computeActive());
+      centerTo(active, false);
+    });
+
     return () => {
-      cancelAnimationFrame(rafId);
+      track.removeEventListener("scroll", onScroll);
       window.removeEventListener("resize", onResize);
+      if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current);
+      runningRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* 카드/트랙 크기에 맞춰 양 끝 여유 공간(sideGap) 계산 */
   useEffect(() => {
     const track = trackRef.current;
     if (!track) return;
 
-    const measure = () => {
-      const firstCard = track.querySelector<HTMLElement>("[data-card-idx='0']");
-      if (!firstCard) return setSideGap(0);
-      const gap = Math.max(0, (track.clientWidth - firstCard.offsetWidth) / 2);
-      setSideGap(gap);
+    const imgs = Array.from(track.querySelectorAll("img"));
+    const onLoad = () => {
+      measureSideGap();
+      setActive(computeActive());
     };
+    imgs.forEach((img) => img.addEventListener("load", onLoad, { once: true }));
 
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(track);
-    window.addEventListener("resize", measure);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", measure);
-    };
+    return () => imgs.forEach((img) => img.removeEventListener("load", onLoad));
   }, [items?.length]);
+
+  const centerTo = (idx: number, smooth = true) => {
+    const track = trackRef.current;
+    if (!track) return;
+    const card = track.querySelector<HTMLElement>(`[data-card-idx="${idx}"]`);
+    if (!card) return;
+    const left = card.offsetLeft + card.offsetWidth / 2 - track.clientWidth / 2;
+    track.scrollTo({ left, behavior: smooth ? "smooth" : ("instant" as any) });
+    ensureRafLoop();
+  };
 
   if (loading) {
     return (
@@ -132,7 +189,7 @@ function HistoryStrip({
         <div className="h-6 w-40 rounded bg-black/10 animate-pulse mb-4" />
         <div className="flex gap-5 overflow-hidden">
           {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="w-[320px] shrink-0 rounded-2xl bg-white/60 shadow-sm p-4">
+            <div key={i} className="w-[300px] shrink-0 rounded-2xl bg-white/60 shadow-sm p-4">
               <div className="aspect-[4/5] rounded-xl bg-black/10 animate-pulse" />
               <div className="h-4 w-2/3 bg-black/10 rounded mt-3 animate-pulse" />
               <div className="h-3 w-1/2 bg-black/10 rounded mt-2 animate-pulse" />
@@ -166,17 +223,6 @@ function HistoryStrip({
     );
   }
 
-  /* 지정 인덱스를 정확히 중앙으로 */
-  const scrollToIndex = (idx: number, smooth = true) => {
-    const track = trackRef.current;
-    if (!track) return;
-    const card = track.querySelector<HTMLElement>(`[data-card-idx="${idx}"]`);
-    if (!card) return;
-
-    const left = card.offsetLeft + card.offsetWidth / 2 - track.clientWidth / 2;
-    track.scrollTo({ left, behavior: smooth ? "smooth" : ("instant" as any) });
-  };
-
   return (
     <section className="mt-6">
       <div className="flex items-end justify-between mb-3">
@@ -190,7 +236,7 @@ function HistoryStrip({
         <div className="hidden sm:flex gap-2">
           <button
             type="button"
-            onClick={() => scrollToIndex(Math.max(0, active - 1))}
+            onClick={() => centerTo(Math.max(0, active - 1))}
             className="h-9 px-3 rounded-lg bg-white/80 shadow border border-white/60 hover:bg-white transition"
             aria-label="이전"
           >
@@ -198,7 +244,7 @@ function HistoryStrip({
           </button>
           <button
             type="button"
-            onClick={() => scrollToIndex(Math.min(list.length - 1, active + 1))}
+            onClick={() => centerTo(Math.min(list.length - 1, active + 1))}
             className="h-9 px-3 rounded-lg bg-white/80 shadow border border-white/60 hover:bg-white transition"
             aria-label="다음"
           >
@@ -207,9 +253,8 @@ function HistoryStrip({
         </div>
       </div>
 
-      {/* 캐러셀 래퍼 (인디케이터 고정용) */}
-      <div className="relative pb-10">
-        {/* 트랙 */}
+      {/* 캐러셀 + 인디케이터 */}
+      <div className="relative pb-8">
         <div
           ref={trackRef}
           className={[
@@ -221,8 +266,8 @@ function HistoryStrip({
             "[&::-webkit-scrollbar]:h-0",
           ].join(" ")}
         >
-          <div className="flex gap-6 py-2">
-            {/* 왼쪽 고스트 공간 */}
+          <div className="flex gap-5 py-2">
+            {/* 좌측 스페이서 */}
             <div className="shrink-0" style={{ width: sideGap }} aria-hidden />
 
             {list.map((it, idx) => {
@@ -240,19 +285,19 @@ function HistoryStrip({
                 <div
                   key={`${pid}-${idx}`}
                   data-card-idx={idx}
-                  className="snap-center shrink-0 w-[82%] sm:w-[60%] md:w-[46%] lg:w-[38%]"
-                  onClick={() => scrollToIndex(idx)}
+                  className="snap-center shrink-0 w-[72%] sm:w-[52%] md:w-[40%] lg:w-[34%]"
+                  onClick={() => centerTo(idx)}
                   role="button"
                   aria-label={`${title} 카드`}
                 >
                   <div
                     className={[
-                      "rounded-2xl bg-white/80 shadow-sm p-4 transition-all duration-300 ease-out border border-white/70",
+                      "rounded-2xl bg-white/80 border border-white/70 p-3.5 transition-all duration-300 ease-out will-change-transform",
                       isActive
-                        ? "scale-100 opacity-100"
+                        ? "-translate-y-2 scale-100 opacity-100 shadow-xl ring-1 ring-sky-200/60"
                         : isNeighbor
-                        ? "scale-[0.95] opacity-80"
-                        : "scale-[0.9] opacity-60",
+                        ? "translate-y-0 scale-[0.90] opacity-85 shadow-sm"
+                        : "translate-y-0 scale-[0.84] opacity-70 shadow-sm",
                     ].join(" ")}
                   >
                     <div className="relative aspect-[4/5] rounded-xl overflow-hidden bg-black/5">
@@ -261,7 +306,7 @@ function HistoryStrip({
                         alt={title}
                         className={[
                           "w-full h-full object-cover transition",
-                          isActive ? "blur-0" : "blur-[0.3px]",
+                          isActive ? "blur-0" : "blur-[0.4px]",
                         ].join(" ")}
                         crossOrigin="anonymous"
                         onError={(e) => {
@@ -272,6 +317,10 @@ function HistoryStrip({
                           } else {
                             img.src = "/placeholder.svg";
                           }
+                        }}
+                        onLoad={() => {
+                          measureSideGap();
+                          setActive(computeActive());
                         }}
                       />
                       {badge && (
@@ -296,12 +345,12 @@ function HistoryStrip({
               );
             })}
 
-            {/* 오른쪽 고스트 공간 */}
+            {/* 우측 스페이서 */}
             <div className="shrink-0" style={{ width: sideGap }} aria-hidden />
           </div>
         </div>
 
-        {/* 하단 중앙 고정 인디케이터 */}
+        {/* 인디케이터 (하단 고정) */}
         <div className="pointer-events-none absolute inset-x-0 bottom-1 flex justify-center">
           <div className="pointer-events-auto rounded-full bg-white/70 backdrop-blur px-3 py-1 shadow border border-white/60">
             <div className="flex items-center gap-2">
@@ -309,7 +358,7 @@ function HistoryStrip({
                 <button
                   key={i}
                   aria-label={`인덱스 ${i + 1}`}
-                  onClick={() => scrollToIndex(i)}
+                  onClick={() => centerTo(i)}
                   className={[
                     "h-2 rounded-full transition-all",
                     i === active ? "w-6 bg-slate-800" : "w-2.5 bg-slate-400/70 hover:bg-slate-500/80",
@@ -331,7 +380,6 @@ export default function Page() {
   const { history, loading: historyLoading, error: historyError } = useHistory(isLoggedIn);
   const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
 
-  // 계정 식별자
   const accountId = useMemo(() => {
     const anyUser = (user ?? {}) as {
       email?: string | null;
