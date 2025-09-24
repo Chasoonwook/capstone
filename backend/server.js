@@ -105,6 +105,7 @@ const mounts = [
   ["/api/music-requests", "routes/musicRequests"],
   ["/api/spotify", "routes/spotify"],
   ["/api", "routes/feedback"],
+  ["/api", "routes/stickers"]
 ];
 
 const mounted = [];
