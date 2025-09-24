@@ -189,7 +189,7 @@ function HistoryStrip({
         <div className="flex gap-5 overflow-hidden">
           {Array.from({ length: 3 }).map((_, i) => (
             <div key={i} className="w-[300px] shrink-0 rounded-2xl bg-white/60 shadow-sm p-4">
-              <div className="aspect-[4/5] rounded-xl bg-black/10 animate-pulse" />
+              <div className="aspect-[5/6] rounded-xl bg-black/10 animate-pulse" />
               <div className="h-4 w-2/3 bg-black/10 rounded mt-3 animate-pulse" />
               <div className="h-3 w-1/2 bg-black/10 rounded mt-2 animate-pulse" />
             </div>
@@ -299,7 +299,7 @@ function HistoryStrip({
                         : "translate-y-0 scale-[0.84] opacity-70 shadow-sm",
                     ].join(" ")}
                   >
-                    <div className="relative aspect-[3/4] rounded-xl overflow-hidden bg-black/5">
+                    <div className="relative aspect-[5/6] rounded-xl overflow-hidden bg-black/5">
                       <img
                         src={primary}
                         alt={title}
