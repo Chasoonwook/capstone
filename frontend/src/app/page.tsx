@@ -1,7 +1,7 @@
 // src/app/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import UserHeader from "@/components/header/UserHeader";
 import PhotoUpload from "@/components/upload/PhotoUpload";
@@ -45,7 +45,10 @@ function extractDate(item: any): Date | null {
 const fmtDateBadge = (d: Date) =>
   d.toLocaleDateString("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" });
 
-/* 이미지가 확실히 뜨는 히스토리 스트립 */
+/* ──────────────────────────────────────────────────────────────
+   히스토리 섹션: Digimon-style 캐러셀 (가운데 카드 강조)
+   + 스크롤바 숨김(마우스/터치 스크롤 가능)
+   ────────────────────────────────────────────────────────────── */
 function HistoryStrip({
   user,
   items,
@@ -57,14 +60,17 @@ function HistoryStrip({
   loading: boolean;
   error: string | null;
 }) {
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const [active, setActive] = useState(0);
+
   if (loading) {
     return (
       <section className="mt-6">
         <div className="h-6 w-40 rounded bg-black/10 animate-pulse mb-4" />
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-5">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="rounded-2xl bg-white/60 shadow-sm p-4">
-              <div className="aspect-square rounded-xl bg-black/10 animate-pulse" />
+        <div className="flex gap-5 overflow-hidden">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="w-[320px] shrink-0 rounded-2xl bg-white/60 shadow-sm p-4">
+              <div className="aspect-[4/5] rounded-xl bg-black/10 animate-pulse" />
               <div className="h-4 w-2/3 bg-black/10 rounded mt-3 animate-pulse" />
               <div className="h-3 w-1/2 bg-black/10 rounded mt-2 animate-pulse" />
             </div>
@@ -97,6 +103,57 @@ function HistoryStrip({
     );
   }
 
+  const scrollToIndex = (idx: number) => {
+    const track = trackRef.current;
+    if (!track) return;
+    const cards = Array.from(track.querySelectorAll<HTMLElement>("[data-card-idx]"));
+    const target = cards[idx];
+    if (!target) return;
+
+    const trackRect = track.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const delta =
+      targetRect.left + targetRect.width / 2 - (trackRect.left + trackRect.width / 2);
+
+    track.scrollBy({ left: delta, behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    const track = trackRef.current;
+    if (!track) return;
+
+    const computeActive = () => {
+      const rect = track.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+
+      let bestIdx = 0;
+      let bestDist = Infinity;
+      const cards = Array.from(track.querySelectorAll<HTMLElement>("[data-card-idx]"));
+      cards.forEach((card) => {
+        const idx = Number(card.dataset.cardIdx || 0);
+        const cr = card.getBoundingClientRect();
+        const cardCenter = cr.left + cr.width / 2;
+        const dist = Math.abs(cardCenter - centerX);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestIdx = idx;
+        }
+      });
+      setActive(bestIdx);
+    };
+
+    computeActive();
+    const onScroll = () => computeActive();
+    const onResize = () => computeActive();
+
+    track.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onResize);
+    return () => {
+      track.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onResize);
+    };
+  }, []);
+
   return (
     <section className="mt-6">
       <div className="flex items-end justify-between mb-3">
@@ -106,56 +163,133 @@ function HistoryStrip({
           </h2>
           <p className="text-slate-500 text-sm">최근에 들었던 음악들</p>
         </div>
+
+        <div className="hidden sm:flex gap-2">
+          <button
+            type="button"
+            onClick={() => scrollToIndex(Math.max(0, active - 1))}
+            className="h-9 px-3 rounded-lg bg-white/80 shadow border border-white/60 hover:bg-white transition"
+            aria-label="이전"
+          >
+            ‹
+          </button>
+          <button
+            type="button"
+            onClick={() => scrollToIndex(Math.min(list.length - 1, active + 1))}
+            className="h-9 px-3 rounded-lg bg-white/80 shadow border border-white/60 hover:bg-white transition"
+            aria-label="다음"
+          >
+            ›
+          </button>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-5">
-        {list.map((it, idx) => {
-          const pid = it.photo_id ?? it.photoId ?? it.id;
-          const { primary, fallback } = buildPhotoSrc(pid);
-          const title = it.title_snapshot ?? it.title ?? "제목 없음";
-          const artist = it.artist_snapshot ?? it.artist ?? "Various";
-          const dateObj = extractDate(it);
-          const badge = dateObj ? fmtDateBadge(dateObj) : null;
+      {/* 캐러셀 트랙 — 스크롤바 숨김 */}
+      <div
+        ref={trackRef}
+        data-history-track
+        className="relative -mx-6 px-6 overflow-x-auto snap-x snap-mandatory"
+        style={{
+          scrollbarWidth: "none",       // Firefox
+          msOverflowStyle: "none" as any, // IE/Edge 레거시
+        }}
+      >
+        <div className="flex gap-6 py-2">
+          {list.map((it, idx) => {
+            const pid = it.photo_id ?? it.photoId ?? it.id;
+            const { primary, fallback } = buildPhotoSrc(pid);
+            const title = it.title_snapshot ?? it.title ?? "제목 없음";
+            const artist = it.artist_snapshot ?? it.artist ?? "Various";
+            const dateObj = extractDate(it);
+            const badge = dateObj ? fmtDateBadge(dateObj) : null;
 
-          return (
-            <div
-              key={`${pid}-${idx}`}
-              className="rounded-2xl bg-white/70 shadow-sm p-4 hover:shadow-md transition"
-            >
-              <div className="relative aspect-square rounded-xl overflow-hidden bg-black/5">
-                <img
-                  src={primary}
-                  alt={title}
-                  className="w-full h-full object-cover"
-                  crossOrigin="anonymous"
-                  onError={(e) => {
-                    const img = e.currentTarget as HTMLImageElement;
-                    if (!(img as any).__fb) {
-                      (img as any).__fb = true;
-                      img.src = fallback;
-                    } else {
-                      img.src = "/placeholder.svg";
-                    }
-                  }}
-                />
-                {badge && (
-                  <span
-                    className="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-black/60 text-white text-[11px] leading-5 shadow-sm"
-                    title={dateObj!.toLocaleString()}
-                  >
-                    {badge}
-                  </span>
-                )}
-              </div>
+            const isActive = idx === active;
+            const isNeighbor = Math.abs(idx - active) === 1;
 
-              <div className="mt-3">
-                <div className="text-slate-900 font-medium truncate">{title}</div>
-                <div className="text-slate-500 text-sm truncate">{artist}</div>
+            const scaleClass = isActive ? "scale-100" : "scale-[0.92]";
+            const opacityClass = isActive ? "opacity-100" : isNeighbor ? "opacity-80" : "opacity-60";
+            const blurClass = isActive ? "blur-0" : "blur-[0.3px]";
+
+            return (
+              <div
+                key={`${pid}-${idx}`}
+                data-card-idx={idx}
+                className="snap-center shrink-0 w-[82%] xs:w-[75%] sm:w-[60%] md:w-[46%] lg:w-[38%]"
+                onClick={() => scrollToIndex(idx)}
+                role="button"
+                aria-label={`${title} 카드`}
+              >
+                <div
+                  className={[
+                    "rounded-2xl bg-white/80 shadow-sm p-4 transition-all duration-300 ease-out border border-white/70",
+                    scaleClass,
+                    opacityClass,
+                  ].join(" ")}
+                >
+                  <div className="relative aspect-[4/5] rounded-xl overflow-hidden bg-black/5">
+                    <img
+                      src={primary}
+                      alt={title}
+                      className={["w-full h-full object-cover transition", blurClass].join(" ")}
+                      crossOrigin="anonymous"
+                      onError={(e) => {
+                        const img = e.currentTarget as HTMLImageElement;
+                        if (!(img as any).__fb) {
+                          (img as any).__fb = true;
+                          img.src = fallback;
+                        } else {
+                          img.src = "/placeholder.svg";
+                        }
+                      }}
+                    />
+                    {badge && (
+                      <span
+                        className="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-black/60 text-white text-[11px] leading-5 shadow-sm"
+                        title={dateObj!.toLocaleString()}
+                      >
+                        {badge}
+                      </span>
+                    )}
+                    {isActive && (
+                      <div className="pointer-events-none absolute -top-2 left-4 right-4 h-2 bg-gradient-to-r from-fuchsia-400/60 via-sky-400/60 to-emerald-400/60 blur opacity-70" />
+                    )}
+                  </div>
+
+                  <div className="mt-3">
+                    <div className="text-slate-900 font-semibold truncate">{title}</div>
+                    <div className="text-slate-500 text-sm truncate">{artist}</div>
+                  </div>
+                </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
+
+        {/* 인디케이터 */}
+        <div className="mt-3 flex items-center justify-center gap-2">
+          {list.map((_, i) => (
+            <button
+              key={i}
+              aria-label={`인덱스 ${i + 1}`}
+              onClick={() => scrollToIndex(i)}
+              className={[
+                "h-2 rounded-full transition-all",
+                i === active ? "w-5 bg-slate-700" : "w-2.5 bg-slate-400/60 hover:bg-slate-500/70",
+              ].join(" ")}
+            />
+          ))}
+        </div>
       </div>
+
+      {/* WebKit 전용 스크롤바 숨김 (이 컴포넌트 내 track에만 적용) */}
+      <style jsx global>{`
+        [data-history-track]::-webkit-scrollbar {
+          display: none;
+          width: 0;
+          height: 0;
+          background: transparent;
+        }
+      `}</style>
     </section>
   );
 }
@@ -167,7 +301,6 @@ export default function Page() {
   const { history, loading: historyLoading, error: historyError } = useHistory(isLoggedIn);
   const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
 
-  // 계정 식별자
   const accountId = useMemo(() => {
     const anyUser = (user ?? {}) as {
       email?: string | null;
