@@ -284,7 +284,7 @@ function HistoryStrip({
                 <div
                   key={`${pid}-${idx}`}
                   data-card-idx={idx}
-                  className="snap-center shrink-0 w-[28%] sm:w-[26%] md:w-[24%] lg:w-[22%]"
+                  className="snap-center shrink-0 w-[32%] sm:w-[30%] md:w-[28%] lg:w-[24%]"
                   onClick={() => centerTo(idx)}
                   role="button"
                   aria-label={`${title} 카드`}
@@ -299,7 +299,7 @@ function HistoryStrip({
                         : "translate-y-0 scale-[0.84] opacity-70 shadow-sm",
                     ].join(" ")}
                   >
-                    <div className="relative aspect-[3/4] rounded-xl overflow-hidden bg-black/5">
+                    <div className="relative aspect-[5/6] rounded-xl overflow-hidden bg-black/5">
                       <img
                         src={primary}
                         alt={title}
