@@ -88,20 +88,43 @@ router.get("/_who", (_req,res) =>
 );
 
 /* 바이너리 내려주기 (CORS 포함) */
-router.get("/:photoId/binary", async (req,res)=>{
+/* 바이너리 내려주기 (CORS 포함) — bytea(hex) → Buffer 변환 */
+router.get("/:photoId/binary", async (req, res) => {
   try {
     const { photoId } = req.params;
     const r = await pool.query(
-      "SELECT mime_type, content FROM photos WHERE photo_id=$1",
+      "SELECT mime_type, content FROM photos WHERE photo_id=$1 LIMIT 1",
       [photoId]
     );
     if (!r.rows.length) return res.status(404).send("Not found");
 
+    let { mime_type, content } = r.rows[0];
+    let buf;
+
+    if (Buffer.isBuffer(content)) {
+      buf = content; // 이미 Buffer
+    } else if (typeof content === "string") {
+      if (content.startsWith("\\x")) {
+        // Postgres bytea hex 문자열
+        buf = Buffer.from(content.slice(2), "hex");
+      } else if (content.startsWith("data:")) {
+        // data URL 형태로 저장된 경우
+        buf = Buffer.from(content.split(",")[1] || "", "base64");
+      } else {
+        // 혹시 모를 base64/일반 문자열 대비
+        try { buf = Buffer.from(content, "base64"); }
+        catch { buf = Buffer.from(content); }
+      }
+    } else {
+      return res.status(500).send("invalid content");
+    }
+
     allowCORS(req, res);
     res.set("Cache-Control", "no-store");
     res.set("Cross-Origin-Resource-Policy", "cross-origin");
-    res.set("Content-Type", r.rows[0].mime_type || "application/octet-stream");
-    res.send(r.rows[0].content);
+    res.set("Content-Type", mime_type || "application/octet-stream");
+    res.set("Content-Length", String(buf.length));
+    res.end(buf); // ✅ 진짜 바이너리로 응답
   } catch (e) {
     console.error("[photos/binary] error:", e);
     res.status(500).send("Error");
