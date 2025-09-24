@@ -87,28 +87,54 @@ router.get("/_who", (_req,res) =>
   res.json({ from:"routes/photos.js", analyzePath:"/api/photos/analyze" })
 );
 
-/* 바이너리 내려주기 (CORS 포함) */
+/* ────────────────────────────────────────────────────────────────
+ * 바이너리 내려주기 (CORS 포함)
+ *  - DB bytea 가 Buffer 인 경우 그대로
+ *  - '\x....' (hex 문자열)인 경우 Buffer.from(hex, 'hex')
+ *  - data:URL / base64 문자열 방어
+ * ─────────────────────────────────────────────────────────────── */
 router.get("/:photoId/binary", async (req,res)=>{
   try {
     const { photoId } = req.params;
     const r = await pool.query(
-      "SELECT mime_type, content FROM photos WHERE photo_id=$1",
+      "SELECT mime_type, content FROM photos WHERE photo_id=$1 OR id=$1 LIMIT 1",
       [photoId]
     );
     if (!r.rows.length) return res.status(404).send("Not found");
 
+    let { mime_type, content } = r.rows[0];
+    let buf;
+
+    if (Buffer.isBuffer(content)) {
+      buf = content;
+    } else if (typeof content === "string") {
+      if (content.startsWith("\\x")) {
+        // bytea hex string
+        buf = Buffer.from(content.slice(2), "hex");
+      } else if (content.startsWith("data:")) {
+        buf = Buffer.from(content.split(",")[1] || "", "base64");
+      } else {
+        // 안전망: base64 로 간주
+        try { buf = Buffer.from(content, "base64"); }
+        catch { buf = Buffer.from(content); }
+      }
+    } else {
+      return res.status(500).send("invalid content");
+    }
+
     allowCORS(req, res);
     res.set("Cache-Control", "no-store");
     res.set("Cross-Origin-Resource-Policy", "cross-origin");
-    res.set("Content-Type", r.rows[0].mime_type || "application/octet-stream");
-    res.send(r.rows[0].content);
+    res.set("Content-Type", mime_type || "application/octet-stream");
+    res.set("Content-Length", String(buf.length));
+    res.end(buf);
   } catch (e) {
     console.error("[photos/binary] error:", e);
     res.status(500).send("Error");
   }
 });
 
-/* 업로더(업서트) – 편집본 저장: multipart/form-data 의 file 필드 사용 */
+/* 업로더(업서트) – 편집본/원본 저장: multipart/form-data 의 file 필드 사용 */
 async function upsertBinary(req, res) {
   const photoId = Number(req.params.photoId);
   if (!Number.isFinite(photoId)) {
@@ -147,6 +173,58 @@ async function upsertBinary(req, res) {
 router.options("/:photoId/binary", (req,res) => { allowCORS(req,res); res.sendStatus(200); });
 router.post("/:photoId/binary", upload.single("file"), upsertBinary);
 router.put("/:photoId/binary",  upload.single("file"), upsertBinary);
+
+/* ────────────────────────────────────────────────────────────────
+ * 편집본 저장 엔드포인트 (프론트에서 호출하던 /api/photos/edited 제공)
+ *  - multipart/form-data
+ *  - fields: file(또는 edited_image), photo_id(required), music_id(optional), selected_from(optional)
+ *  - history 테이블에 edited_image / edited_mime_type 로 저장
+ * ─────────────────────────────────────────────────────────────── */
+router.options("/edited", (req,res)=>{ allowCORS(req,res); res.sendStatus(200); });
+router.post("/edited", upload.single("file"), async (req,res) => {
+  try {
+    allowCORS(req, res);
+
+    // 파일 필드명이 edited_image 로 올 수도 있으니 보완
+    const file = req.file || (req.files && req.files.edited_image);
+    if (!file) return res.status(400).json({ error: "file field is required" });
+
+    const photo_id = Number(req.body.photo_id || req.body.photoId);
+    if (!Number.isFinite(photo_id)) return res.status(400).json({ error: "bad photo_id" });
+
+    const music_id = req.body.music_id ? Number(req.body.music_id) :
+                     req.body.musicId ? Number(req.body.musicId) : null;
+    const selected_from =
+      req.body.selected_from === "sub" ? "sub" :
+      req.body.selected_from === "main" ? "main" :
+      // preferred/null/기타 → null
+      null;
+
+    // 사용자 식별은 환경에 맞게 (세션/토큰 미들웨어가 있으면 거기서 가져오세요)
+    const user_id =
+      (req.user && (req.user.id || req.user.user_id)) ||
+      (req.session && req.session.user && req.session.user.id) ||
+      (req.body && (req.body.user_id || req.body.userId)) ||
+      null;
+
+    const buffer = file.buffer;
+    const mimetype = file.mimetype || "image/png";
+
+    const { rows } = await pool.query(
+      `INSERT INTO history
+         (user_id, photo_id, music_id, selected_from,
+          edited_image, edited_mime_type, edited_at, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6, NOW(), NOW())
+       RETURNING history_id`,
+      [user_id, photo_id, music_id, selected_from, buffer, mimetype]
+    );
+
+    return res.json({ ok:true, history_id: rows[0].history_id });
+  } catch (e) {
+    console.error("[photos/edited] failed:", e);
+    res.status(500).json({ error: "edited upload failed" });
+  }
+});
 
 /* 서명 URL 발급 */
 router.get("/:photoId/signed-url", (req,res)=>{
