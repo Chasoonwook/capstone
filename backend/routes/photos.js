@@ -11,6 +11,14 @@ const router = express.Router();
 const AI_TIMEOUT    = Number(process.env.AI_FETCH_TIMEOUT || 60_000);
 const IMG_TOKEN_TTL = String(process.env.IMG_TOKEN_TTL || "600s");
 
+const IMAGE_MIME_WHITELIST = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+  "image/gif",
+]);
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024 },
@@ -340,5 +348,50 @@ router.post("/:photoId/analyze", async (req,res)=>{
     client.release();
   }
 });
+async function upsertBinary(req, res) {
+  const photoId = Number(req.params.photoId);
+  if (!Number.isFinite(photoId)) {
+    return res.status(400).json({ error: "bad photoId" });
+  }
+  if (!req.file) {
+    return res.status(400).json({ error: "file field is required" });
+  }
+
+  const { buffer, mimetype, originalname } = req.file;
+
+  // ✚ 추가: MIME & 빈 파일 검사
+  const mime = mimetype || "application/octet-stream";
+  if (!IMAGE_MIME_WHITELIST.has(mime)) {
+    return res.status(400).json({ error: `unsupported mime: ${mime}` });
+  }
+  if (!buffer || !buffer.length) {
+    return res.status(400).json({ error: "empty file" });
+  }
+
+  try {
+    const sql = `
+      INSERT INTO photos (photo_id, temp_name, original_name, mime_type, content, created_at)
+      VALUES ($1, NULL, $2, $3, $4, NOW())
+      ON CONFLICT (photo_id) DO UPDATE SET
+        original_name = EXCLUDED.original_name,
+        mime_type     = EXCLUDED.mime_type,
+        content       = EXCLUDED.content
+      RETURNING photo_id
+    `;
+    const { rows } = await pool.query(sql, [
+      photoId,
+      originalname || null,
+      mime,        // ← 여기서 위에서 검증한 mime 사용
+      buffer,      // ← 실제 바이너리 저장
+    ]);
+
+    allowCORS(req, res);
+    return res.json({ ok: true, photo_id: rows[0].photo_id });
+  } catch (e) {
+    console.error("[photos][binary upsert] failed:", e);
+    return res.status(500).json({ error: "binary upsert failed" });
+  }
+}
+
 
 module.exports = router;

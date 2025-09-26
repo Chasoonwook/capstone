@@ -1,57 +1,104 @@
 // routes/stickers.js
 const express = require("express");
-const router = express.Router();
-const multer = require("multer");
 const pool = require("../db");
+const multer = require("multer");
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+const router = express.Router();
 
-router.get("/stickers", async (req, res) => {
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB
+  },
+});
+
+const IMAGE_MIME_WHITELIST = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+  "image/gif",
+]);
+
+/**
+ * GET /api/stickers
+ * - 스티커 목록 (id+name만)
+ */
+router.get("/stickers", async (_req, res) => {
   try {
-    const { rows } = await pool.query("SELECT sticker_id, name FROM stickers ORDER BY sticker_id DESC");
-    const base = `${req.protocol}://${req.get("host")}`;
-    res.json(rows.map(r => ({ sticker_id: r.sticker_id, name: r.name, url: `${base}/api/stickers/${r.sticker_id}/binary` })));
+    const { rows } = await pool.query(
+      `SELECT sticker_id, name
+         FROM stickers
+     ORDER BY created_at DESC NULLS LAST
+        LIMIT 200`
+    );
+    return res.status(200).json(rows);
   } catch (e) {
-    console.error("[stickers/list]", e);
-    res.status(500).json({ error: "list failed" });
+    console.error("[stickers] list error:", e);
+    return res.status(500).json({ error: "internal error" });
   }
 });
 
+/**
+ * GET /api/stickers/:id/binary
+ * - 스티커 이미지 바이너리 반환
+ */
 router.get("/stickers/:id/binary", async (req, res) => {
+  const { id } = req.params;
   try {
-    const id = Number(req.params.id);
-    if (!id) return res.status(400).json({ error: "invalid id" });
-    const { rows } = await pool.query("SELECT mime_type, content FROM stickers WHERE sticker_id=$1", [id]);
-    if (!rows[0]) return res.status(404).send("Not found");
-    res.set("Content-Type", rows[0].mime_type || "application/octet-stream");
-    res.send(rows[0].content);
+    const { rows } = await pool.query(
+      `SELECT mime_type, content FROM stickers WHERE sticker_id = $1`,
+      [id]
+    );
+    if (!rows.length || !rows[0].content) {
+      return res.status(404).json({ error: "sticker not found" });
+    }
+    const { mime_type, content } = rows[0];
+    res.setHeader("Content-Type", mime_type || "application/octet-stream");
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable"); // 1년 캐시
+    res.setHeader("ETag", `W/"s-${id}-${content.length}"`);
+    return res.status(200).send(content);
   } catch (e) {
-    console.error("[stickers/binary]", e);
-    res.status(500).json({ error: "binary failed" });
+    console.error("[stickers] get binary error:", e);
+    return res.status(500).json({ error: "internal error" });
   }
 });
 
+/**
+ * POST /api/stickers
+ * - 스티커 업로드 (form-data: file, name?)
+ * - 반환: { sticker_id, name }
+ */
 router.post("/stickers", upload.single("file"), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: "no file" });
-    const { buffer, originalname, mimetype } = req.file;
-    if (!/^image\/(png|webp|jpeg)$/.test(mimetype)) return res.status(400).json({ error: "image/png, image/webp, image/jpeg only" });
+    const file = req.file;
+    const name = (req.body.name || (file && file.originalname) || "").trim();
+
+    if (!file) return res.status(400).json({ error: "file is required" });
+    if (!name) return res.status(400).json({ error: "name is required" });
+
+    const mime = file.mimetype || "application/octet-stream";
+    if (!IMAGE_MIME_WHITELIST.has(mime)) {
+      return res.status(400).json({ error: `unsupported mime: ${mime}` });
+    }
+    const buf = file.buffer;
+    if (!buf || !buf.length) {
+      return res.status(400).json({ error: "empty file" });
+    }
 
     const { rows } = await pool.query(
-      `INSERT INTO stickers (name, mime_type, content, uploader_user_id, created_at)
-       VALUES ($1,$2,$3,$4, now())
-       RETURNING sticker_id, name`,
-      [originalname, mimetype, buffer, null]
+      `
+      INSERT INTO stickers (name, mime_type, content, created_at)
+      VALUES ($1, $2, $3, NOW())
+      RETURNING sticker_id, name
+      `,
+      [name, mime, buf]
     );
 
-    const id = rows[0].sticker_id;
-    const base = `${req.protocol}://${req.get("host")}`;
-    const url = `${base}/api/stickers/${id}/binary`;
-    try { await pool.query("UPDATE stickers SET url=$1 WHERE sticker_id=$2", [url, id]); } catch {}
-    res.json({ sticker_id: id, name: rows[0].name, url });
+    return res.status(201).json(rows[0]);
   } catch (e) {
-    console.error("[stickers/upload]", e);
-    res.status(500).json({ error: "upload failed" });
+    console.error("[stickers] upload error:", e);
+    return res.status(500).json({ error: "internal error" });
   }
 });
 
