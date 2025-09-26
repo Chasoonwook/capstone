@@ -40,3 +40,9 @@ npm i next react react-dom lucide-react
 npm i -D typescript @types/react @types/react-dom @types/node
 npm i -D @typescript-eslint/parser @typescript-eslint/eslint-plugin
 npm i -D eslint@^9 @eslint/js@^9 @typescript-eslint/parser@^8 @typescript-eslint/eslint-plugin@^8
+
+
+## 0926 사진 폅집기능
+이름 : react-konva
+모듈설치 ```npm i react-konva konva use-image```
+
