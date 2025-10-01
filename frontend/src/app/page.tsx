@@ -45,7 +45,7 @@ function extractDate(item: any): Date | null {
 const fmtDateBadge = (d: Date) =>
   d.toLocaleDateString("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" })
 
-/* Redesigned carousel with Musinsa-style clean cards */
+/* History: 스와이프/클릭으로 카드 중앙 정렬 */
 function HistoryStrip({
   user,
   items,
@@ -70,22 +70,24 @@ function HistoryStrip({
   const pointerTapIdxRef = useRef<number | null>(null)
 
   const rafIdRef = useRef<number | null>(null)
-  const lastLeftRef = useRef(0)
-  const lastTsRef = useRef(0)
   const runningRef = useRef(false)
 
+  // 트랙 중심과 카드 중심의 거리로 활성 카드 계산 (BoundingClientRect 기반)
   const computeActive = () => {
     const track = trackRef.current
     if (!track) return 0
     const cards = Array.from(track.querySelectorAll<HTMLElement>("[data-card-idx]"))
     if (!cards.length) return 0
 
-    const center = track.scrollLeft + track.clientWidth / 2
+    const trackRect = track.getBoundingClientRect()
+    const trackCenterX = trackRect.left + track.clientWidth / 2
+
     let best = 0
     let bestDist = Number.POSITIVE_INFINITY
     cards.forEach((el, i) => {
-      const c = el.offsetLeft + el.offsetWidth / 2
-      const dist = Math.abs(c - center)
+      const rect = el.getBoundingClientRect()
+      const cardCenterX = rect.left + rect.width / 2
+      const dist = Math.abs(cardCenterX - trackCenterX)
       if (dist < bestDist) {
         bestDist = dist
         best = i
@@ -105,26 +107,16 @@ function HistoryStrip({
         runningRef.current = false
         return
       }
-      const now = performance.now()
-      const left = t.scrollLeft
-
       const idx = computeActive()
       setActive((p) => (p === idx ? p : idx))
 
-      if (left !== lastLeftRef.current) {
-        lastLeftRef.current = left
-        lastTsRef.current = now
-      }
-      if (now - lastTsRef.current < 120) {
-        rafIdRef.current = requestAnimationFrame(tick)
-      } else {
+      // 최근 120ms 내 활동이 있으면 루프 유지
+      rafIdRef.current = requestAnimationFrame(() => {
         runningRef.current = false
-        rafIdRef.current = null
-      }
+        ensureRafLoop()
+      })
     }
 
-    lastLeftRef.current = track.scrollLeft
-    lastTsRef.current = performance.now()
     rafIdRef.current = requestAnimationFrame(tick)
   }
 
@@ -136,11 +128,12 @@ function HistoryStrip({
       setSideGap(0)
       return
     }
+    // 화면 폭이 카드보다 넓다면 좌우 여백으로 센터 정렬
     const gap = Math.max(0, (track.clientWidth - first.offsetWidth) / 2)
     setSideGap(gap)
   }
 
-  // ✅ 선택한 카드 중앙 정렬
+  // ✅ 선택한 카드 중앙 정렬 (Rect 기반: 패딩/스냅/오버플로우와 무관)
   const scrollCardIntoCenter = (index: number) => {
     const track = trackRef.current
     if (!track) return
@@ -148,9 +141,16 @@ function HistoryStrip({
     const el = track.querySelector<HTMLElement>(`[data-card-idx="${index}"]`)
     if (!el) return
 
-    const left = el.offsetLeft - (track.clientWidth - el.offsetWidth) / 2
+    const tRect = track.getBoundingClientRect()
+    const eRect = el.getBoundingClientRect()
+
+    // 현재 스크롤 + (카드가 트랙 왼쪽에서 떨어진 거리) + 카드 절반 - 트랙 절반
+    const deltaFromTrackLeft = eRect.left - tRect.left
+    const elCenterInScroll = track.scrollLeft + deltaFromTrackLeft + eRect.width / 2
+    const desired = Math.round(elCenterInScroll - track.clientWidth / 2)
+
     const max = Math.max(0, track.scrollWidth - track.clientWidth)
-    const next = Math.min(Math.max(left, 0), max)
+    const next = Math.min(Math.max(desired, 0), max)
 
     track.scrollTo({ left: next, behavior: "smooth" })
     setActive(index)
@@ -162,7 +162,6 @@ function HistoryStrip({
     const track = trackRef.current
     if (!track) return
 
-    // 포인터 캡처(요소 밖으로 나가도 move/up 이벤트 수신)
     try {
       e.currentTarget.setPointerCapture(e.pointerId)
       pointerDownIdRef.current = e.pointerId
@@ -188,8 +187,7 @@ function HistoryStrip({
     const track = trackRef.current
     if (!track) return
 
-    // 드래그 시 텍스트 선택 방지
-    e.preventDefault()
+    e.preventDefault() // 드래그 시 텍스트 선택/클릭 방지
 
     const walk = (pointerStartX.current - e.pageX) * 1.5
     if (Math.abs(walk) > 6) pointerMovedRef.current = true
@@ -210,7 +208,6 @@ function HistoryStrip({
   }
 
   const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    // 캡처 해제
     try {
       if (pointerDownIdRef.current != null) {
         e.currentTarget.releasePointerCapture(pointerDownIdRef.current)
@@ -306,7 +303,7 @@ function HistoryStrip({
           paddingRight: sideGap,
           scrollBehavior: "smooth",
           WebkitOverflowScrolling: "touch",
-          touchAction: "pan-x", // 데스크톱/모바일 가로 스와이프 최적화
+          touchAction: "pan-x",
           userSelect: "none",
         }}
         onPointerDown={handlePointerDown}
@@ -333,6 +330,11 @@ function HistoryStrip({
                   zIndex: isSelected ? 10 : 1,
                   opacity: isSelected ? 1 : 0.6,
                 }}
+                // 드래그가 아닌 명시적 클릭도 중앙 정렬하도록 백업 처리
+                onClick={() => {
+                  if (isDragging || pointerMovedRef.current) return
+                  scrollCardIntoCenter(idx)
+                }}
               >
                 <div
                   className="relative bg-white p-3 pb-8 shadow-lg transition-all duration-300"
@@ -346,7 +348,7 @@ function HistoryStrip({
                       alt={title}
                       className="w-full h-full object-cover"
                       crossOrigin="anonymous"
-                      style={{ pointerEvents: "none" }} // 클릭은 카드 래퍼가 받도록
+                      style={{ pointerEvents: "none" }} // 이벤트는 카드 래퍼가 받음
                       onError={(e) => {
                         const img = e.currentTarget as HTMLImageElement
                         if (!(img as any).__fb) {
