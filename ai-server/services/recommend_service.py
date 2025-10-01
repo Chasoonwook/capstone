@@ -1,50 +1,32 @@
-# backend/services/recommend_service.py
-# 감정 통합 (CNN + DeepFace + Rule) 및 음악 추천
+# services/recommend_service.py
 
-def recommend_music(cnn_emotion: str, cnn_conf: float, deepface_emotion: str, deepface_conf: float, rule_emotion: str) -> dict:
-    # 1. 고정 가중치 또는 confidence 기반 가중치 합산
-    rule_weight = 0.8  # Rule은 confidence가 없으므로 고정 가중치 사용
+class RecommendService:
+    @staticmethod
+    def get_recommendation(face_emotion, scene_tags, rule_tags):
+        final_mood = "Default"
 
-    total_weight = cnn_conf + deepface_conf + rule_weight
+        # ----------------------------------------------
+        # 이 안에 수많은 if / elif 규칙을 만드는 것이 핵심!
+        # ----------------------------------------------
+        if face_emotion == 'happy' and 'beach' in scene_tags and 'day' in rule_tags:
+            final_mood = "신나는 여름 휴가"
+        
+        elif face_emotion == 'sad' and 'night' in rule_tags and 'cool/blue' in rule_tags:
+            final_mood = "쓸쓸한 새벽 감성"
+            
+        elif 'cafe' in scene_tags and 'calm/peaceful' in rule_tags:
+            final_mood = "나른한 오후의 카페"
+        
+        # ... 여기에 수많은 창의적인 규칙을 추가 ...
 
-    cnn_weight = cnn_conf / total_weight
-    df_weight = deepface_conf / total_weight
-    rule_w = rule_weight / total_weight
-
-    # 2. 감정 스코어 초기화 및 가중치 누적
-    emotion_scores = {}
-
-    for label in [cnn_emotion, deepface_emotion, rule_emotion]:
-        emotion_scores[label] = 0.0
-
-    emotion_scores[cnn_emotion] += cnn_weight
-    emotion_scores[deepface_emotion] += df_weight
-    emotion_scores[rule_emotion] += rule_w
-
-    # 3. 가장 높은 점수의 감정 선택
-    final_emotion = max(emotion_scores.items(), key=lambda x: x[1])[0]
-
-    # 4. 감정 → 음악 추천 매핑
-    emotion_to_music = {
-        'happy/lively': ['Dynamite - BTS', 'Happy - Pharrell Williams'],
-        'romantic/dreamy': ['IU - Through The Night', 'Crush - Beautiful'],
-        'lonely/quiet': ['Paul Kim - Me After You', 'Ed Sheeran - Photograph'],
-        'sad/heavy': ['이승철 - 소녀시대', 'Adele - Someone Like You'],
-        'passionate/energetic': ['ZICO - 아무노래', 'Twice - Feel Special'],
-        'calm/peaceful': ['AKMU - 어떻게 이별까지 사랑하겠어', 'Lauv - I Like Me Better'],
-        'pure/innocent': ['태연 - 만약에', 'Lena Park - In Dreams'],
-        'neutral/balanced': ['10cm - 폰서트', 'IU - 블루밍'],
-    }
-
-    recommended_music = emotion_to_music.get(final_emotion, ['Default Song'])
-
-    return {
-        "final_emotion": final_emotion,
-        "recommended_music": recommended_music,
-        "weights": {
-            "cnn": round(cnn_weight, 3),
-            "deepface": round(df_weight, 3),
-            "rule": round(rule_w, 3)
-        },
-        "scores": emotion_scores
-    }
+        # 최종 분위기에 맞는 음악 추천
+        music_map = {
+            "신나는 여름 휴가": ["Upbeat Pop", "Tropical House"],
+            "쓸쓸한 새벽 감성": ["Lo-fi", "Ballad"],
+            "나른한 오후의 카페": ["Jazz", "Acoustic"],
+            "Default": ["Today's Top Hits"]
+        }
+        
+        recommended_playlist = music_map.get(final_mood, music_map["Default"])
+        
+        return final_mood, recommended_playlist
