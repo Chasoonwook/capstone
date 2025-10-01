@@ -55,7 +55,7 @@ router.get("/by-mood", async (req, res) => {
   if (!label) return res.status(400).json({ error: "label required" });
   const { rows } = await pool.query(
     `SELECT id as music_id, title, artist, label, genre, duration
-     FROM musics
+     FROM music
      WHERE label = $1
      ORDER BY RANDOM()
      LIMIT $2`,
