@@ -1,139 +1,51 @@
-"use client";
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-  Music, UserCircle, CreditCard, User, History as HistoryIcon,
-  Settings, LogOut, Link, Unlink
-} from "lucide-react";
-import type { UserInfo } from "@/types/music";
+"use client"
 
-type Props = {
-  user: UserInfo;
-  isLoggedIn: boolean;
-  onLogout: () => void;
-};
+import { User, LogOut, LogIn } from "lucide-react"
+import { useRouter } from "next/navigation"
 
-export default function UserHeader({ user, isLoggedIn, onLogout }: Props) {
-  const router = useRouter();
+interface UserHeaderProps {
+  user: any
+  isLoggedIn: boolean
+  onLogout: () => void
+}
 
-  // Spotify 연결 상태(localStorage 기준)
-  const [isSpotifyConnected, setIsSpotifyConnected] = useState(false);
-  useEffect(() => {
-    const read = () => {
-      try {
-        const t = localStorage.getItem("spotify_access_token");
-        setIsSpotifyConnected(!!(t && t.trim()));
-      } catch {
-        setIsSpotifyConnected(false);
-      }
-    };
-    read();
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === "spotify_access_token") read();
-    };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, []);
+export default function UserHeader({ user, isLoggedIn, onLogout }: UserHeaderProps) {
+  const router = useRouter()
 
   return (
-    <header className="bg-gradient-to-r from-white/90 via-purple-50/90 to-pink-50/90 backdrop-blur-sm border-b border-purple-100 relative z-10">
-      <div className="max-w-6xl mx-auto px-6 py-6">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 bg-purple-600 rounded-xl flex items-center justify-center">
-              <Music className="h-6 w-6 text-white" />
-            </div>
-            <h1 className="text-xl font-medium text-gray-900">Photo_Music</h1>
-          </div>
+    <header className="sticky top-0 z-40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b border-border">
+      <div className="flex items-center justify-between h-14 px-4">
+        <h1 className="text-lg font-bold text-foreground">MoodTune</h1>
 
+        <div className="flex items-center gap-2">
           {isLoggedIn ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" className="relative h-10 w-10 rounded-full">
-                  <Avatar className="h-10 w-10">
-                    <AvatarImage src={user.avatar || "/placeholder.svg"} alt={user.name || "user"} />
-                    <AvatarFallback className="bg-purple-600 text-white">
-                      {(user.name?.[0] || "U").toUpperCase()}
-                    </AvatarFallback>
-                  </Avatar>
-                </Button>
-              </DropdownMenuTrigger>
-
-              <DropdownMenuContent className="w-64" align="end" forceMount>
-                <div className="flex items-center justify-start gap-2 p-2">
-                  <Avatar className="h-10 w-10">
-                    <AvatarImage src={user.avatar || "/placeholder.svg"} alt={user.name || "user"} />
-                    <AvatarFallback className="bg-purple-600 text-white">
-                      {(user.name?.[0] || "U").toUpperCase()}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className="flex flex-col space-y-1 leading-none">
-                    <p className="font-medium">{user.name || "사용자"}</p>
-                    <p className="text-xs text-muted-foreground">{user.email || ""}</p>
-                  </div>
-                </div>
-
-                <DropdownMenuSeparator />
-                <DropdownMenuItem><UserCircle className="mr-2 h-4 w-4" /><span>내 채널</span></DropdownMenuItem>
-                <DropdownMenuItem><CreditCard className="mr-2 h-4 w-4" /><span>유료 멤버십</span></DropdownMenuItem>
-                <DropdownMenuItem><User className="mr-2 h-4 w-4" /><span>개인 정보</span></DropdownMenuItem>
-                <DropdownMenuItem><HistoryIcon className="mr-2 h-4 w-4" /><span>시청 기록</span></DropdownMenuItem>
-                <DropdownMenuItem><Settings className="mr-2 h-4 w-4" /><span>설정</span></DropdownMenuItem>
-
-                {/* Spotify 연동/해제 */}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  disabled={isSpotifyConnected}
-                  onSelect={() => {
-                    // 라우팅은 router.push가 더 안전합니다.
-                    router.push("/account/spotify");
-                  }}
-                  className="cursor-pointer"
-                >
-                  <Link className="mr-2 h-4 w-4" />
-                  <span>{isSpotifyConnected ? "Spotify 연동됨" : "Spotify 연동하기"}</span>
-                </DropdownMenuItem>
-
-                <DropdownMenuItem
-                  disabled={!isSpotifyConnected}
-                  onSelect={() => {
-                    try {
-                      localStorage.removeItem("spotify_access_token");
-                      setIsSpotifyConnected(false);
-                    } catch {}
-                  }}
-                  className="cursor-pointer"
-                >
-                  <Unlink className="mr-2 h-4 w-4" />
-                  <span>Spotify 연결 해제</span>
-                </DropdownMenuItem>
-
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={onLogout}>
-                  <LogOut className="mr-2 h-4 w-4" />
-                  <span>로그아웃</span>
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <>
+              <button
+                onClick={() => router.push("/account")}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-primary/10 hover:bg-primary/20 transition-colors"
+              >
+                <User className="w-4 h-4 text-primary" />
+                <span className="text-sm font-medium text-primary hidden sm:inline">{user?.name || "프로필"}</span>
+              </button>
+              <button
+                onClick={onLogout}
+                className="w-8 h-8 rounded-full hover:bg-muted flex items-center justify-center transition-colors"
+                aria-label="로그아웃"
+              >
+                <LogOut className="w-4 h-4 text-muted-foreground" />
+              </button>
+            </>
           ) : (
-            <Button
+            <button
               onClick={() => router.push("/login")}
-              className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-full px-6 shadow-md hover:shadow-lg transition-all"
+              className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
             >
-              로그인
-            </Button>
+              <LogIn className="w-4 h-4" />
+              <span className="text-sm font-medium">로그인</span>
+            </button>
           )}
         </div>
       </div>
     </header>
-  );
+  )
 }

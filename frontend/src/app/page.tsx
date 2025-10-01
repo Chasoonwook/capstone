@@ -1,25 +1,28 @@
-"use client";
+"use client"
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import UserHeader from "@/components/header/UserHeader";
-import PhotoUpload from "@/components/upload/PhotoUpload";
-import SearchAndRequest from "@/components/search/SearchAndRequest";
-import MoodBadges from "@/components/mood/MoodBadges";
-import { useAuthUser } from "@/hooks/useAuthUser";
-import { useMusics } from "@/hooks/useMusics";
-import { useHistory } from "@/hooks/useHistory";
-import SpotifyConnectModal from "@/components/modals/SpotifyConnectModal";
-import { API_BASE } from "@/lib/api";
+import type React from "react"
+
+import { useEffect, useMemo, useRef, useState } from "react"
+import { useRouter } from "next/navigation"
+import UserHeader from "@/components/header/UserHeader"
+import PhotoUpload from "@/components/upload/PhotoUpload"
+import SearchAndRequest from "@/components/search/SearchAndRequest"
+import MoodBadges from "@/components/mood/MoodBadges"
+import { useAuthUser } from "@/hooks/useAuthUser"
+import { useMusics } from "@/hooks/useMusics"
+import { useHistory } from "@/hooks/useHistory"
+import SpotifyConnectModal from "@/components/modals/SpotifyConnectModal"
+import { API_BASE } from "@/lib/api"
+import { Home, Search, User, Camera } from "lucide-react"
 
 /* 이미지 URL 빌더 + 폴백 */
 const buildPhotoSrc = (photoId: string | number) => {
-  const id = encodeURIComponent(String(photoId));
+  const id = encodeURIComponent(String(photoId))
   return {
     primary: `${API_BASE}/api/photos/${id}/binary`,
     fallback: `${API_BASE}/photos/${id}/binary`,
-  };
-};
+  }
+}
 
 function extractDate(item: any): Date | null {
   const v =
@@ -32,473 +35,552 @@ function extractDate(item: any): Date | null {
     item?.timestamp ??
     item?.date ??
     item?.time ??
-    null;
+    null
 
-  if (v == null) return null;
-  const d = typeof v === "number" ? new Date(v) : new Date(String(v));
-  return isNaN(d.getTime()) ? null : d;
+  if (v == null) return null
+  const d = typeof v === "number" ? new Date(v) : new Date(String(v))
+  return isNaN(d.getTime()) ? null : d
 }
 
 const fmtDateBadge = (d: Date) =>
-  d.toLocaleDateString("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" });
+  d.toLocaleDateString("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" })
 
-/* ================== 캐러셀 ================== */
+/* Redesigned carousel with Musinsa-style clean cards */
 function HistoryStrip({
   user,
   items,
   loading,
   error,
 }: {
-  user: any;
-  items: any[] | undefined;
-  loading: boolean;
-  error: string | null;
+  user: any
+  items: any[] | undefined
+  loading: boolean
+  error: string | null
 }) {
-  const trackRef = useRef<HTMLDivElement | null>(null);
-  const [active, setActive] = useState(0);
-  const [sideGap, setSideGap] = useState(0);
+  const trackRef = useRef<HTMLDivElement | null>(null)
+  const [active, setActive] = useState(0)
+  const [sideGap, setSideGap] = useState(0)
 
-  // rAF 스케줄러 상태
-  const rafIdRef = useRef<number | null>(null);
-  const lastLeftRef = useRef(0);
-  const lastTsRef = useRef(0);
-  const runningRef = useRef(false);
+  // Pointer Events 통합 상태값
+  const [isDragging, setIsDragging] = useState(false)
+  const pointerStartX = useRef(0)
+  const pointerScrollStartX = useRef(0)
+  const pointerMovedRef = useRef(false)
+  const pointerDownIdRef = useRef<number | null>(null)
+  const pointerTapIdxRef = useRef<number | null>(null)
+
+  const rafIdRef = useRef<number | null>(null)
+  const lastLeftRef = useRef(0)
+  const lastTsRef = useRef(0)
+  const runningRef = useRef(false)
 
   const computeActive = () => {
-    const track = trackRef.current;
-    if (!track) return 0;
-    const cards = Array.from(track.querySelectorAll<HTMLElement>("[data-card-idx]"));
-    if (!cards.length) return 0;
+    const track = trackRef.current
+    if (!track) return 0
+    const cards = Array.from(track.querySelectorAll<HTMLElement>("[data-card-idx]"))
+    if (!cards.length) return 0
 
-    const center = track.scrollLeft + track.clientWidth / 2;
-    let best = 0;
-    let bestDist = Infinity;
+    const center = track.scrollLeft + track.clientWidth / 2
+    let best = 0
+    let bestDist = Number.POSITIVE_INFINITY
     cards.forEach((el, i) => {
-      const c = el.offsetLeft + el.offsetWidth / 2;
-      const dist = Math.abs(c - center);
+      const c = el.offsetLeft + el.offsetWidth / 2
+      const dist = Math.abs(c - center)
       if (dist < bestDist) {
-        bestDist = dist;
-        best = i;
+        bestDist = dist
+        best = i
       }
-    });
-    return best;
-  };
+    })
+    return best
+  }
 
   const ensureRafLoop = () => {
-    const track = trackRef.current;
-    if (!track || runningRef.current) return;
+    const track = trackRef.current
+    if (!track || runningRef.current) return
 
-    runningRef.current = true;
+    runningRef.current = true
     const tick = () => {
-      const t = trackRef.current;
+      const t = trackRef.current
       if (!t) {
-        runningRef.current = false;
-        return;
+        runningRef.current = false
+        return
       }
-      const now = performance.now();
-      const left = t.scrollLeft;
+      const now = performance.now()
+      const left = t.scrollLeft
 
-      const idx = computeActive();
-      setActive((p) => (p === idx ? p : idx));
+      const idx = computeActive()
+      setActive((p) => (p === idx ? p : idx))
 
       if (left !== lastLeftRef.current) {
-        lastLeftRef.current = left;
-        lastTsRef.current = now;
+        lastLeftRef.current = left
+        lastTsRef.current = now
       }
       if (now - lastTsRef.current < 120) {
-        rafIdRef.current = requestAnimationFrame(tick);
+        rafIdRef.current = requestAnimationFrame(tick)
       } else {
-        runningRef.current = false;
-        rafIdRef.current = null;
+        runningRef.current = false
+        rafIdRef.current = null
       }
-    };
+    }
 
-    lastLeftRef.current = track.scrollLeft;
-    lastTsRef.current = performance.now();
-    rafIdRef.current = requestAnimationFrame(tick);
-  };
+    lastLeftRef.current = track.scrollLeft
+    lastTsRef.current = performance.now()
+    rafIdRef.current = requestAnimationFrame(tick)
+  }
 
   const measureSideGap = () => {
-    const track = trackRef.current;
-    if (!track) return;
-    const first = track.querySelector<HTMLElement>("[data-card-idx='0']");
+    const track = trackRef.current
+    if (!track) return
+    const first = track.querySelector<HTMLElement>("[data-card-idx='0']")
     if (!first) {
-      setSideGap(0);
-      return;
+      setSideGap(0)
+      return
     }
-    const gap = Math.max(0, (track.clientWidth - first.offsetWidth) / 2);
-    setSideGap(gap);
-  };
+    const gap = Math.max(0, (track.clientWidth - first.offsetWidth) / 2)
+    setSideGap(gap)
+  }
+
+  // ✅ 선택한 카드 중앙 정렬
+  const scrollCardIntoCenter = (index: number) => {
+    const track = trackRef.current
+    if (!track) return
+
+    const el = track.querySelector<HTMLElement>(`[data-card-idx="${index}"]`)
+    if (!el) return
+
+    const left = el.offsetLeft - (track.clientWidth - el.offsetWidth) / 2
+    const max = Math.max(0, track.scrollWidth - track.clientWidth)
+    const next = Math.min(Math.max(left, 0), max)
+
+    track.scrollTo({ left: next, behavior: "smooth" })
+    setActive(index)
+    ensureRafLoop()
+  }
+
+  // --- Pointer Events (마우스/터치/펜 통합) ---
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const track = trackRef.current
+    if (!track) return
+
+    // 포인터 캡처(요소 밖으로 나가도 move/up 이벤트 수신)
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId)
+      pointerDownIdRef.current = e.pointerId
+    } catch {
+      pointerDownIdRef.current = null
+    }
+
+    setIsDragging(true)
+    pointerMovedRef.current = false
+    pointerStartX.current = e.pageX
+    pointerScrollStartX.current = track.scrollLeft
+
+    // 탭 후보 카드 index 저장
+    const targetEl = (e.target as HTMLElement).closest("[data-card-idx]") as HTMLElement | null
+    const idxAttr = targetEl?.getAttribute("data-card-idx")
+    pointerTapIdxRef.current = idxAttr != null ? Number(idxAttr) : null
+
+    track.style.scrollBehavior = "auto"
+  }
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDragging) return
+    const track = trackRef.current
+    if (!track) return
+
+    // 드래그 시 텍스트 선택 방지
+    e.preventDefault()
+
+    const walk = (pointerStartX.current - e.pageX) * 1.5
+    if (Math.abs(walk) > 6) pointerMovedRef.current = true
+    track.scrollLeft = pointerScrollStartX.current + walk
+  }
+
+  const endPointerLike = () => {
+    const track = trackRef.current
+    if (track) track.style.scrollBehavior = "smooth"
+    setIsDragging(false)
+
+    // 드래그가 아니면 탭으로 간주 → 중앙 스크롤
+    if (!pointerMovedRef.current && pointerTapIdxRef.current != null) {
+      scrollCardIntoCenter(pointerTapIdxRef.current)
+    }
+    pointerTapIdxRef.current = null
+    pointerDownIdRef.current = null
+  }
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    // 캡처 해제
+    try {
+      if (pointerDownIdRef.current != null) {
+        e.currentTarget.releasePointerCapture(pointerDownIdRef.current)
+      }
+    } catch {}
+    endPointerLike()
+  }
+
+  const handlePointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
+    try {
+      if (pointerDownIdRef.current != null) {
+        e.currentTarget.releasePointerCapture(pointerDownIdRef.current)
+      }
+    } catch {}
+    endPointerLike()
+  }
 
   useEffect(() => {
-    const track = trackRef.current;
-    if (!track) return;
+    const track = trackRef.current
+    if (!track) return
 
-    const onScroll = () => ensureRafLoop();
+    const onScroll = () => ensureRafLoop()
     const onResize = () => {
-      measureSideGap();
-      setActive(computeActive());
-    };
+      measureSideGap()
+      setActive(computeActive())
+    }
 
-    track.addEventListener("scroll", onScroll, { passive: true });
-    window.addEventListener("resize", onResize);
+    track.addEventListener("scroll", onScroll, { passive: true })
+    window.addEventListener("resize", onResize)
 
-    measureSideGap();
+    measureSideGap()
     requestAnimationFrame(() => {
-      setActive(computeActive());
-      centerTo(active, false);
-    });
+      setActive(computeActive())
+    })
 
     return () => {
-      track.removeEventListener("scroll", onScroll);
-      window.removeEventListener("resize", onResize);
-      if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current);
-      runningRef.current = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    const track = trackRef.current;
-    if (!track) return;
-
-    const imgs = Array.from(track.querySelectorAll("img"));
-    const onLoad = () => {
-      measureSideGap();
-      setActive(computeActive());
-    };
-    imgs.forEach((img) => img.addEventListener("load", onLoad, { once: true }));
-
-    return () => imgs.forEach((img) => img.removeEventListener("load", onLoad));
-  }, [items?.length]);
-
-  const centerTo = (idx: number, smooth = true) => {
-    const track = trackRef.current;
-    if (!track) return;
-    const card = track.querySelector<HTMLElement>(`[data-card-idx="${idx}"]`);
-    if (!card) return;
-    const left = card.offsetLeft + card.offsetWidth / 2 - track.clientWidth / 2;
-    track.scrollTo({ left, behavior: smooth ? "smooth" : ("instant" as any) });
-    ensureRafLoop();
-  };
+      track.removeEventListener("scroll", onScroll)
+      window.removeEventListener("resize", onResize)
+      if (rafIdRef.current) {
+        cancelAnimationFrame(rafIdRef.current)
+      }
+    }
+  }, [])
 
   if (loading) {
     return (
-      <section className="mt-6">
-        <div className="h-6 w-40 rounded bg-black/10 animate-pulse mb-4" />
-        <div className="flex gap-5 overflow-hidden">
+      <section className="mb-6">
+        <div className="h-5 w-32 rounded bg-muted animate-pulse mb-3 ml-4" />
+        <div className="flex gap-4 overflow-hidden px-4">
           {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="w-[300px] shrink-0 rounded-2xl bg-white/60 shadow-sm p-4">
-              <div className="aspect-[5/6] rounded-xl bg-black/10 animate-pulse" />
-              <div className="h-4 w-2/3 bg-black/10 rounded mt-3 animate-pulse" />
-              <div className="h-3 w-1/2 bg-black/10 rounded mt-2 animate-pulse" />
+            <div key={i} className="w-[160px] shrink-0">
+              <div className="aspect-[3/4] rounded bg-muted animate-pulse mb-2" />
             </div>
           ))}
         </div>
       </section>
-    );
+    )
   }
 
   if (error) {
     return (
-      <section className="mt-6">
-        <h2 className="text-xl font-semibold text-slate-800 mb-2">
-          {user?.name ?? "내"} 추억
-        </h2>
-        <div className="text-red-600 text-sm">히스토리를 불러오지 못했습니다: {error}</div>
+      <section className="mb-6">
+        <h2 className="text-sm font-semibold text-foreground mb-3 px-4">최근 감정 분석</h2>
+        <div className="text-destructive text-xs px-4">히스토리를 불러오지 못했습니다</div>
       </section>
-    );
+    )
   }
 
-  const list = items ?? [];
+  const list = items ?? []
   if (list.length === 0) {
     return (
-      <section className="mt-6">
-        <h2 className="text-xl font-semibold text-slate-800 mb-2">
-          {user?.name ?? "내"} 추억
-        </h2>
-        <div className="text-slate-500 text-sm">아직 저장된 추억이 없어요.</div>
+      <section className="mb-6">
+        <h2 className="text-sm font-semibold text-foreground mb-3 px-4">최근 감정 분석</h2>
+        <div className="text-muted-foreground text-xs px-4">아직 분석된 사진이 없어요</div>
       </section>
-    );
+    )
   }
 
   return (
-    <section className="mt-6">
-      <div className="flex items-end justify-between mb-3">
-        <div>
-          <h2 className="text-2xl font-semibold text-slate-800">
-            {user?.name ?? "내"}님의 추억
-          </h2>
-          <p className="text-slate-500 text-sm">최근에 들었던 음악들</p>
-        </div>
-
-        <div className="hidden sm:flex gap-2">
-          <button
-            type="button"
-            onClick={() => centerTo(Math.max(0, active - 1))}
-            className="h-9 px-3 rounded-lg bg-white/80 shadow border border-white/60 hover:bg-white transition"
-            aria-label="이전"
-          >
-            ‹
-          </button>
-          <button
-            type="button"
-            onClick={() => centerTo(Math.min(list.length - 1, active + 1))}
-            className="h-9 px-3 rounded-lg bg-white/80 shadow border border-white/60 hover:bg-white transition"
-            aria-label="다음"
-          >
-            ›
-          </button>
-        </div>
+    <section className="mb-8">
+      <div className="flex items-center justify-between mb-4 px-4">
+        <h2 className="text-sm font-semibold text-foreground">최근 감정 분석</h2>
+        <button className="text-xs text-muted-foreground">전체보기</button>
       </div>
 
-      {/* 캐러셀 + 인디케이터 */}
-      <div className="relative pb-8">
-        <div
-          ref={trackRef}
-          className={[
-            "relative -mx-6 px-6 overflow-x-auto snap-x snap-mandatory",
-            "[scrollbar-width:none]",
-            "[ms-overflow-style:none]",
-            "[&::-webkit-scrollbar]:hidden",
-            "[&::-webkit-scrollbar]:w-0",
-            "[&::-webkit-scrollbar]:h-0",
-          ].join(" ")}
-        >
-          <div className="flex gap-5 py-2">
-            {/* 좌측 스페이서 */}
-            <div className="shrink-0" style={{ width: sideGap }} aria-hidden />
+      <div
+        ref={trackRef}
+        className={`overflow-x-auto snap-x snap-mandatory [scrollbar-width:none] [&::-webkit-scrollbar]:hidden select-none ${
+          isDragging ? "cursor-grabbing" : "cursor-grab"
+        }`}
+        style={{
+          paddingLeft: sideGap,
+          paddingRight: sideGap,
+          scrollBehavior: "smooth",
+          WebkitOverflowScrolling: "touch",
+          touchAction: "pan-x", // 데스크톱/모바일 가로 스와이프 최적화
+          userSelect: "none",
+        }}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
+      >
+        <div className="flex gap-4 pb-3" style={{ minWidth: "max-content" }}>
+          {list.map((it, idx) => {
+            const pid = it.photo_id ?? it.photoId ?? it.id
+            const { primary, fallback } = buildPhotoSrc(pid)
+            const title = it.title_snapshot ?? it.title ?? "제목 없음"
+            const artist = it.artist_snapshot ?? it.artist ?? "Various"
+            const dateObj = extractDate(it)
+            const isSelected = idx === active
 
-            {list.map((it, idx) => {
-              const pid = it.photo_id ?? it.photoId ?? it.id;
-              const { primary, fallback } = buildPhotoSrc(pid);
-              const title = it.title_snapshot ?? it.title ?? "제목 없음";
-              const artist = it.artist_snapshot ?? it.artist ?? "Various";
-              const dateObj = extractDate(it);
-              const badge = dateObj ? fmtDateBadge(dateObj) : null;
-
-              const isActive = idx === active;
-              const isNeighbor = Math.abs(idx - active) === 1;
-
-              return (
+            return (
+              <div
+                key={`${pid}-${idx}`}
+                data-card-idx={idx}
+                className="snap-center shrink-0 w-[160px] transition-all duration-300"
+                style={{
+                  transform: isSelected ? "scale(1.05)" : "scale(0.95)",
+                  zIndex: isSelected ? 10 : 1,
+                  opacity: isSelected ? 1 : 0.6,
+                }}
+              >
                 <div
-                  key={`${pid}-${idx}`}
-                  data-card-idx={idx}
-                  className="snap-center shrink-0 w-[36%] sm:w-[34%] md:w-[30%] lg:w-[26%]"
-                  onClick={() => centerTo(idx)}
-                  role="button"
-                  aria-label={`${title} 카드`}
+                  className="relative bg-white p-3 pb-8 shadow-lg transition-all duration-300"
+                  style={{
+                    filter: isSelected ? "none" : "grayscale(60%)",
+                  }}
                 >
-                  <div
-                    className={[
-                      "rounded-2xl bg-white/80 border border-white/70 p-3.5 transition-all duration-300 ease-out will-change-transform",
-                      isActive
-                        ? "-translate-y-2 scale-100 opacity-100 shadow-xl ring-1 ring-sky-200/60"
-                        : isNeighbor
-                        ? "translate-y-0 scale-[0.90] opacity-85 shadow-sm"
-                        : "translate-y-0 scale-[0.84] opacity-70 shadow-sm",
-                    ].join(" ")}
-                  >
-                    <div className="relative aspect-[5/6] rounded-xl overflow-hidden bg-black/5">
-                      <img
-                        src={primary}
-                        alt={title}
-                        className={[
-                          "w-full h-full object-cover transition",
-                          isActive ? "blur-0" : "blur-[0.4px]",
-                        ].join(" ")}
-                        crossOrigin="anonymous"
-                        onError={(e) => {
-                          const img = e.currentTarget as HTMLImageElement;
-                          if (!(img as any).__fb) {
-                            (img as any).__fb = true;
-                            img.src = fallback;
-                          } else {
-                            img.src = "/placeholder.svg";
-                          }
-                        }}
-                        onLoad={() => {
-                          measureSideGap();
-                          setActive(computeActive());
-                        }}
-                      />
-                      {badge && (
-                        <span
-                          className="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-black/60 text-white text-[11px] leading-5 shadow-sm"
-                          title={dateObj!.toLocaleString()}
-                        >
-                          {badge}
-                        </span>
-                      )}
-                      {isActive && (
-                        <div className="pointer-events-none absolute -top-2 left-4 right-4 h-2 bg-gradient-to-r from-fuchsia-400/60 via-sky-400/60 to-emerald-400/60 blur opacity-70" />
-                      )}
-                    </div>
-
-                    <div className="mt-3">
-                      <div className="text-slate-900 font-semibold truncate">{title}</div>
-                      <div className="text-slate-500 text-sm truncate">{artist}</div>
-                    </div>
+                  <div className="relative aspect-square overflow-hidden bg-gray-100">
+                    <img
+                      src={primary || "/placeholder.svg"}
+                      alt={title}
+                      className="w-full h-full object-cover"
+                      crossOrigin="anonymous"
+                      style={{ pointerEvents: "none" }} // 클릭은 카드 래퍼가 받도록
+                      onError={(e) => {
+                        const img = e.currentTarget as HTMLImageElement
+                        if (!(img as any).__fb) {
+                          ;(img as any).__fb = true
+                          img.src = fallback
+                        } else {
+                          img.src = "/placeholder.svg"
+                        }
+                      }}
+                    />
+                    {dateObj && (
+                      <span className="absolute bottom-2 right-2 px-2 py-1 rounded bg-black/70 text-white text-[10px] leading-tight">
+                        {fmtDateBadge(dateObj)}
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-2 text-center">
+                    <div className="text-xs font-medium text-gray-800 truncate">{title}</div>
+                    <div className="text-[10px] text-gray-500 truncate">{artist}</div>
                   </div>
                 </div>
-              );
-            })}
-
-            {/* 우측 스페이서 */}
-            <div className="shrink-0" style={{ width: sideGap }} aria-hidden />
-          </div>
-        </div>
-
-        {/* 인디케이터 (하단 고정) */}
-        <div className="pointer-events-none absolute inset-x-0 bottom-1 flex justify-center">
-          <div className="pointer-events-auto rounded-full bg-white/70 backdrop-blur px-3 py-1 shadow border border-white/60">
-            <div className="flex items-center gap-2">
-              {list.map((_, i) => (
-                <button
-                  key={i}
-                  aria-label={`인덱스 ${i + 1}`}
-                  onClick={() => centerTo(i)}
-                  className={[
-                    "h-2 rounded-full transition-all",
-                    i === active ? "w-6 bg-slate-800" : "w-2.5 bg-slate-400/70 hover:bg-slate-500/80",
-                  ].join(" ")}
-                />
-              ))}
-            </div>
-          </div>
+              </div>
+            )
+          })}
         </div>
       </div>
     </section>
-  );
+  )
+}
+
+function BottomNav({ activeTab }: { activeTab: string }) {
+  const router = useRouter()
+
+  const tabs = [
+    { id: "home", label: "홈", icon: Home },
+    { id: "search", label: "검색", icon: Search },
+    { id: "profile", label: "프로필", icon: User },
+  ]
+
+  return (
+    <nav className="fixed bottom-0 left-0 right-0 bg-background border-t border-border z-50 safe-area-inset-bottom">
+      <div className="flex items-center justify-around h-16 max-w-lg mx-auto">
+        {tabs.map((tab) => {
+          const Icon = tab.icon
+          const isActive = activeTab === tab.id
+          return (
+            <button
+              key={tab.id}
+              onClick={() => {
+                if (tab.id === "home") router.push("/")
+                if (tab.id === "profile") router.push("/account")
+                if (tab.id === "search") router.push("/search")
+              }}
+              className="flex flex-col items-center justify-center gap-1 flex-1 h-full"
+            >
+              <Icon className={`w-5 h-5 ${isActive ? "text-primary" : "text-muted-foreground"}`} />
+              <span className={`text-[10px] ${isActive ? "text-primary font-medium" : "text-muted-foreground"}`}>
+                {tab.label}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </nav>
+  )
 }
 
 export default function Page() {
-  const { user, isLoggedIn, logout } = useAuthUser();
-  const router = useRouter();
-  const { musics, loading: musicsLoading, error: musicsError } = useMusics();
-  const { history, loading: historyLoading, error: historyError } = useHistory(isLoggedIn);
-  const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
+  const { user, isLoggedIn, logout } = useAuthUser()
+  const router = useRouter()
+  const { musics, loading: musicsLoading, error: musicsError } = useMusics()
+  const { history, loading: historyLoading, error: historyError } = useHistory(isLoggedIn)
+  const [selectedGenres, setSelectedGenres] = useState<string[]>([])
+  const [showUploadModal, setShowUploadModal] = useState(false)
 
   const accountId = useMemo(() => {
     const anyUser = (user ?? {}) as {
-      email?: string | null;
-      id?: string | null;
-      uid?: string | null;
-      userId?: string | null;
-      name?: string | null;
-    };
+      email?: string | null
+      id?: string | null
+      uid?: string | null
+      userId?: string | null
+      name?: string | null
+    }
     return (
       (anyUser.email?.trim() || null) ??
       (anyUser.id?.trim() || null) ??
       (anyUser.uid?.trim() || null) ??
       (anyUser.userId?.trim() || null) ??
       "guest"
-    );
-  }, [user]);
+    )
+  }, [user])
 
-  const dismissKey = useMemo(
-    () => `spotify_connect_modal_dismissed_until::${accountId}`,
-    [accountId]
-  );
+  const dismissKey = useMemo(() => `spotify_connect_modal_dismissed_until::${accountId}`, [accountId])
 
-  const [isSpotifyConnected, setIsSpotifyConnected] = useState(false);
-  const [showSpotifyModal, setShowSpotifyModal] = useState(false);
+  const [isSpotifyConnected, setIsSpotifyConnected] = useState(false)
+  const [showSpotifyModal, setShowSpotifyModal] = useState(false)
 
   useEffect(() => {
     const read = () => {
       try {
-        const token = localStorage.getItem("spotify_access_token");
-        const dismissedUntil = Number(localStorage.getItem(dismissKey) || "0");
-        const now = Date.now();
-        const connected = !!(token && token.trim());
-        setIsSpotifyConnected(connected);
-        setShowSpotifyModal(isLoggedIn ? !connected && now > dismissedUntil : false);
+        const token = localStorage.getItem("spotify_access_token")
+        const dismissedUntil = Number(localStorage.getItem(dismissKey) || "0")
+        const now = Date.now()
+        const connected = !!(token && token.trim())
+        setIsSpotifyConnected(connected)
+        setShowSpotifyModal(isLoggedIn ? !connected && now > dismissedUntil : false)
       } catch {
-        setIsSpotifyConnected(false);
-        setShowSpotifyModal(isLoggedIn);
+        setIsSpotifyConnected(false)
+        setShowSpotifyModal(isLoggedIn)
       }
-    };
-    read();
+    }
+    read()
 
     const onStorage = (e: StorageEvent) => {
       try {
         if (e.key === "spotify_access_token") {
-          const connected = !!(e.newValue && e.newValue.trim());
-          setIsSpotifyConnected(connected);
-          if (connected) setShowSpotifyModal(false);
+          const connected = !!(e.newValue && e.newValue.trim())
+          setIsSpotifyConnected(connected)
+          if (connected) setShowSpotifyModal(false)
         }
         if (e.key === dismissKey) {
-          const now = Date.now();
-          const dismissedUntil = Number(localStorage.getItem(dismissKey) || "0");
-          setShowSpotifyModal(isLoggedIn && !isSpotifyConnected && now > dismissedUntil);
+          const now = Date.now()
+          const dismissedUntil = Number(localStorage.getItem(dismissKey) || "0")
+          setShowSpotifyModal(isLoggedIn && !isSpotifyConnected && now > dismissedUntil)
         }
       } catch {}
-    };
+    }
 
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, [dismissKey, isLoggedIn, isSpotifyConnected]);
+    window.addEventListener("storage", onStorage)
+    return () => window.removeEventListener("storage", onStorage)
+  }, [dismissKey, isLoggedIn, isSpotifyConnected])
 
   const toggleGenre = (genre: string) => {
-    setSelectedGenres((prev) =>
-      prev.includes(genre) ? prev.filter((g) => g !== genre) : [...prev, genre]
-    );
-  };
+    setSelectedGenres((prev) => (prev.includes(genre) ? prev.filter((g) => g !== genre) : [...prev, genre]))
+  }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-100 via-pink-100 to-blue-100 relative overflow-hidden">
-      {/* 배경 */}
-      <div className="absolute inset-0 opacity-20">
-        <div className="absolute inset-0 bg-gradient-to-br from-purple-200/50 to-pink-200/50"></div>
-        <div
-          className="absolute inset-0 opacity-60"
-          style={{
-            backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fillRule='evenodd'%3E%3Cg fill='%23a855f7' fillOpacity='0.3'%3E%3Ccircle cx='30' cy='30' r='2'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
-          }}
-        ></div>
-        <div className="absolute top-20 left-20 w-32 h-32 bg-gradient-to-br from-pink-300 to-purple-400 rounded-full opacity-20 blur-3xl"></div>
-        <div className="absolute top-40 right-32 w-24 h-24 bg-gradient-to-br from-blue-300 to-cyan-400 rounded-full opacity-25 blur-2xl"></div>
-        <div className="absolute bottom-32 left-1/3 w-40 h-40 bg-gradient-to-br from-yellow-300 to-orange-400 rounded-full opacity-15 blur-3xl"></div>
-        <div className="absolute bottom-20 right-20 w-28 h-28 bg-gradient-to-br from-green-300 to-emerald-400 rounded-full opacity-20 blur-2xl"></div>
-      </div>
-
-      <UserHeader
-        user={user}
-        isLoggedIn={isLoggedIn}
-        onLogout={() => {
-          logout();
-          router.push("/login");
-        }}
-      />
-
-      <main className="max-w-5xl mx-auto px-6 py-16 relative z-10">
-        <HistoryStrip user={user} items={history} loading={historyLoading} error={historyError} />
-
-        <PhotoUpload
+    <>
+      <div className="min-h-screen bg-background pb-20">
+        <UserHeader
+          user={user}
           isLoggedIn={isLoggedIn}
-          selectedGenres={selectedGenres}
-          onRequireLogin={() => router.push("/login")}
+          onLogout={() => {
+            logout()
+            router.push("/login")
+          }}
         />
 
-        <SearchAndRequest musics={musics} loading={musicsLoading} error={musicsError} />
+        <main className="max-w-lg mx-auto">
+          <div className="pt-4">
+            <HistoryStrip user={user} items={history} loading={historyLoading} error={historyError} />
+          </div>
 
-        <MoodBadges selected={selectedGenres} onToggle={toggleGenre} />
-      </main>
+          <section className="px-4 pb-4">
+            <div className="bg-gradient-to-br from-primary/10 via-accent/5 to-primary/5 rounded-2xl p-6 mb-6">
+              <h2 className="text-xl font-bold text-foreground mb-2 text-balance">당신의 감정을 음악으로</h2>
+              <p className="text-sm text-muted-foreground mb-4 text-pretty">
+                사진을 업로드하면 AI가 감정을 분석하고
+                <br />
+                딱 맞는 음악을 추천해드려요
+              </p>
+              <button
+                onClick={() => setShowUploadModal(true)}
+                className="w-full bg-primary text-primary-foreground rounded-lg py-3 px-4 font-medium text-sm flex items-center justify-center gap-2 hover:bg-primary/90 transition-colors"
+              >
+                <Camera className="w-4 h-4" />
+                사진으로 감정 분석하기
+              </button>
+            </div>
+          </section>
+
+          <section className="px-4 mb-6">
+            <h2 className="text-sm font-semibold text-foreground mb-3">지금 기분은?</h2>
+            <MoodBadges selected={selectedGenres} onToggle={toggleGenre} />
+          </section>
+
+          <section className="px-4 mb-6">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold text-foreground">추천 음악</h2>
+              <button className="text-xs text-muted-foreground">더보기</button>
+            </div>
+            <SearchAndRequest musics={musics} loading={musicsLoading} error={musicsError} />
+          </section>
+        </main>
+
+        <button
+          onClick={() => setShowUploadModal(true)}
+          className="fixed bottom-20 right-4 w-14 h-14 bg-primary text-primary-foreground rounded-full shadow-lg flex items-center justify-center hover:scale-105 transition-transform z-40"
+          aria-label="사진 업로드"
+        >
+          <Camera className="w-6 h-6" />
+        </button>
+
+        <BottomNav activeTab="home" />
+      </div>
+
+      {showUploadModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center">
+          <div className="bg-background w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl p-6 animate-in slide-in-from-bottom duration-300">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-foreground">감정 분석하기</h3>
+              <button
+                onClick={() => setShowUploadModal(false)}
+                className="w-8 h-8 rounded-full hover:bg-muted flex items-center justify-center"
+              >
+                ✕
+              </button>
+            </div>
+            <PhotoUpload
+              isLoggedIn={isLoggedIn}
+              selectedGenres={selectedGenres}
+              onRequireLogin={() => {
+                setShowUploadModal(false)
+                router.push("/login")
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       <SpotifyConnectModal
         open={isLoggedIn && !isSpotifyConnected && showSpotifyModal}
         onClose={() => {
           try {
-            const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-            const expireAt = Date.now() + sevenDaysMs;
-            localStorage.setItem(dismissKey, String(expireAt));
+            const sevenDaysMs = 7 * 24 * 60 * 60 * 1000
+            const expireAt = Date.now() + sevenDaysMs
+            localStorage.setItem(dismissKey, String(expireAt))
           } catch {}
-          setShowSpotifyModal(false);
+          setShowSpotifyModal(false)
         }}
         onConnect={() => {
-          window.location.href = "/account/spotify";
+          window.location.href = "/account/spotify"
         }}
       />
-    </div>
-  );
+    </>
+  )
 }
