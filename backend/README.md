@@ -3,44 +3,48 @@
 [1] 사용자
 uploads photo (JPG/PNG)
 ↓ POST /api/photos/upload
-설명 : 사진데이터를 데이터베이스에 저장하도록 POST요청 >> 프론트역할
+설명 : 사진(jpg/png)을 선택하여 프론트엔드에 업로드한다. 
 
-[2] 사진 저장
-DB: photos 테이블 저장 + photo_id 반환
+[2] 프론트엔드
+이미지파일을 백엔드 서버의 POST /api/photos/analyze API로 전송하여 분석을 요청합니다.
 
-[3] AI 서버
- GET /api/photos/pending 
- → 분석 안된 사진 목록 확인 >> AI역할 : 목록 검사
-      ↓
-GET /api/photos/:id/binary 
-→ 바이너리형식으로 다운로드 >> AI역할 : AI에서 정보받기
-      ↓
-이미지 분석: time + background + emotion 예측 >> 기존에 제작된 AI에서 요청을 음
-      ↓
-POST /api/ai/results → 분석 결과를 업로드 >> results로 DB형식에 맞게 POST
-    ⇒ 백엔드에서 mood_mapping 조회
-    ⇒ photo_analysis 테이블에 저장
+[3] 백엔드
+ POST /api/photos/analyze 요청
+ 메모리에 있는 이미지파일을 AI 서버의 POST /analyze/ API로 직접 전달하여 분석을 요청하고, AI 서버의 응답을 기다린다.
 
-[4] 사용자
- GET /api/recommendations/by-photo/:photoId >> 프론트역할 : photo_analysis photo_id를 넣어 확인가능
-  ↓
-   DB: photo_analysis → main_mood / sub_mood
- DB: music 테이블 → 7 + 3곡 추천 반환
+[4] AI 서버
+ POST /analyze/ 요청으로 이미지 파일을 직접 받는다.
+ MObileNetV2 모델 -> emotion 예측
+ Yolo모델 -> background 예측
+ Rule-based 시스템 -> time_label 등 예측
+ 분석된 결과를 JSON 혀애로 백엔드에 응답한다.
 
-[5] 프론트
- 음악 추천 결과 보여줌
+[5] 백엔드
+AI 서버로부터 분석 결과 수신해
+원본 이미지 파일을 Photos 테이블에 저장하고 photo_id 생성 한다
+AI 분석결과를 이용해 mood_mapping 테이블을 조회하여 main_mood와 sub_mood를 결정한다.
+모든 결과를 photo_analysis 테이블에 photo_id와 저장
+
+[6] 프론트 
+GET /api/recommendations/by-photo/:photoId
+백엔드로 부터 추천받은 음악목록을 사용자에게
 
 
 
  ### API 명세 
 
-사진 업로드: POST /api/photos/upload
+<!-- 사진 업로드: POST /api/photos/upload
 
 AI 서버: GET /api/photos/pending
 
 AI 서버: GET /api/photos/:id/binary
 
-AI 결과 업로드: POST /api/ai/results
+AI 결과 업로드: POST /api/ai/results -->
+====================================
+대신해서 
+
+이미지 업로드 및 AI 분석요청, DB저장 :
+POST /api/photos/analyze
 
 사용자: GET /api/recommendations/by-photo/:photoId
 
@@ -50,6 +54,7 @@ AI 결과 업로드: POST /api/ai/results
 ### 설치해야 할 패키지
 npm i express cors dotenv pg multer jsonwebtoken axios bcrypt
 npm install cookie-parser (0918 추가)
+npm install form-data(1001 추가)
 
 
 ### histoty.js 라우터 추가 ( 0901 )

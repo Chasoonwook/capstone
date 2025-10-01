@@ -5,10 +5,11 @@ const multer = require("multer");
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const axios = require("axios");
+const FormData = require("form-data"); // 파일보내기위해 추가
 
 const router = express.Router();
 
-const AI_TIMEOUT    = Number(process.env.AI_FETCH_TIMEOUT || 60_000);
+const AI_TIMEOUT    = Number(process.env.AI_FETCH_TIMEOUT || 60000);
 const IMG_TOKEN_TTL = String(process.env.IMG_TOKEN_TTL || "600s");
 
 const IMAGE_MIME_WHITELIST = new Set([
@@ -40,54 +41,23 @@ function allowCORS(req, res) {
   res.set("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
 }
 
-/* ── mood 매핑: 소문자/trim + 점진 매칭 ─────────────────────────── */
-async function resolveMood(client, timeLabel, background, emotion, prefer) {
-  if (prefer?.main_mood) {
-    return {
-      main_mood: prefer.main_mood,
-      sub_mood: prefer.sub_mood || prefer.mood_sub || null,
-    };
-  }
-  const t = (timeLabel  || "").trim().toLowerCase();
+// ⭐️ mood 매핑 함수를 AI 서버의 응답 형식에 맞게 단순화
+async function resolveMood(client, timeLabel, background, emotion) {
+  const t = (timeLabel || "").trim().toLowerCase();
   const b = (background || "").trim().toLowerCase();
-  const e = (emotion    || "").trim().toLowerCase();
+  const e = (emotion || "").trim().toLowerCase();
 
-  let q = await client.query(
-    `SELECT main_mood, sub_mood
-       FROM mood_mapping
-      WHERE LOWER(TRIM(time))       = $1
-        AND LOWER(TRIM(background)) = $2
-        AND LOWER(TRIM(emotion))    = $3
-      LIMIT 1`, [t,b,e]
-  );
+  let q = await client.query(`SELECT main_mood, sub_mood FROM mood_mapping WHERE LOWER(TRIM(time)) = $1 AND LOWER(TRIM(background)) = $2 AND LOWER(TRIM(emotion)) = $3 LIMIT 1`, [t, b, e]);
   if (q.rows[0]) return q.rows[0];
 
-  q = await client.query(
-    `SELECT main_mood, sub_mood
-       FROM mood_mapping
-      WHERE LOWER(TRIM(time))       = $1
-        AND LOWER(TRIM(background)) = $2
-      ORDER BY mapping_id
-      LIMIT 1`, [t,b]
-  );
+  q = await client.query(`SELECT main_mood, sub_mood FROM mood_mapping WHERE LOWER(TRIM(time)) = $1 AND LOWER(TRIM(background)) = $2 ORDER BY mapping_id LIMIT 1`, [t, b]);
   if (q.rows[0]) return q.rows[0];
 
-  q = await client.query(
-    `SELECT main_mood, sub_mood
-       FROM mood_mapping
-      WHERE LOWER(TRIM(time)) = $1
-      ORDER BY mapping_id
-      LIMIT 1`, [t]
-  );
+  q = await client.query(`SELECT main_mood, sub_mood FROM mood_mapping WHERE LOWER(TRIM(time)) = $1 ORDER BY mapping_id LIMIT 1`, [t]);
   if (q.rows[0]) return q.rows[0];
 
-  q = await client.query(
-    `SELECT main_mood, sub_mood
-       FROM mood_mapping
-      ORDER BY mapping_id
-      LIMIT 1`
-  );
-  return q.rows[0] || { main_mood:null, sub_mood:null };
+  q = await client.query(`SELECT main_mood, sub_mood FROM mood_mapping ORDER BY mapping_id LIMIT 1`);
+  return q.rows[0] || { main_mood: null, sub_mood: null };
 }
 
 /* 디버그 */
@@ -227,53 +197,49 @@ router.get("/photo-analysis/:photoId", async (req, res) => {
   res.json(rows[0]);
 });
 
-/* 업로드 + 즉시 분석 (추천은 recommendations 라우터에서 별도로 조회) */
-router.post("/analyze", upload.single("file"), async (req,res)=>{
-  let imageUrl;
+// ⭐️ 업로드 + 즉시 분석 API (새로운 AI 서버 호출 방식으로 수정)
+router.post("/analyze", upload.single("file"), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: "no file" });
+  }
+
   const client = await pool.connect();
   try {
-    if (!req.file) return res.status(400).json({ error:"no file" });
-    const userId = req.body.userId || "00000000-0000-0000-0000-000000000000";
     const { buffer, originalname, mimetype } = req.file;
 
-    await client.query("BEGIN");
-    const temp = crypto.createHash("sha256").update(buffer).digest("hex").slice(0,8);
-    const ins = await client.query(
-      `INSERT INTO photos (temp_name, original_name, mime_type, content, created_at)
-       VALUES ($1,$2,$3,$4,now())
-       RETURNING photo_id`,
-      [temp, originalname, mimetype, buffer]
-    );
-    const photoId = ins.rows[0].photo_id;
-    await client.query("COMMIT");
-
-    const token = jwt.sign({ id:String(photoId) }, process.env.IMG_TOKEN_SECRET, { expiresIn: IMG_TOKEN_TTL });
-    imageUrl = `${apiBase(req)}/images/${photoId}?token=${token}`;
-    await waitImageVisible(imageUrl);
+    // AI 서버 호출 (파일 직접 전송)
+    const form = new FormData();
+    form.append('file', buffer, { filename: originalname, contentType: mimetype });
 
     const { data: ai } = await axios.post(
-      `${process.env.AI_BASE_URL}/predict`,
-      { image_url: imageUrl, photo_id:String(photoId), user_id:String(userId) },
-      { timeout: AI_TIMEOUT }
+      `${process.env.AI_BASE_URL}/analyze/`,
+      form,
+      { headers: form.getHeaders(), timeout: AI_TIMEOUT }
     );
 
-    const time = ai.time_label || ai.time || null;
-    const back = ai.background || ai.scene || ai.category || null;
-    const emo  = ai.emotion    || ai.final_emotion || ai.rule_emotion || null;
+    // 새로운 AI 서버 응답 파싱
+    const time = (ai.detail_tags?.rule || [])[0] || null;
+    const back = ai.background || null;
+    const emo = ai.emotion || null;
 
     await client.query("BEGIN");
-    const { main_mood, sub_mood } = await resolveMood(
-      client, time, back, emo,
-      { main_mood: ai.mood || ai.mood_main, sub_mood: ai.mood_sub }
-    );
 
-    await client.query("DELETE FROM photo_analysis WHERE photo_id=$1", [photoId]);
+    // 원본 이미지 photos DB에 저장
+    const ins = await client.query(
+      `INSERT INTO photos (original_name, mime_type, content, created_at) VALUES ($1, $2, $3, now()) RETURNING photo_id`,
+      [originalname, mimetype, buffer]
+    );
+    const photoId = ins.rows[0].photo_id;
+
+    // 분석 결과를 바탕으로 mood 결정
+    const { main_mood, sub_mood } = await resolveMood(client, time, back, emo);
+
+    // 최종 분석 결과를 photo_analysis DB에 저장
     await client.query(
-      `INSERT INTO photo_analysis
-         (photo_id, time_label, background, emotion, main_mood, sub_mood, analyzed_at)
-       VALUES ($1,$2,$3,$4,$5,$6,now())`,
+      `INSERT INTO photo_analysis (photo_id, time_label, background, emotion, main_mood, sub_mood, analyzed_at) VALUES ($1, $2, $3, $4, $5, $6, now())`,
       [photoId, time, back, emo, main_mood, sub_mood]
     );
+
     await client.query("COMMIT");
 
     return res.json({
@@ -282,116 +248,72 @@ router.post("/analyze", upload.single("file"), async (req,res)=>{
     });
 
   } catch (err) {
-    try { await client.query("ROLLBACK"); } catch {}
-    const raw = (err && err.response && err.response.data) || err?.message || err?.toString() || "unknown error";
-    const detail = typeof raw === "string" ? raw : JSON.stringify(raw);
-    console.error("[analyze FAILED]", { detail, ai_url: `${process.env.AI_BASE_URL}/predict`, imageUrl });
-    return res.status(500).json({ error:"analyze failed", detail, from:"routes/photos.js#analyze", imageUrl });
+    await client.query("ROLLBACK");
+    const detail = err.response?.data?.detail || err.message || "unknown error";
+    console.error("[analyze FAILED]", { detail });
+    return res.status(500).json({ error: "analyze failed", detail });
   } finally {
     client.release();
   }
 });
 
 /* 기존 사진 id 재분석 */
-router.post("/:photoId/analyze", async (req,res)=>{
-  let imageUrl;
+router.post("/:photoId/analyze", async (req, res) => {
   const client = await pool.connect();
   try {
     const { photoId } = req.params;
-    const userId = req.body.userId || "00000000-0000-0000-0000-000000000000";
 
-    const ex = await client.query(`SELECT 1 FROM photos WHERE photo_id=$1 OR id=$1`, [photoId]);
-    if (!ex.rows.length) return res.status(404).json({ error:"photo not found" });
+    // DB에서 이미지 데이터(buffer) 가져오기
+    const photoRes = await client.query(`SELECT content, original_name, mime_type FROM photos WHERE photo_id=$1`, [photoId]);
+    if (!photoRes.rows.length) {
+      return res.status(404).json({ error: "photo not found" });
+    }
+    const { content: buffer, original_name: originalname, mime_type: mimetype } = photoRes.rows[0];
 
-    const token = jwt.sign({ id:String(photoId) }, process.env.IMG_TOKEN_SECRET, { expiresIn: IMG_TOKEN_TTL });
-    imageUrl = `${apiBase(req)}/images/${photoId}?token=${token}`;
-    await waitImageVisible(imageUrl);
+    // AI 서버 호출 (파일 직접 전송)
+    const form = new FormData();
+    form.append('file', buffer, { filename: originalname || 'image.jpg', contentType: mimetype });
 
     const { data: ai } = await axios.post(
-      `${process.env.AI_BASE_URL}/predict`,
-      { image_url: imageUrl, photo_id:String(photoId), user_id:String(userId) },
-      { timeout: AI_TIMEOUT }
+        `${process.env.AI_BASE_URL}/analyze/`,
+        form,
+        { headers: form.getHeaders(), timeout: AI_TIMEOUT }
     );
 
-    const time = ai.time_label || ai.time || null;
-    const back = ai.background || ai.scene || ai.category || null;
-    const emo  = ai.emotion    || ai.final_emotion || ai.rule_emotion || null;
+    // 새로운 AI 서버 응답 파싱
+    const time = (ai.detail_tags?.rule || [])[0] || null;
+    const back = ai.background || null;
+    const emo = ai.emotion || null;
 
     await client.query("BEGIN");
-    const { main_mood, sub_mood } = await resolveMood(
-      client, time, back, emo,
-      { main_mood: ai.mood || ai.mood_main, sub_mood: ai.mood_sub }
-    );
-
+    
+    // 분석 결과를 바탕으로 mood 결정
+    const { main_mood, sub_mood } = await resolveMood(client, time, back, emo);
+    
+    // 이전 분석 결과 삭제 후 새로 저장
     await client.query("DELETE FROM photo_analysis WHERE photo_id=$1", [photoId]);
     await client.query(
-      `INSERT INTO photo_analysis
-         (photo_id, time_label, background, emotion, main_mood, sub_mood, analyzed_at)
-       VALUES ($1,$2,$3,$4,$5,$6,now())`,
+      `INSERT INTO photo_analysis (photo_id, time_label, background, emotion, main_mood, sub_mood, analyzed_at) VALUES ($1, $2, $3, $4, $5, $6, now())`,
       [photoId, time, back, emo, main_mood, sub_mood]
     );
+    
     await client.query("COMMIT");
 
     return res.json({
-      ok:true,
-      photo_id:Number(photoId),
-      analysis:{ time_label:time, background:back, emotion:emo, main_mood, sub_mood }
+      ok: true,
+      photo_id: Number(photoId),
+      analysis: { time_label: time, background: back, emotion: emo, main_mood, sub_mood }
     });
 
   } catch (err) {
-    try { await client.query("ROLLBACK"); } catch {}
-    const raw = (err && err.response && err.response.data) || err?.message || err?.toString() || "unknown error";
-    const detail = typeof raw === "string" ? raw : JSON.stringify(raw);
-    console.error("[analyze by id FAILED]", { detail, ai_url:`${process.env.AI_BASE_URL}/predict`, imageUrl });
-    return res.status(500).json({ error:"analyze by id failed", detail, from:"routes/photos.js#byId", imageUrl });
+    await client.query("ROLLBACK");
+    const detail = err.response?.data?.detail || err.message || "unknown error";
+    console.error("[analyze by id FAILED]", { detail });
+    return res.status(500).json({ error: "analyze by id failed", detail });
   } finally {
     client.release();
   }
 });
-async function upsertBinary(req, res) {
-  const photoId = Number(req.params.photoId);
-  if (!Number.isFinite(photoId)) {
-    return res.status(400).json({ error: "bad photoId" });
-  }
-  if (!req.file) {
-    return res.status(400).json({ error: "file field is required" });
-  }
-
-  const { buffer, mimetype, originalname } = req.file;
-
-  // ✚ 추가: MIME & 빈 파일 검사
-  const mime = mimetype || "application/octet-stream";
-  if (!IMAGE_MIME_WHITELIST.has(mime)) {
-    return res.status(400).json({ error: `unsupported mime: ${mime}` });
-  }
-  if (!buffer || !buffer.length) {
-    return res.status(400).json({ error: "empty file" });
-  }
-
-  try {
-    const sql = `
-      INSERT INTO photos (photo_id, temp_name, original_name, mime_type, content, created_at)
-      VALUES ($1, NULL, $2, $3, $4, NOW())
-      ON CONFLICT (photo_id) DO UPDATE SET
-        original_name = EXCLUDED.original_name,
-        mime_type     = EXCLUDED.mime_type,
-        content       = EXCLUDED.content
-      RETURNING photo_id
-    `;
-    const { rows } = await pool.query(sql, [
-      photoId,
-      originalname || null,
-      mime,        // ← 여기서 위에서 검증한 mime 사용
-      buffer,      // ← 실제 바이너리 저장
-    ]);
-
-    allowCORS(req, res);
-    return res.json({ ok: true, photo_id: rows[0].photo_id });
-  } catch (e) {
-    console.error("[photos][binary upsert] failed:", e);
-    return res.status(500).json({ error: "binary upsert failed" });
-  }
-}
 
 
 module.exports = router;
