@@ -105,7 +105,8 @@ const mounts = [
   ["/api/music-requests", "routes/musicRequests"],
   ["/api/spotify", "routes/spotify"],
   ["/api", "routes/feedback"],
-  ["/api", "routes/stickers"]
+  ["/api", "routes/stickers"],
+  ["/api/diaries", "routes/diaries"],   // ★ 추가: 그림일기 라우트
 ];
 
 const mounted = [];
@@ -157,7 +158,8 @@ app.get("/debug/db", async (_req, res) => {
     const who = await pool.query(
       "SELECT current_database() AS db, current_schema() AS schema, current_user AS usr"
     );
-    res.json({ whoami: who.rows[0] });
+  const result = { whoami: who.rows[0] };
+    res.json(result);
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }
