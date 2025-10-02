@@ -69,7 +69,7 @@ function HistoryStrip({
   const [isDragging, setIsDragging] = useState(false)
   const dragStartX = useRef(0)
   const scrollStartX = useRef(0)
-  const movedRef = useRef(false) // ← 6px 이상 움직이면 드래그로 간주
+  const movedRef = useRef(false) // 6px 이상 움직이면 드래그로 간주
 
   // 스크롤 관성 감지를 위한 RAF 루프
   const rafIdRef = useRef<number | null>(null)
@@ -77,6 +77,10 @@ function HistoryStrip({
   const lastTsRef = useRef(0)
   const runningRef = useRef(false)
 
+  // 양옆 여백 보정(카드가 가장자리에 닿아 보이는 것 방지)
+  const EDGE_GUTTER = 24 // 필요 시 28~32로 조절 가능
+
+  // 가운데 카드 계산(패딩 영향 제거 위해 rect 기반)
   const computeActive = () => {
     const track = trackRef.current
     if (!track) return 0
@@ -100,6 +104,7 @@ function HistoryStrip({
     return best
   }
 
+  // 스크롤 중일 때 중앙 카드 계산 유지
   const ensureRafLoop = () => {
     const track = trackRef.current
     if (!track || runningRef.current) return
@@ -134,6 +139,7 @@ function HistoryStrip({
     rafIdRef.current = requestAnimationFrame(tick)
   }
 
+  // 좌우 스페이서(첫 카드/마지막 카드가 정확히 가운데 정렬되도록)
   const measureSideGap = () => {
     const track = trackRef.current
     if (!track) return
@@ -154,28 +160,23 @@ function HistoryStrip({
     if (!card) return
 
     const trackRect = track.getBoundingClientRect()
-    const cardRect = card.getBoundingClientRect()
-
+    const cardRect  = card.getBoundingClientRect()
     const trackCenterX = trackRect.left + track.clientWidth / 2
-    const cardCenterX = cardRect.left + cardRect.width / 2
+    const cardCenterX  = cardRect.left + cardRect.width / 2
 
     const delta = cardCenterX - trackCenterX
-    if (Math.abs(delta) <= threshold) return // 거의 중앙이면 스크롤 생략
+    if (Math.abs(delta) <= threshold) return
 
-    // 현재 스크롤 위치에 delta만큼만 보정
-    track.scrollTo({
-      left: track.scrollLeft + delta,
-      behavior: "smooth",
-    })
+    track.scrollTo({ left: track.scrollLeft + delta, behavior: "smooth" })
   }
 
-  // ――― Mouse drag (웹)
+  // Mouse drag (웹)
   const handleMouseDown = (e: React.MouseEvent) => {
     const track = trackRef.current
     if (!track) return
 
     setIsDragging(true)
-    movedRef.current = false
+    movedRef.current = false // 드래그 시작 시 항상 리셋
     dragStartX.current = e.pageX
     scrollStartX.current = track.scrollLeft
     track.style.scrollBehavior = "auto"
@@ -197,7 +198,7 @@ function HistoryStrip({
     const track = trackRef.current
     if (track) track.style.scrollBehavior = "smooth"
     setIsDragging(false)
-    // 드래그 종료 후 클릭 처리 방지용 플래그는 onClick에서 확인
+    movedRef.current = false // 드래그 종료 시 반드시 리셋(다음 클릭 가능)
   }
   const handleMouseUp = endDrag
   const handleMouseLeave = () => { if (isDragging) endDrag() }
@@ -211,6 +212,7 @@ function HistoryStrip({
     router.push(`/diary/${encodeURIComponent(String(pid))}?title=${title}&artist=${artist}&date=${date}`)
   }
 
+  // 초기 측정/리스너
   useEffect(() => {
     const track = trackRef.current
     if (!track) return
@@ -225,16 +227,12 @@ function HistoryStrip({
     window.addEventListener("resize", onResize)
 
     measureSideGap()
-    requestAnimationFrame(() => {
-      setActive(computeActive())
-    })
+    requestAnimationFrame(() => setActive(computeActive()))
 
     return () => {
       track.removeEventListener("scroll", onScroll)
       window.removeEventListener("resize", onResize)
-      if (rafIdRef.current) {
-        cancelAnimationFrame(rafIdRef.current)
-      }
+      if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current)
     }
   }, [])
 
@@ -283,8 +281,10 @@ function HistoryStrip({
         ref={trackRef}
         className={`overflow-x-auto snap-x snap-mandatory [scrollbar-width:none] [&::-webkit-scrollbar]:hidden touch-pan-x select-none ${isDragging ? "cursor-grabbing" : "cursor-grab"}`}
         style={{
-          paddingLeft: sideGap,
-          paddingRight: sideGap,
+          paddingLeft:  sideGap + EDGE_GUTTER,
+          paddingRight: sideGap + EDGE_GUTTER,
+          paddingTop: 12,              // 🔹 윗여백 추가
+          paddingBottom: 4,            // (선택) 아래도 살짝 띄우고 싶으면
           scrollBehavior: "smooth",
           WebkitOverflowScrolling: "touch",
         }}
@@ -301,14 +301,15 @@ function HistoryStrip({
             const artist = it.artist_snapshot ?? it.artist ?? "Various"
             const dateObj = extractDate(it)
 
-            // 🔸 중심 카드(active)와 선택 카드(selectedIdx)를 분리해 사용
+            // 중심 카드(active)와 선택 카드(selectedIdx)를 분리해 사용
             const centered = idx === active
             const picked = idx === selectedIdx
 
-            // 강조 효과는 '선택된 카드' 기준. (UI 숫자/클래스는 그대로 유지)
-            const scale = picked ? "scale(1.05)" : centered ? "scale(1.05)" : "scale(0.95)"
-            const opacity = picked || centered ? 1 : 0.6
-            const gray = picked || centered ? "none" : "grayscale(60%)"
+            // ✅ 회색/불투명도는 '선택됨(picked)'만 기준(요청 반영)
+            // 중앙에 있을 때는 살짝 확대만 유지
+            const scale  = picked ? "scale(1.05)" : centered ? "scale(1.05)" : "scale(0.95)"
+            const opacity = picked ? 1 : 0.6
+            const gray    = picked ? "none" : "grayscale(60%)"
             const ringCls = picked ? "ring-2 ring-primary ring-offset-2" : ""
 
             return (
@@ -324,22 +325,15 @@ function HistoryStrip({
                 onClick={() => {
                   // 드래그 직후의 의도치 않은 클릭 방지
                   if (isDragging || movedRef.current) return
-
                   // 선택 토글
                   setSelectedIdx((prev) => (prev === idx ? null : idx))
-
                   // 카드가 너무 벗어나 있으면 중앙 정렬(미세 오프셋은 무시)
                   scrollToCardIfFar(idx, 12)
-
-                  // 다음 클릭을 위해 플래그 리셋
-                  movedRef.current = false
                 }}
               >
                 <div
                   className={`relative bg-white p-3 pb-8 shadow-lg transition-all duration-300 cursor-pointer rounded-xl ${ringCls}`}
-                  style={{
-                    filter: gray as any,
-                  }}
+                  style={{ filter: gray as any }}
                 >
                   <div className="relative aspect-square overflow-hidden bg-gray-100 rounded-lg">
                     <img
@@ -369,7 +363,7 @@ function HistoryStrip({
                     <div className="text-[10px] text-gray-500 truncate">{artist}</div>
                   </div>
 
-                  {/* 🔸 액션 박스는 기존 조건/마크업 그대로 — UI 미변경 */}
+                  {/* 선택된 카드에만 액션 보이기 — UI는 변경 없음 */}
                   {idx === selectedIdx && (
                     <div className="mt-3 space-y-2 animate-in fade-in slide-in-from-top-2 duration-200">
                       <button
@@ -404,6 +398,7 @@ function HistoryStrip({
     </section>
   )
 }
+
 
 
 function BottomNav({ activeTab }: { activeTab: string }) {
