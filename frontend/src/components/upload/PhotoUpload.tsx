@@ -1,7 +1,9 @@
 "use client"
 import { useState } from "react"
+import type React from "react"
+
 import Image from "next/image"
-import { Upload } from "lucide-react"
+import { Upload, Camera } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { API_BASE } from "@/lib/api"
 import { useRouter } from "next/navigation"
@@ -96,46 +98,47 @@ export default function PhotoUpload({ isLoggedIn, selectedGenres, onRequireLogin
   }
 
   return (
-    <section className="text-center mb-20">
-      <h2 className="text-4xl font-light text-gray-900 mb-4">사진으로 음악을 찾아보세요</h2>
-      <p className="text-gray-500 mb-12 text-lg font-light max-w-2xl mx-auto">
-        사진을 업로드하면 그 순간에 어울리는 음악을 추천해드립니다
-      </p>
+    <section className="max-w-lg mx-auto px-4 mb-12">
+      <div className="text-center mb-6">
+        <h2 className="text-2xl font-semibold text-foreground mb-2">사진으로 음악 찾기</h2>
+        <p className="text-sm text-muted-foreground">순간을 담은 사진에 어울리는 음악을 추천해드려요</p>
+      </div>
 
-      <div className="flex justify-center mb-8">
-        <label className="cursor-pointer group">
-          <input
-            type="file"
-            accept="image/*"
-            onChange={handleImageSelect}
-            className="hidden"
-            disabled={isSubmitting}
-          />
-          <div className="border-2 border-dashed border-transparent bg-gradient-to-r from-purple-200 via-pink-200 to-blue-200 p-0.5 rounded-3xl hover:from-purple-300 hover:via-pink-300 hover:to-blue-300 transition-all duration-300">
-            <div className="bg-white/80 backdrop-blur-sm rounded-3xl p-16 hover:bg-white/90 transition-all">
-              {uploadedImage ? (
-                <div className="relative">
-                  <Image
-                    src={uploadedImage || "/placeholder.svg"}
-                    alt="업로드된 사진"
-                    width={240}
-                    height={160}
-                    className="rounded-2xl object-cover mx-auto"
-                  />
-                  {uploadedPhotoId && (
-                    <p className="mt-3 text-sm text-gray-500">저장됨 • Photo ID: {uploadedPhotoId}</p>
-                  )}
+      <div className="mb-6">
+        <label className="cursor-pointer block">
+          <input type="file" accept="image/*" onChange={handleImageSelect} className="hidden" disabled={isSubmitting} />
+
+          {uploadedImage ? (
+            <div className="relative rounded-2xl overflow-hidden bg-card border border-border shadow-sm">
+              <div className="aspect-[4/3] relative">
+                <Image src={uploadedImage || "/placeholder.svg"} alt="업로드된 사진" fill className="object-cover" />
+              </div>
+              <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
+              <div className="absolute bottom-0 left-0 right-0 p-4 text-white">
+                <div className="flex items-center gap-2">
+                  <Camera className="h-4 w-4" />
+                  <span className="text-sm font-medium">사진이 업로드되었습니다</span>
                 </div>
-              ) : (
-                <div className="text-center">
-                  <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4 group-hover:bg-purple-100 transition-colors">
-                    <Upload className="h-8 w-8 text-gray-400 group-hover:text-purple-500" />
-                  </div>
-                  <p className="text-gray-600 font-light">사진을 업로드하세요</p>
-                </div>
-              )}
+                {uploadedPhotoId && <p className="text-xs text-white/80 mt-1">ID: {uploadedPhotoId}</p>}
+              </div>
+              <button
+                type="button"
+                className="absolute top-3 right-3 bg-black/50 backdrop-blur-sm text-white px-3 py-1.5 rounded-full text-xs font-medium hover:bg-black/70 transition-colors"
+              >
+                변경
+              </button>
             </div>
-          </div>
+          ) : (
+            <div className="rounded-2xl border-2 border-dashed border-border bg-card hover:bg-accent/50 transition-colors">
+              <div className="aspect-[4/3] flex flex-col items-center justify-center p-8 text-center">
+                <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
+                  <Upload className="h-8 w-8 text-primary" />
+                </div>
+                <p className="text-sm font-medium text-foreground mb-1">사진 업로드</p>
+                <p className="text-xs text-muted-foreground">탭하여 사진을 선택하세요</p>
+              </div>
+            </div>
+          )}
         </label>
       </div>
 
@@ -143,9 +146,9 @@ export default function PhotoUpload({ isLoggedIn, selectedGenres, onRequireLogin
         onClick={goRecommend}
         size="lg"
         disabled={isSubmitting || (!uploadedImage && selectedGenres.length === 0)}
-        className="bg-gradient-to-r from-purple-600 via-pink-600 to-blue-600 hover:from-purple-700 hover:via-pink-700 hover:to-blue-700 text-white px-12 py-3 rounded-full font-light disabled:opacity-50 shadow-lg hover:shadow-xl transition-all"
+        className="w-full h-12 rounded-xl font-medium shadow-sm disabled:opacity-50"
       >
-        {isSubmitting ? "처리 중..." : "음악 추천받기"}
+        {isSubmitting ? "분석 중..." : "음악 추천받기"}
       </Button>
     </section>
   )

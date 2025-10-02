@@ -45,7 +45,7 @@ function extractDate(item: any): Date | null {
 const fmtDateBadge = (d: Date) =>
   d.toLocaleDateString("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" })
 
-/* History: 스와이프/클릭으로 카드 중앙 정렬 */
+/* History: 인앱 웹뷰 대응 (Pointer + Touch/Mouse) + 스페이서 + 가장자리 안정화 */
 function HistoryStrip({
   user,
   items,
@@ -58,25 +58,60 @@ function HistoryStrip({
   error: string | null
 }) {
   const trackRef = useRef<HTMLDivElement | null>(null)
+  const innerRef = useRef<HTMLDivElement | null>(null)
+
   const [active, setActive] = useState(0)
   const [sideGap, setSideGap] = useState(0)
 
-  // Pointer Events 통합 상태값
+  // 입력 처리 상태
+  const supportsPointer = typeof window !== "undefined" && "PointerEvent" in window
   const [isDragging, setIsDragging] = useState(false)
-  const pointerStartX = useRef(0)
-  const pointerScrollStartX = useRef(0)
-  const pointerMovedRef = useRef(false)
-  const pointerDownIdRef = useRef<number | null>(null)
-  const pointerTapIdxRef = useRef<number | null>(null)
+  const startXRef = useRef(0)
+  const scrollStartRef = useRef(0)
+  const movedRef = useRef(false)
 
-  const rafIdRef = useRef<number | null>(null)
-  const runningRef = useRef(false)
+  // 공통 드래그 시작/이동/종료 로직
+  const beginDrag = (pageX: number) => {
+    const track = trackRef.current
+    if (!track) return
+    setIsDragging(true)
+    movedRef.current = false
+    startXRef.current = pageX
+    scrollStartRef.current = track.scrollLeft
+    track.style.scrollBehavior = "auto"
+  }
 
-  // 트랙 중심과 카드 중심의 거리로 활성 카드 계산 (BoundingClientRect 기반)
+  const moveDrag = (pageX: number) => {
+    if (!isDragging) return
+    const track = trackRef.current
+    if (!track) return
+    const walk = (startXRef.current - pageX) * 1.5
+    if (Math.abs(walk) > 6) movedRef.current = true
+    track.scrollLeft = scrollStartRef.current + walk
+  }
+
+  const endDrag = (clientX: number, clientY: number) => {
+    const track = trackRef.current
+    if (track) track.style.scrollBehavior = "smooth"
+    setIsDragging(false)
+
+    // 드래그가 아니면 pointerup/touchend 지점의 카드로 중앙 정렬
+    if (!movedRef.current) {
+      const upEl = document.elementFromPoint(clientX, clientY) as HTMLElement | null
+      const cardEl = upEl?.closest?.("[data-card-idx]") as HTMLElement | null
+      const idxAttr = cardEl?.getAttribute("data-card-idx")
+      if (idxAttr != null) {
+        scrollCardIntoCenter(Number(idxAttr))
+      }
+    }
+  }
+
+  // 활성 카드 계산 (Rect 기반)
   const computeActive = () => {
     const track = trackRef.current
-    if (!track) return 0
-    const cards = Array.from(track.querySelectorAll<HTMLElement>("[data-card-idx]"))
+    const inner = innerRef.current
+    if (!track || !inner) return 0
+    const cards = Array.from(inner.querySelectorAll<HTMLElement>("[data-card-idx]"))
     if (!cards.length) return 0
 
     const trackRect = track.getBoundingClientRect()
@@ -96,10 +131,12 @@ function HistoryStrip({
     return best
   }
 
+  // RAF 루프 (스크롤 중 활성 카드 업데이트)
+  const rafIdRef = useRef<number | null>(null)
+  const runningRef = useRef(false)
   const ensureRafLoop = () => {
     const track = trackRef.current
     if (!track || runningRef.current) return
-
     runningRef.current = true
     const tick = () => {
       const t = trackRef.current
@@ -109,125 +146,143 @@ function HistoryStrip({
       }
       const idx = computeActive()
       setActive((p) => (p === idx ? p : idx))
-
-      // 최근 120ms 내 활동이 있으면 루프 유지
       rafIdRef.current = requestAnimationFrame(() => {
         runningRef.current = false
         ensureRafLoop()
       })
     }
-
     rafIdRef.current = requestAnimationFrame(tick)
   }
 
+  // ✅ 양쪽 스페이서 계산 (트랙폭/카드폭/gap 반영)
   const measureSideGap = () => {
     const track = trackRef.current
-    if (!track) return
-    const first = track.querySelector<HTMLElement>("[data-card-idx='0']")
+    const inner = innerRef.current
+    if (!track || !inner) return
+    const first = inner.querySelector<HTMLElement>("[data-card-idx='0']")
     if (!first) {
       setSideGap(0)
       return
     }
-    // 화면 폭이 카드보다 넓다면 좌우 여백으로 센터 정렬
-    const gap = Math.max(0, (track.clientWidth - first.offsetWidth) / 2)
-    setSideGap(gap)
+    const gapPx = parseFloat(getComputedStyle(inner).columnGap || "0") || 0
+    const cardW = first.offsetWidth || 0
+    // spacer + gap + card/2 == track/2 ⇒ spacer = track/2 - card/2 - gap
+    const spacer = Math.max(0, track.clientWidth / 2 - cardW / 2 - gapPx)
+    setSideGap(Math.floor(spacer))
   }
 
-  // ✅ 선택한 카드 중앙 정렬 (Rect 기반: 패딩/스냅/오버플로우와 무관)
+  // 중앙 정렬 (Rect 기반)
   const scrollCardIntoCenter = (index: number) => {
     const track = trackRef.current
-    if (!track) return
-
-    const el = track.querySelector<HTMLElement>(`[data-card-idx="${index}"]`)
+    const inner = innerRef.current
+    if (!track || !inner) return
+    const el = inner.querySelector<HTMLElement>(`[data-card-idx="${index}"]`)
     if (!el) return
 
     const tRect = track.getBoundingClientRect()
     const eRect = el.getBoundingClientRect()
-
-    // 현재 스크롤 + (카드가 트랙 왼쪽에서 떨어진 거리) + 카드 절반 - 트랙 절반
     const deltaFromTrackLeft = eRect.left - tRect.left
     const elCenterInScroll = track.scrollLeft + deltaFromTrackLeft + eRect.width / 2
     const desired = Math.round(elCenterInScroll - track.clientWidth / 2)
-
     const max = Math.max(0, track.scrollWidth - track.clientWidth)
     const next = Math.min(Math.max(desired, 0), max)
-
     track.scrollTo({ left: next, behavior: "smooth" })
     setActive(index)
     ensureRafLoop()
   }
 
-  // --- Pointer Events (마우스/터치/펜 통합) ---
-  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    const track = trackRef.current
-    if (!track) return
-
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId)
-      pointerDownIdRef.current = e.pointerId
-    } catch {
-      pointerDownIdRef.current = null
-    }
-
-    setIsDragging(true)
-    pointerMovedRef.current = false
-    pointerStartX.current = e.pageX
-    pointerScrollStartX.current = track.scrollLeft
-
-    // 탭 후보 카드 index 저장
-    const targetEl = (e.target as HTMLElement).closest("[data-card-idx]") as HTMLElement | null
-    const idxAttr = targetEl?.getAttribute("data-card-idx")
-    pointerTapIdxRef.current = idxAttr != null ? Number(idxAttr) : null
-
-    track.style.scrollBehavior = "auto"
+  // --- 이벤트 바인딩 ---
+  // 1) Pointer 이벤트 (지원 시)
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!supportsPointer) return
+    try { e.currentTarget.setPointerCapture(e.pointerId) } catch {}
+    beginDrag(e.pageX)
   }
-
-  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!isDragging) return
-    const track = trackRef.current
-    if (!track) return
-
-    e.preventDefault() // 드래그 시 텍스트 선택/클릭 방지
-
-    const walk = (pointerStartX.current - e.pageX) * 1.5
-    if (Math.abs(walk) > 6) pointerMovedRef.current = true
-    track.scrollLeft = pointerScrollStartX.current + walk
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!supportsPointer) return
+    e.preventDefault()
+    moveDrag(e.pageX)
   }
-
-  const endPointerLike = () => {
+  const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!supportsPointer) return
+    try { e.currentTarget.releasePointerCapture(e.pointerId) } catch {}
+    endDrag(e.clientX, e.clientY)
+  }
+  const onPointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!supportsPointer) return
+    try { e.currentTarget.releasePointerCapture(e.pointerId) } catch {}
     const track = trackRef.current
     if (track) track.style.scrollBehavior = "smooth"
     setIsDragging(false)
+  }
 
-    // 드래그가 아니면 탭으로 간주 → 중앙 스크롤
-    if (!pointerMovedRef.current && pointerTapIdxRef.current != null) {
-      scrollCardIntoCenter(pointerTapIdxRef.current)
+  // 2) Touch/Mouse 네이티브 리스너 (인앱 웹뷰 대비, passive:false)
+  useEffect(() => {
+    const el = trackRef.current
+    if (!el) return
+
+    // Touch
+    const ts = (ev: TouchEvent) => {
+      if (supportsPointer) return
+      const t = ev.touches[0]
+      if (!t) return
+      beginDrag(t.pageX)
     }
-    pointerTapIdxRef.current = null
-    pointerDownIdRef.current = null
-  }
+    const tm = (ev: TouchEvent) => {
+      if (supportsPointer || !isDragging) return
+      ev.preventDefault() // 일부 WebView에서 touch-action 무시를 대비
+      const t = ev.touches[0]
+      if (!t) return
+      moveDrag(t.pageX)
+    }
+    const te = (ev: TouchEvent) => {
+      if (supportsPointer) return
+      const t = ev.changedTouches[0]
+      if (!t) return
+      endDrag(t.clientX, t.clientY)
+    }
 
-  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    try {
-      if (pointerDownIdRef.current != null) {
-        e.currentTarget.releasePointerCapture(pointerDownIdRef.current)
-      }
-    } catch {}
-    endPointerLike()
-  }
+    // Mouse
+    const md = (ev: MouseEvent) => {
+      if (supportsPointer) return
+      beginDrag(ev.pageX)
+    }
+    const mm = (ev: MouseEvent) => {
+      if (supportsPointer || !isDragging) return
+      ev.preventDefault()
+      moveDrag(ev.pageX)
+    }
+    const mu = (ev: MouseEvent) => {
+      if (supportsPointer) return
+      endDrag(ev.clientX, ev.clientY)
+    }
 
-  const handlePointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
-    try {
-      if (pointerDownIdRef.current != null) {
-        e.currentTarget.releasePointerCapture(pointerDownIdRef.current)
-      }
-    } catch {}
-    endPointerLike()
-  }
+    el.addEventListener("touchstart", ts, { passive: false })
+    el.addEventListener("touchmove", tm, { passive: false })
+    el.addEventListener("touchend", te, { passive: false })
+    el.addEventListener("touchcancel", te, { passive: false })
 
+    el.addEventListener("mousedown", md, { passive: false })
+    window.addEventListener("mousemove", mm, { passive: false })
+    window.addEventListener("mouseup", mu, { passive: false })
+
+    return () => {
+      el.removeEventListener("touchstart", ts as EventListener)
+      el.removeEventListener("touchmove", tm as EventListener)
+      el.removeEventListener("touchend", te as EventListener)
+      el.removeEventListener("touchcancel", te as EventListener)
+
+      el.removeEventListener("mousedown", md as EventListener)
+      window.removeEventListener("mousemove", mm as EventListener)
+      window.removeEventListener("mouseup", mu as EventListener)
+    }
+  }, [supportsPointer, isDragging])
+
+  // 스크롤/리사이즈/리사이즈옵저버
   useEffect(() => {
     const track = trackRef.current
-    if (!track) return
+    const inner = innerRef.current
+    if (!track || !inner) return
 
     const onScroll = () => ensureRafLoop()
     const onResize = () => {
@@ -238,17 +293,22 @@ function HistoryStrip({
     track.addEventListener("scroll", onScroll, { passive: true })
     window.addEventListener("resize", onResize)
 
+    // 사이즈 변경을 항상 추적 (앱뷰/회전/툴바 변화 대응)
+    const ro = new ResizeObserver(() => onResize())
+    ro.observe(track)
+    ro.observe(inner)
+    const first = inner.querySelector<HTMLElement>("[data-card-idx='0']")
+    if (first) ro.observe(first)
+
+    // 최초 계산
     measureSideGap()
-    requestAnimationFrame(() => {
-      setActive(computeActive())
-    })
+    requestAnimationFrame(() => setActive(computeActive()))
 
     return () => {
       track.removeEventListener("scroll", onScroll)
       window.removeEventListener("resize", onResize)
-      if (rafIdRef.current) {
-        cancelAnimationFrame(rafIdRef.current)
-      }
+      ro.disconnect()
+      if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current)
     }
   }, [])
 
@@ -299,19 +359,25 @@ function HistoryStrip({
           isDragging ? "cursor-grabbing" : "cursor-grab"
         }`}
         style={{
-          paddingLeft: sideGap,
-          paddingRight: sideGap,
+          // 스페이서 사용 → padding 없음
+          paddingLeft: 0,
+          paddingRight: 0,
           scrollBehavior: "smooth",
           WebkitOverflowScrolling: "touch",
           touchAction: "pan-x",
           userSelect: "none",
+          overscrollBehaviorX: "contain",
         }}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerCancel}
+        // Pointer (가능한 경우)
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
       >
-        <div className="flex gap-4 pb-3" style={{ minWidth: "max-content" }}>
+        <div ref={innerRef} className="flex gap-4 pb-3" style={{ minWidth: "max-content" }}>
+          {/* 왼쪽 스페이서 */}
+          <div aria-hidden className="shrink-0 snap-none" style={{ width: sideGap }} />
+
           {list.map((it, idx) => {
             const pid = it.photo_id ?? it.photoId ?? it.id
             const { primary, fallback } = buildPhotoSrc(pid)
@@ -329,18 +395,16 @@ function HistoryStrip({
                   transform: isSelected ? "scale(1.05)" : "scale(0.95)",
                   zIndex: isSelected ? 10 : 1,
                   opacity: isSelected ? 1 : 0.6,
+                  scrollSnapStop: "always",
                 }}
-                // 드래그가 아닌 명시적 클릭도 중앙 정렬하도록 백업 처리
                 onClick={() => {
-                  if (isDragging || pointerMovedRef.current) return
+                  if (isDragging || movedRef.current) return
                   scrollCardIntoCenter(idx)
                 }}
               >
                 <div
                   className="relative bg-white p-3 pb-8 shadow-lg transition-all duration-300"
-                  style={{
-                    filter: isSelected ? "none" : "grayscale(60%)",
-                  }}
+                  style={{ filter: isSelected ? "none" : "grayscale(60%)" }}
                 >
                   <div className="relative aspect-square overflow-hidden bg-gray-100">
                     <img
@@ -348,7 +412,7 @@ function HistoryStrip({
                       alt={title}
                       className="w-full h-full object-cover"
                       crossOrigin="anonymous"
-                      style={{ pointerEvents: "none" }} // 이벤트는 카드 래퍼가 받음
+                      style={{ pointerEvents: "none" }}
                       onError={(e) => {
                         const img = e.currentTarget as HTMLImageElement
                         if (!(img as any).__fb) {
@@ -373,6 +437,9 @@ function HistoryStrip({
               </div>
             )
           })}
+
+          {/* 오른쪽 스페이서 */}
+          <div aria-hidden className="shrink-0 snap-none" style={{ width: sideGap }} />
         </div>
       </div>
     </section>
