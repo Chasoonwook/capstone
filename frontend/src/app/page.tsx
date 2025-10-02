@@ -13,7 +13,7 @@ import { useMusics } from "@/hooks/useMusics"
 import { useHistory } from "@/hooks/useHistory"
 import SpotifyConnectModal from "@/components/modals/SpotifyConnectModal"
 import { API_BASE } from "@/lib/api"
-import { Home, Search, User, Camera } from "lucide-react"
+import { Home, Search, User, Camera, BookOpen } from "lucide-react"
 
 /* 이미지 URL 빌더 + 폴백 */
 const buildPhotoSrc = (photoId: string | number) => {
@@ -42,10 +42,9 @@ function extractDate(item: any): Date | null {
   return isNaN(d.getTime()) ? null : d
 }
 
-const fmtDateBadge = (d: Date) =>
-  d.toLocaleDateString("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" })
+const fmtDateBadge = (d: Date) => d.toLocaleDateString("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" })
 
-/* History: 인앱 웹뷰 대응 (Pointer + Touch/Mouse) + 스페이서 + 가장자리 안정화 */
+/* Redesigned carousel with Musinsa-style clean cards */
 function HistoryStrip({
   user,
   items,
@@ -57,61 +56,31 @@ function HistoryStrip({
   loading: boolean
   error: string | null
 }) {
+  const router = useRouter()
   const trackRef = useRef<HTMLDivElement | null>(null)
-  const innerRef = useRef<HTMLDivElement | null>(null)
 
+  // 가운데(가시영역 기준)와 사용자가 선택한 카드 인덱스를 분리
   const [active, setActive] = useState(0)
+  const [selectedIdx, setSelectedIdx] = useState<number | null>(null)
+
   const [sideGap, setSideGap] = useState(0)
 
-  // 입력 처리 상태
-  const supportsPointer = typeof window !== "undefined" && "PointerEvent" in window
+  // 드래그/탭 구분을 위한 상태
   const [isDragging, setIsDragging] = useState(false)
-  const startXRef = useRef(0)
-  const scrollStartRef = useRef(0)
-  const movedRef = useRef(false)
+  const dragStartX = useRef(0)
+  const scrollStartX = useRef(0)
+  const movedRef = useRef(false) // ← 6px 이상 움직이면 드래그로 간주
 
-  // 공통 드래그 시작/이동/종료 로직
-  const beginDrag = (pageX: number) => {
-    const track = trackRef.current
-    if (!track) return
-    setIsDragging(true)
-    movedRef.current = false
-    startXRef.current = pageX
-    scrollStartRef.current = track.scrollLeft
-    track.style.scrollBehavior = "auto"
-  }
+  // 스크롤 관성 감지를 위한 RAF 루프
+  const rafIdRef = useRef<number | null>(null)
+  const lastLeftRef = useRef(0)
+  const lastTsRef = useRef(0)
+  const runningRef = useRef(false)
 
-  const moveDrag = (pageX: number) => {
-    if (!isDragging) return
-    const track = trackRef.current
-    if (!track) return
-    const walk = (startXRef.current - pageX) * 1.5
-    if (Math.abs(walk) > 6) movedRef.current = true
-    track.scrollLeft = scrollStartRef.current + walk
-  }
-
-  const endDrag = (clientX: number, clientY: number) => {
-    const track = trackRef.current
-    if (track) track.style.scrollBehavior = "smooth"
-    setIsDragging(false)
-
-    // 드래그가 아니면 pointerup/touchend 지점의 카드로 중앙 정렬
-    if (!movedRef.current) {
-      const upEl = document.elementFromPoint(clientX, clientY) as HTMLElement | null
-      const cardEl = upEl?.closest?.("[data-card-idx]") as HTMLElement | null
-      const idxAttr = cardEl?.getAttribute("data-card-idx")
-      if (idxAttr != null) {
-        scrollCardIntoCenter(Number(idxAttr))
-      }
-    }
-  }
-
-  // 활성 카드 계산 (Rect 기반)
   const computeActive = () => {
     const track = trackRef.current
-    const inner = innerRef.current
-    if (!track || !inner) return 0
-    const cards = Array.from(inner.querySelectorAll<HTMLElement>("[data-card-idx]"))
+    if (!track) return 0
+    const cards = Array.from(track.querySelectorAll<HTMLElement>("[data-card-idx]"))
     if (!cards.length) return 0
 
     const trackRect = track.getBoundingClientRect()
@@ -120,8 +89,8 @@ function HistoryStrip({
     let best = 0
     let bestDist = Number.POSITIVE_INFINITY
     cards.forEach((el, i) => {
-      const rect = el.getBoundingClientRect()
-      const cardCenterX = rect.left + rect.width / 2
+      const r = el.getBoundingClientRect()
+      const cardCenterX = r.left + r.width / 2
       const dist = Math.abs(cardCenterX - trackCenterX)
       if (dist < bestDist) {
         bestDist = dist
@@ -131,12 +100,10 @@ function HistoryStrip({
     return best
   }
 
-  // RAF 루프 (스크롤 중 활성 카드 업데이트)
-  const rafIdRef = useRef<number | null>(null)
-  const runningRef = useRef(false)
   const ensureRafLoop = () => {
     const track = trackRef.current
     if (!track || runningRef.current) return
+
     runningRef.current = true
     const tick = () => {
       const t = trackRef.current
@@ -144,145 +111,109 @@ function HistoryStrip({
         runningRef.current = false
         return
       }
+      const now = performance.now()
+      const left = t.scrollLeft
+
       const idx = computeActive()
       setActive((p) => (p === idx ? p : idx))
-      rafIdRef.current = requestAnimationFrame(() => {
+
+      if (left !== lastLeftRef.current) {
+        lastLeftRef.current = left
+        lastTsRef.current = now
+      }
+      if (now - lastTsRef.current < 120) {
+        rafIdRef.current = requestAnimationFrame(tick)
+      } else {
         runningRef.current = false
-        ensureRafLoop()
-      })
+        rafIdRef.current = null
+      }
     }
+
+    lastLeftRef.current = track.scrollLeft
+    lastTsRef.current = performance.now()
     rafIdRef.current = requestAnimationFrame(tick)
   }
 
-  // ✅ 양쪽 스페이서 계산 (트랙폭/카드폭/gap 반영)
   const measureSideGap = () => {
     const track = trackRef.current
-    const inner = innerRef.current
-    if (!track || !inner) return
-    const first = inner.querySelector<HTMLElement>("[data-card-idx='0']")
+    if (!track) return
+    const first = track.querySelector<HTMLElement>("[data-card-idx='0']")
     if (!first) {
       setSideGap(0)
       return
     }
-    const gapPx = parseFloat(getComputedStyle(inner).columnGap || "0") || 0
-    const cardW = first.offsetWidth || 0
-    // spacer + gap + card/2 == track/2 ⇒ spacer = track/2 - card/2 - gap
-    const spacer = Math.max(0, track.clientWidth / 2 - cardW / 2 - gapPx)
-    setSideGap(Math.floor(spacer))
+    const gap = Math.max(0, (track.clientWidth - first.offsetWidth) / 2)
+    setSideGap(gap)
   }
 
-  // 중앙 정렬 (Rect 기반)
-  const scrollCardIntoCenter = (index: number) => {
+  // 선택 시 카드 중앙 정렬하되, 이미 거의 중앙이면 스크롤 생략(튐 방지)
+  const scrollToCardIfFar = (idx: number, threshold = 12) => {
     const track = trackRef.current
-    const inner = innerRef.current
-    if (!track || !inner) return
-    const el = inner.querySelector<HTMLElement>(`[data-card-idx="${index}"]`)
-    if (!el) return
+    if (!track) return
+    const card = track.querySelector<HTMLElement>(`[data-card-idx="${idx}"]`)
+    if (!card) return
 
-    const tRect = track.getBoundingClientRect()
-    const eRect = el.getBoundingClientRect()
-    const deltaFromTrackLeft = eRect.left - tRect.left
-    const elCenterInScroll = track.scrollLeft + deltaFromTrackLeft + eRect.width / 2
-    const desired = Math.round(elCenterInScroll - track.clientWidth / 2)
-    const max = Math.max(0, track.scrollWidth - track.clientWidth)
-    const next = Math.min(Math.max(desired, 0), max)
-    track.scrollTo({ left: next, behavior: "smooth" })
-    setActive(index)
-    ensureRafLoop()
+    const trackRect = track.getBoundingClientRect()
+    const cardRect = card.getBoundingClientRect()
+
+    const trackCenterX = trackRect.left + track.clientWidth / 2
+    const cardCenterX = cardRect.left + cardRect.width / 2
+
+    const delta = cardCenterX - trackCenterX
+    if (Math.abs(delta) <= threshold) return // 거의 중앙이면 스크롤 생략
+
+    // 현재 스크롤 위치에 delta만큼만 보정
+    track.scrollTo({
+      left: track.scrollLeft + delta,
+      behavior: "smooth",
+    })
   }
 
-  // --- 이벤트 바인딩 ---
-  // 1) Pointer 이벤트 (지원 시)
-  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!supportsPointer) return
-    try { e.currentTarget.setPointerCapture(e.pointerId) } catch {}
-    beginDrag(e.pageX)
+  // ――― Mouse drag (웹)
+  const handleMouseDown = (e: React.MouseEvent) => {
+    const track = trackRef.current
+    if (!track) return
+
+    setIsDragging(true)
+    movedRef.current = false
+    dragStartX.current = e.pageX
+    scrollStartX.current = track.scrollLeft
+    track.style.scrollBehavior = "auto"
   }
-  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!supportsPointer) return
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDragging) return
+    const track = trackRef.current
+    if (!track) return
+
     e.preventDefault()
-    moveDrag(e.pageX)
+    const x = e.pageX
+    const walk = (dragStartX.current - x) * 1.5
+    if (Math.abs(walk) > 6) movedRef.current = true
+    track.scrollLeft = scrollStartX.current + walk
   }
-  const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!supportsPointer) return
-    try { e.currentTarget.releasePointerCapture(e.pointerId) } catch {}
-    endDrag(e.clientX, e.clientY)
-  }
-  const onPointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!supportsPointer) return
-    try { e.currentTarget.releasePointerCapture(e.pointerId) } catch {}
+
+  const endDrag = () => {
     const track = trackRef.current
     if (track) track.style.scrollBehavior = "smooth"
     setIsDragging(false)
+    // 드래그 종료 후 클릭 처리 방지용 플래그는 onClick에서 확인
+  }
+  const handleMouseUp = endDrag
+  const handleMouseLeave = () => { if (isDragging) endDrag() }
+
+  const goWriteDiary = (it: any) => {
+    const pid = it.photo_id ?? it.photoId ?? it.id
+    const title = encodeURIComponent(it.title_snapshot ?? it.title ?? "제목 없음")
+    const artist = encodeURIComponent(it.artist_snapshot ?? it.artist ?? "Various")
+    const dateObj = extractDate(it)
+    const date = dateObj ? encodeURIComponent(dateObj.toISOString()) : ""
+    router.push(`/diary/${encodeURIComponent(String(pid))}?title=${title}&artist=${artist}&date=${date}`)
   }
 
-  // 2) Touch/Mouse 네이티브 리스너 (인앱 웹뷰 대비, passive:false)
-  useEffect(() => {
-    const el = trackRef.current
-    if (!el) return
-
-    // Touch
-    const ts = (ev: TouchEvent) => {
-      if (supportsPointer) return
-      const t = ev.touches[0]
-      if (!t) return
-      beginDrag(t.pageX)
-    }
-    const tm = (ev: TouchEvent) => {
-      if (supportsPointer || !isDragging) return
-      ev.preventDefault() // 일부 WebView에서 touch-action 무시를 대비
-      const t = ev.touches[0]
-      if (!t) return
-      moveDrag(t.pageX)
-    }
-    const te = (ev: TouchEvent) => {
-      if (supportsPointer) return
-      const t = ev.changedTouches[0]
-      if (!t) return
-      endDrag(t.clientX, t.clientY)
-    }
-
-    // Mouse
-    const md = (ev: MouseEvent) => {
-      if (supportsPointer) return
-      beginDrag(ev.pageX)
-    }
-    const mm = (ev: MouseEvent) => {
-      if (supportsPointer || !isDragging) return
-      ev.preventDefault()
-      moveDrag(ev.pageX)
-    }
-    const mu = (ev: MouseEvent) => {
-      if (supportsPointer) return
-      endDrag(ev.clientX, ev.clientY)
-    }
-
-    el.addEventListener("touchstart", ts, { passive: false })
-    el.addEventListener("touchmove", tm, { passive: false })
-    el.addEventListener("touchend", te, { passive: false })
-    el.addEventListener("touchcancel", te, { passive: false })
-
-    el.addEventListener("mousedown", md, { passive: false })
-    window.addEventListener("mousemove", mm, { passive: false })
-    window.addEventListener("mouseup", mu, { passive: false })
-
-    return () => {
-      el.removeEventListener("touchstart", ts as EventListener)
-      el.removeEventListener("touchmove", tm as EventListener)
-      el.removeEventListener("touchend", te as EventListener)
-      el.removeEventListener("touchcancel", te as EventListener)
-
-      el.removeEventListener("mousedown", md as EventListener)
-      window.removeEventListener("mousemove", mm as EventListener)
-      window.removeEventListener("mouseup", mu as EventListener)
-    }
-  }, [supportsPointer, isDragging])
-
-  // 스크롤/리사이즈/리사이즈옵저버
   useEffect(() => {
     const track = trackRef.current
-    const inner = innerRef.current
-    if (!track || !inner) return
+    if (!track) return
 
     const onScroll = () => ensureRafLoop()
     const onResize = () => {
@@ -293,22 +224,17 @@ function HistoryStrip({
     track.addEventListener("scroll", onScroll, { passive: true })
     window.addEventListener("resize", onResize)
 
-    // 사이즈 변경을 항상 추적 (앱뷰/회전/툴바 변화 대응)
-    const ro = new ResizeObserver(() => onResize())
-    ro.observe(track)
-    ro.observe(inner)
-    const first = inner.querySelector<HTMLElement>("[data-card-idx='0']")
-    if (first) ro.observe(first)
-
-    // 최초 계산
     measureSideGap()
-    requestAnimationFrame(() => setActive(computeActive()))
+    requestAnimationFrame(() => {
+      setActive(computeActive())
+    })
 
     return () => {
       track.removeEventListener("scroll", onScroll)
       window.removeEventListener("resize", onResize)
-      ro.disconnect()
-      if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current)
+      if (rafIdRef.current) {
+        cancelAnimationFrame(rafIdRef.current)
+      }
     }
   }, [])
 
@@ -355,36 +281,35 @@ function HistoryStrip({
 
       <div
         ref={trackRef}
-        className={`overflow-x-auto snap-x snap-mandatory [scrollbar-width:none] [&::-webkit-scrollbar]:hidden select-none ${
-          isDragging ? "cursor-grabbing" : "cursor-grab"
-        }`}
+        className={`overflow-x-auto snap-x snap-mandatory [scrollbar-width:none] [&::-webkit-scrollbar]:hidden touch-pan-x select-none ${isDragging ? "cursor-grabbing" : "cursor-grab"}`}
         style={{
-          // 스페이서 사용 → padding 없음
-          paddingLeft: 0,
-          paddingRight: 0,
+          paddingLeft: sideGap,
+          paddingRight: sideGap,
           scrollBehavior: "smooth",
           WebkitOverflowScrolling: "touch",
-          touchAction: "pan-x",
-          userSelect: "none",
-          overscrollBehaviorX: "contain",
         }}
-        // Pointer (가능한 경우)
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerCancel}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseLeave}
       >
-        <div ref={innerRef} className="flex gap-4 pb-3" style={{ minWidth: "max-content" }}>
-          {/* 왼쪽 스페이서 */}
-          <div aria-hidden className="shrink-0 snap-none" style={{ width: sideGap }} />
-
+        <div className="flex gap-4 pb-3" style={{ minWidth: "max-content" }}>
           {list.map((it, idx) => {
             const pid = it.photo_id ?? it.photoId ?? it.id
             const { primary, fallback } = buildPhotoSrc(pid)
             const title = it.title_snapshot ?? it.title ?? "제목 없음"
             const artist = it.artist_snapshot ?? it.artist ?? "Various"
             const dateObj = extractDate(it)
-            const isSelected = idx === active
+
+            // 🔸 중심 카드(active)와 선택 카드(selectedIdx)를 분리해 사용
+            const centered = idx === active
+            const picked = idx === selectedIdx
+
+            // 강조 효과는 '선택된 카드' 기준. (UI 숫자/클래스는 그대로 유지)
+            const scale = picked ? "scale(1.05)" : centered ? "scale(1.05)" : "scale(0.95)"
+            const opacity = picked || centered ? 1 : 0.6
+            const gray = picked || centered ? "none" : "grayscale(60%)"
+            const ringCls = picked ? "ring-2 ring-primary ring-offset-2" : ""
 
             return (
               <div
@@ -392,21 +317,31 @@ function HistoryStrip({
                 data-card-idx={idx}
                 className="snap-center shrink-0 w-[160px] transition-all duration-300"
                 style={{
-                  transform: isSelected ? "scale(1.05)" : "scale(0.95)",
-                  zIndex: isSelected ? 10 : 1,
-                  opacity: isSelected ? 1 : 0.6,
-                  scrollSnapStop: "always",
+                  transform: scale,
+                  zIndex: picked || centered ? 10 : 1,
+                  opacity,
                 }}
                 onClick={() => {
+                  // 드래그 직후의 의도치 않은 클릭 방지
                   if (isDragging || movedRef.current) return
-                  scrollCardIntoCenter(idx)
+
+                  // 선택 토글
+                  setSelectedIdx((prev) => (prev === idx ? null : idx))
+
+                  // 카드가 너무 벗어나 있으면 중앙 정렬(미세 오프셋은 무시)
+                  scrollToCardIfFar(idx, 12)
+
+                  // 다음 클릭을 위해 플래그 리셋
+                  movedRef.current = false
                 }}
               >
                 <div
-                  className="relative bg-white p-3 pb-8 shadow-lg transition-all duration-300"
-                  style={{ filter: isSelected ? "none" : "grayscale(60%)" }}
+                  className={`relative bg-white p-3 pb-8 shadow-lg transition-all duration-300 cursor-pointer rounded-xl ${ringCls}`}
+                  style={{
+                    filter: gray as any,
+                  }}
                 >
-                  <div className="relative aspect-square overflow-hidden bg-gray-100">
+                  <div className="relative aspect-square overflow-hidden bg-gray-100 rounded-lg">
                     <img
                       src={primary || "/placeholder.svg"}
                       alt={title}
@@ -433,18 +368,43 @@ function HistoryStrip({
                     <div className="text-xs font-medium text-gray-800 truncate">{title}</div>
                     <div className="text-[10px] text-gray-500 truncate">{artist}</div>
                   </div>
+
+                  {/* 🔸 액션 박스는 기존 조건/마크업 그대로 — UI 미변경 */}
+                  {idx === selectedIdx && (
+                    <div className="mt-3 space-y-2 animate-in fade-in slide-in-from-top-2 duration-200">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          goWriteDiary(it)
+                        }}
+                        className="w-full h-11 rounded-xl bg-gradient-to-r from-primary to-primary/90 text-primary-foreground text-sm font-semibold hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-md"
+                      >
+                        <BookOpen className="w-4 h-4" />
+                        그림일기 쓰기
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setSelectedIdx(null)
+                        }}
+                        className="w-full h-9 rounded-lg bg-muted/50 hover:bg-muted text-muted-foreground text-xs font-medium transition-colors"
+                      >
+                        취소
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             )
           })}
-
-          {/* 오른쪽 스페이서 */}
-          <div aria-hidden className="shrink-0 snap-none" style={{ width: sideGap }} />
         </div>
       </div>
     </section>
   )
 }
+
 
 function BottomNav({ activeTab }: { activeTab: string }) {
   const router = useRouter()
@@ -570,12 +530,11 @@ export default function Page() {
           </div>
 
           <section className="px-4 pb-4">
-            <div className="bg-gradient-to-br from-primary/10 via-accent/5 to-primary/5 rounded-2xl p-6 mb-6">
+            <div className="bg-gradient-to-br from-primary/10 via-accent/5 to-primary/10 rounded-2xl p-6 mb-6">
               <h2 className="text-xl font-bold text-foreground mb-2 text-balance">당신의 감정을 음악으로</h2>
               <p className="text-sm text-muted-foreground mb-4 text-pretty">
                 사진을 업로드하면 AI가 감정을 분석하고
-                <br />
-                딱 맞는 음악을 추천해드려요
+                <br />딱 맞는 음악을 추천해드려요
               </p>
               <button
                 onClick={() => setShowUploadModal(true)}
