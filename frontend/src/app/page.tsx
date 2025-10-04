@@ -4,7 +4,7 @@ import type React from "react"
 
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
-import UserHeader from "@/components/header/UserHeader"
+// import UserHeader from "@/components/header/UserHeader" // ⬅️ 사용 안 함 (헤더를 직접 렌더링)
 import PhotoUpload from "@/components/upload/PhotoUpload"
 import SearchAndRequest from "@/components/search/SearchAndRequest"
 import MoodBadges from "@/components/mood/MoodBadges"
@@ -42,9 +42,30 @@ function extractDate(item: any): Date | null {
   return isNaN(d.getTime()) ? null : d
 }
 
-const fmtDateBadge = (d: Date) => d.toLocaleDateString("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" })
+const fmtDateBadge = (d: Date) =>
+  d.toLocaleDateString("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" })
 
-/* Redesigned carousel with Musinsa-style clean cards */
+/* 환경 감지: 앱/웹뷰면 페이지, 일반 웹이면 오버레이 */
+function usePreferOverlayOnSearch() {
+  const [preferOverlay, setPreferOverlay] = useState(true)
+  useEffect(() => {
+    try {
+      const ua = navigator.userAgent || ""
+      const isWebView =
+        /wv|WebView/i.test(ua) ||
+        (typeof window !== "undefined" && (window as any).ReactNativeWebView) ||
+        /(KAKAOTALK|NAVER|Daum|FBAN|FBAV|Instagram)/i.test(ua)
+
+      const isMobile = /Mobile|Android|iPhone|iPad|iPod/i.test(ua)
+      setPreferOverlay(!isWebView && !isMobile ? true : !isWebView && window.innerWidth >= 768)
+    } catch {
+      setPreferOverlay(true)
+    }
+  }, [])
+  return preferOverlay
+}
+
+/* ───────────────── HistoryStrip (기존 그대로) ───────────────── */
 function HistoryStrip({
   user,
   items,
@@ -59,28 +80,22 @@ function HistoryStrip({
   const router = useRouter()
   const trackRef = useRef<HTMLDivElement | null>(null)
 
-  // 가운데(가시영역 기준)와 사용자가 선택한 카드 인덱스를 분리
   const [active, setActive] = useState(0)
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null)
-
   const [sideGap, setSideGap] = useState(0)
 
-  // 드래그/탭 구분을 위한 상태
   const [isDragging, setIsDragging] = useState(false)
   const dragStartX = useRef(0)
   const scrollStartX = useRef(0)
-  const movedRef = useRef(false) // 6px 이상 움직이면 드래그로 간주
+  const movedRef = useRef(false)
 
-  // 스크롤 관성 감지를 위한 RAF 루프
   const rafIdRef = useRef<number | null>(null)
   const lastLeftRef = useRef(0)
   const lastTsRef = useRef(0)
   const runningRef = useRef(false)
 
-  // 양옆 여백 보정(카드가 가장자리에 닿아 보이는 것 방지)
-  const EDGE_GUTTER = 24 // 필요 시 28~32로 조절 가능
+  const EDGE_GUTTER = 24
 
-  // 가운데 카드 계산(패딩 영향 제거 위해 rect 기반)
   const computeActive = () => {
     const track = trackRef.current
     if (!track) return 0
@@ -104,11 +119,9 @@ function HistoryStrip({
     return best
   }
 
-  // 스크롤 중일 때 중앙 카드 계산 유지
   const ensureRafLoop = () => {
     const track = trackRef.current
     if (!track || runningRef.current) return
-
     runningRef.current = true
     const tick = () => {
       const t = trackRef.current
@@ -139,7 +152,6 @@ function HistoryStrip({
     rafIdRef.current = requestAnimationFrame(tick)
   }
 
-  // 좌우 스페이서(첫 카드/마지막 카드가 정확히 가운데 정렬되도록)
   const measureSideGap = () => {
     const track = trackRef.current
     if (!track) return
@@ -152,7 +164,6 @@ function HistoryStrip({
     setSideGap(gap)
   }
 
-  // 선택 시 카드 중앙 정렬하되, 이미 거의 중앙이면 스크롤 생략(튐 방지)
   const scrollToCardIfFar = (idx: number, threshold = 12) => {
     const track = trackRef.current
     if (!track) return
@@ -160,23 +171,20 @@ function HistoryStrip({
     if (!card) return
 
     const trackRect = track.getBoundingClientRect()
-    const cardRect  = card.getBoundingClientRect()
+    const cardRect = card.getBoundingClientRect()
     const trackCenterX = trackRect.left + track.clientWidth / 2
-    const cardCenterX  = cardRect.left + cardRect.width / 2
+    const cardCenterX = cardRect.left + cardRect.width / 2
 
     const delta = cardCenterX - trackCenterX
     if (Math.abs(delta) <= threshold) return
-
     track.scrollTo({ left: track.scrollLeft + delta, behavior: "smooth" })
   }
 
-  // Mouse drag (웹)
   const handleMouseDown = (e: React.MouseEvent) => {
     const track = trackRef.current
     if (!track) return
-
     setIsDragging(true)
-    movedRef.current = false // 드래그 시작 시 항상 리셋
+    movedRef.current = false
     dragStartX.current = e.pageX
     scrollStartX.current = track.scrollLeft
     track.style.scrollBehavior = "auto"
@@ -186,7 +194,6 @@ function HistoryStrip({
     if (!isDragging) return
     const track = trackRef.current
     if (!track) return
-
     e.preventDefault()
     const x = e.pageX
     const walk = (dragStartX.current - x) * 1.5
@@ -198,31 +205,21 @@ function HistoryStrip({
     const track = trackRef.current
     if (track) track.style.scrollBehavior = "smooth"
     setIsDragging(false)
-    movedRef.current = false // 드래그 종료 시 반드시 리셋(다음 클릭 가능)
+    movedRef.current = false
   }
   const handleMouseUp = endDrag
-  const handleMouseLeave = () => { if (isDragging) endDrag() }
-
-  const goWriteDiary = (it: any) => {
-    const pid = it.photo_id ?? it.photoId ?? it.id
-    const title = encodeURIComponent(it.title_snapshot ?? it.title ?? "제목 없음")
-    const artist = encodeURIComponent(it.artist_snapshot ?? it.artist ?? "Various")
-    const dateObj = extractDate(it)
-    const date = dateObj ? encodeURIComponent(dateObj.toISOString()) : ""
-    router.push(`/diary/${encodeURIComponent(String(pid))}?title=${title}&artist=${artist}&date=${date}`)
+  const handleMouseLeave = () => {
+    if (isDragging) endDrag()
   }
 
-  // 초기 측정/리스너
   useEffect(() => {
     const track = trackRef.current
     if (!track) return
-
     const onScroll = () => ensureRafLoop()
     const onResize = () => {
       measureSideGap()
       setActive(computeActive())
     }
-
     track.addEventListener("scroll", onScroll, { passive: true })
     window.addEventListener("resize", onResize)
 
@@ -281,10 +278,10 @@ function HistoryStrip({
         ref={trackRef}
         className={`overflow-x-auto snap-x snap-mandatory [scrollbar-width:none] [&::-webkit-scrollbar]:hidden touch-pan-x select-none ${isDragging ? "cursor-grabbing" : "cursor-grab"}`}
         style={{
-          paddingLeft:  sideGap + EDGE_GUTTER,
+          paddingLeft: sideGap + EDGE_GUTTER,
           paddingRight: sideGap + EDGE_GUTTER,
-          paddingTop: 12,              // 🔹 윗여백 추가
-          paddingBottom: 4,            // (선택) 아래도 살짝 띄우고 싶으면
+          paddingTop: 12,
+          paddingBottom: 4,
           scrollBehavior: "smooth",
           WebkitOverflowScrolling: "touch",
         }}
@@ -301,15 +298,12 @@ function HistoryStrip({
             const artist = it.artist_snapshot ?? it.artist ?? "Various"
             const dateObj = extractDate(it)
 
-            // 중심 카드(active)와 선택 카드(selectedIdx)를 분리해 사용
             const centered = idx === active
             const picked = idx === selectedIdx
 
-            // ✅ 회색/불투명도는 '선택됨(picked)'만 기준(요청 반영)
-            // 중앙에 있을 때는 살짝 확대만 유지
-            const scale  = picked ? "scale(1.05)" : centered ? "scale(1.05)" : "scale(0.95)"
+            const scale = picked ? "scale(1.05)" : centered ? "scale(1.05)" : "scale(0.95)"
             const opacity = picked ? 1 : 0.6
-            const gray    = picked ? "none" : "grayscale(60%)"
+            const gray = picked ? "none" : "grayscale(60%)"
             const ringCls = picked ? "ring-2 ring-primary ring-offset-2" : ""
 
             return (
@@ -323,11 +317,8 @@ function HistoryStrip({
                   opacity,
                 }}
                 onClick={() => {
-                  // 드래그 직후의 의도치 않은 클릭 방지
                   if (isDragging || movedRef.current) return
-                  // 선택 토글
                   setSelectedIdx((prev) => (prev === idx ? null : idx))
-                  // 카드가 너무 벗어나 있으면 중앙 정렬(미세 오프셋은 무시)
                   scrollToCardIfFar(idx, 12)
                 }}
               >
@@ -363,14 +354,19 @@ function HistoryStrip({
                     <div className="text-[10px] text-gray-500 truncate">{artist}</div>
                   </div>
 
-                  {/* 선택된 카드에만 액션 보이기 — UI는 변경 없음 */}
                   {idx === selectedIdx && (
                     <div className="mt-3 space-y-2 animate-in fade-in slide-in-from-top-2 duration-200">
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation()
-                          goWriteDiary(it)
+                          const pid = it.photo_id ?? it.photoId ?? it.id
+                          const title = encodeURIComponent(it.title_snapshot ?? it.title ?? "제목 없음")
+                          const artist = encodeURIComponent(it.artist_snapshot ?? it.artist ?? "Various")
+                          const dateObj = extractDate(it)
+                          const date = dateObj ? encodeURIComponent(dateObj.toISOString()) : ""
+                          const idEnc = encodeURIComponent(String(pid))
+                          window.location.href = `/diary/${idEnc}?title=${title}&artist=${artist}&date=${date}`
                         }}
                         className="w-full h-11 rounded-xl bg-gradient-to-r from-primary to-primary/90 text-primary-foreground text-sm font-semibold hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-md"
                       >
@@ -399,9 +395,8 @@ function HistoryStrip({
   )
 }
 
-
-
-function BottomNav({ activeTab }: { activeTab: string }) {
+/* 하단 탭 */
+function BottomNav({ activeTab, onOpenSearch }: { activeTab: string; onOpenSearch: () => void }) {
   const router = useRouter()
 
   const tabs = [
@@ -422,7 +417,7 @@ function BottomNav({ activeTab }: { activeTab: string }) {
               onClick={() => {
                 if (tab.id === "home") router.push("/")
                 if (tab.id === "profile") router.push("/account")
-                if (tab.id === "search") router.push("/search")
+                if (tab.id === "search") onOpenSearch()
               }}
               className="flex flex-col items-center justify-center gap-1 flex-1 h-full"
             >
@@ -445,6 +440,8 @@ export default function Page() {
   const { history, loading: historyLoading, error: historyError } = useHistory(isLoggedIn)
   const [selectedGenres, setSelectedGenres] = useState<string[]>([])
   const [showUploadModal, setShowUploadModal] = useState(false)
+
+  const preferOverlay = usePreferOverlayOnSearch()
 
   const accountId = useMemo(() => {
     const anyUser = (user ?? {}) as {
@@ -507,18 +504,64 @@ export default function Page() {
     setSelectedGenres((prev) => (prev.includes(genre) ? prev.filter((g) => g !== genre) : [...prev, genre]))
   }
 
+  // 검색 탭 눌렀을 때 동작
+  const handleOpenSearch = () => {
+    if (preferOverlay) {
+      document.getElementById("global-search-input" /* 아래 2번 참고 */)?.focus()
+    } else {
+      router.push("/search") // 앱/웹뷰: 페이지 이동
+    }
+  }
+
   return (
     <>
       <div className="min-h-screen bg-background pb-20">
-        <UserHeader
-          user={user}
-          isLoggedIn={isLoggedIn}
-          onLogout={() => {
-            logout()
-            router.push("/login")
-          }}
-        />
+        {/* 🔹 검은 헤더 */}
+        <header className="sticky top-0 z-40 bg-black text-white shadow">
+          {/* 1줄차: 로고/유저 영역 */}
+          <div className="max-w-5xl mx-auto flex items-center justify-between px-4 py-3">
+            <h1
+              className="text-xl font-bold leading-none cursor-pointer"
+              onClick={() => router.push("/")}
+            >
+              MoodTune
+            </h1>
 
+            <div className="flex items-center gap-3 text-sm">
+              {isLoggedIn ? (
+                <>
+                  <span className="text-white/90">{(user as any)?.name || "user"}</span>
+                  <button
+                    onClick={() => { logout(); router.push("/login") }}
+                    className="text-white/70 hover:text-white transition"
+                  >
+                    로그아웃
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => router.push("/login")}
+                  className="text-white/70 hover:text-white transition"
+                >
+                  로그인
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* 2줄차: ⬇️ 길~게 배치된 검색 바 (헤더 '아랫부분') */}
+          <div className="max-w-5xl mx-auto px-4 pb-3">
+            <SearchAndRequest
+              size="wide"                 // ✅ 길이 확장
+              musics={musics}
+              loading={musicsLoading}
+              error={musicsError}
+              noOuterMargin
+            />
+          </div>
+        </header>
+
+        {/* 이하 메인 콘텐츠는 그대로 */}
         <main className="max-w-lg mx-auto">
           <div className="pt-4">
             <HistoryStrip user={user} items={history} loading={historyLoading} error={historyError} />
@@ -545,14 +588,6 @@ export default function Page() {
             <h2 className="text-sm font-semibold text-foreground mb-3">지금 기분은?</h2>
             <MoodBadges selected={selectedGenres} onToggle={toggleGenre} />
           </section>
-
-          <section className="px-4 mb-6">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-semibold text-foreground">추천 음악</h2>
-              <button className="text-xs text-muted-foreground">더보기</button>
-            </div>
-            <SearchAndRequest musics={musics} loading={musicsLoading} error={musicsError} />
-          </section>
         </main>
 
         <button
@@ -563,9 +598,10 @@ export default function Page() {
           <Camera className="w-6 h-6" />
         </button>
 
-        <BottomNav activeTab="home" />
+        <BottomNav activeTab="home" onOpenSearch={handleOpenSearch} />
       </div>
 
+      {/* 업로드 모달 */}
       {showUploadModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center">
           <div className="bg-background w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl p-6 animate-in slide-in-from-bottom duration-300">
