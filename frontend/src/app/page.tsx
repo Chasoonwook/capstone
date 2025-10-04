@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { Suspense,useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 
 import PhotoUpload from "@/components/upload/PhotoUpload"
@@ -155,12 +155,14 @@ export default function Page() {
         <main className="max-w-lg mx-auto">
           {/* 탭에 따라 섹션 전환 */}
           <div className="pt-4">
-            <HistorySwitch
-              user={user}
-              history={history}
-              loading={historyLoading}
-              error={historyError}
-            />
+            <Suspense fallback={<div className="px-4 text-sm text-muted-foreground">로딩 중…</div>}>
+              <HistorySwitch
+                user={user}
+                history={history}
+                loading={historyLoading}
+                error={historyError}
+              />
+            </Suspense>
           </div>
 
           {/* 업로드 CTA 섹션 */}
