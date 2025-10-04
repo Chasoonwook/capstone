@@ -223,6 +223,7 @@ export default function SearchAndRequest({
         />
         {/* 🔹 인풋은 z-0로 */}
         <Input
+        id="global-search-input"
           ref={inlineInputRef}
           placeholder="노래 제목 또는 가수 검색"
           value={q}

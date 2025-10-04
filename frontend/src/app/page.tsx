@@ -49,18 +49,7 @@ const fmtDateBadge = (d: Date) =>
 function usePreferOverlayOnSearch() {
   const [preferOverlay, setPreferOverlay] = useState(true)
   useEffect(() => {
-    try {
-      const ua = navigator.userAgent || ""
-      const isWebView =
-        /wv|WebView/i.test(ua) ||
-        (typeof window !== "undefined" && (window as any).ReactNativeWebView) ||
-        /(KAKAOTALK|NAVER|Daum|FBAN|FBAV|Instagram)/i.test(ua)
-
-      const isMobile = /Mobile|Android|iPhone|iPad|iPod/i.test(ua)
-      setPreferOverlay(!isWebView && !isMobile ? true : !isWebView && window.innerWidth >= 768)
-    } catch {
-      setPreferOverlay(true)
-    }
+    setPreferOverlay(true) // ✅ 모든 환경에서 오버레이 선호
   }, [])
   return preferOverlay
 }
@@ -271,7 +260,6 @@ function HistoryStrip({
     <section className="mb-8">
       <div className="flex items-center justify-between mb-4 px-4">
         <h2 className="text-sm font-semibold text-foreground">최근 감정 분석</h2>
-        <button className="text-xs text-muted-foreground">전체보기</button>
       </div>
 
       <div
