@@ -494,8 +494,12 @@ export default function Page() {
 
   // 검색 탭 눌렀을 때 동작
   const handleOpenSearch = () => {
-    // ✅ 항상 인라인 입력에 포커스 → onFocus가 오버레이를 띄움
-    document.getElementById("global-search-input")?.focus()
+    const el = document.getElementById("global-search-input") as HTMLInputElement | null
+    if (el) {
+      try { el.focus() } catch {}
+    }
+    // ✅ 포커스가 먹히지 않아도 오버레이가 열리도록 백업 이벤트 발행
+    window.dispatchEvent(new Event("open-search-overlay"))
   }
 
   return (

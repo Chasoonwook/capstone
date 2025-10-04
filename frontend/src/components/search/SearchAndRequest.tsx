@@ -66,6 +66,17 @@ export default function SearchAndRequest({
   const inlineInputRef = useRef<HTMLInputElement | null>(null)
   const overlayInputRef = useRef<HTMLInputElement | null>(null)
 
+  useEffect(() => {
+    const open = () => {
+      inlineInputRef.current?.blur()
+      setOverlayOpen(true)
+      setTimeout(() => overlayInputRef.current?.focus(), 0)
+    }
+    const handler = () => open()
+    window.addEventListener("open-search-overlay", handler as EventListener)
+    return () => window.removeEventListener("open-search-overlay", handler as EventListener)
+  }, [])
+  
   const results = useMemo(() => {
     const list: MusicItem[] = Array.isArray(musics) ? musics : []
     const s = q.trim().toLowerCase()
