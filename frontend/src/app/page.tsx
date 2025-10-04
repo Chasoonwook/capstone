@@ -494,11 +494,8 @@ export default function Page() {
 
   // 검색 탭 눌렀을 때 동작
   const handleOpenSearch = () => {
-    if (preferOverlay) {
-      document.getElementById("global-search-input" /* 아래 2번 참고 */)?.focus()
-    } else {
-      router.push("/search") // 앱/웹뷰: 페이지 이동
-    }
+    // ✅ 항상 인라인 입력에 포커스 → onFocus가 오버레이를 띄움
+    document.getElementById("global-search-input")?.focus()
   }
 
   return (

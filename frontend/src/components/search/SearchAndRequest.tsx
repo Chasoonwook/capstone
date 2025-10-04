@@ -179,15 +179,9 @@ export default function SearchAndRequest({
   }
 
   /* ── 오버레이 열기/닫기 ─────────────────────────────────── */
-  const openOverlay = () => {
-    if (isNarrow) {
-      // 좁은 화면(앱/웹뷰)은 전용 페이지로 이동하고 싶다면 유지, 아니면 주석 처리
-      router.push("/search")
-      return
-    }
-    // 인라인 포커스가 남아있으면 닫을 때 재오픈 루프가 생길 수 있어 먼저 blur
-    inlineInputRef.current?.blur()
-    setOverlayOpen(true)
+ const openOverlay = () => {
+    inlineInputRef.current?.blur()            // 인라인 포커스 제거
+    setOverlayOpen(true)                      // ✅ 항상 오버레이로
     setTimeout(() => overlayInputRef.current?.focus(), 0)
   }
 
