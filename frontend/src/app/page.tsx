@@ -139,17 +139,19 @@ export default function Page() {
     <>
       <div className="min-h-screen bg-background pb-20">
         {/* ✅ 상단 헤더: 로고/계정 + 검색창 + 탭 네비게이션 */}
-        <Header
-          user={user}
-          isLoggedIn={isLoggedIn}
-          onLogout={() => {
-            logout()
-            router.push("/login")
-          }}
-          musics={musics}
-          loading={musicsLoading}
-          error={musicsError}
-        />
+        <Suspense fallback={<div className="h-14" />}>
+          <Header
+            user={user}
+            isLoggedIn={isLoggedIn}
+            onLogout={() => {
+              logout()
+              router.push("/login")
+            }}
+            musics={musics}
+            loading={musicsLoading}
+            error={musicsError}
+          />
+        </Suspense>
 
         {/* 메인 콘텐츠 */}
         <main className="max-w-lg mx-auto">
