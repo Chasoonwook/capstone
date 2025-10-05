@@ -22,28 +22,25 @@ export default function RecommendClient() {
 
   // Spotify
   const [accessToken, setAccessToken] = useState<string | null>(null)
-
-  // ✅ [최종 수정] localStorage 대신 API 라우트를 통해 토큰을 가져옵니다.
+  
+  // ✅ localStorage에서 토큰을 읽어오는 방식으로 최종 수정
   useEffect(() => {
-    async function fetchUserToken() {
+    const read = () => {
       try {
-        const response = await fetch('/api/spotify/user-token');
-        if (response.ok) {
-          const data = await response.json();
-          if (data.access_token) {
-            setAccessToken(data.access_token);
-          } else {
-            setAccessToken(null);
-          }
-        } else {
-          setAccessToken(null);
-        }
-      } catch (error) {
-        console.error("Failed to fetch spotify token:", error);
-        setAccessToken(null);
+        const t = localStorage.getItem("spotify_access_token")
+        setAccessToken(t && t.trim() ? t : null)
+      } catch {
+        setAccessToken(null)
       }
     }
-    fetchUserToken();
+    read();
+    
+    // 다른 탭이나 창에서 로그인이 변경될 경우를 대비해 이벤트를 감지합니다.
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "spotify_access_token") read()
+    }
+    window.addEventListener("storage", onStorage)
+    return () => window.removeEventListener("storage", onStorage)
   }, []);
 
   const isLoggedInSpotify = !!accessToken
