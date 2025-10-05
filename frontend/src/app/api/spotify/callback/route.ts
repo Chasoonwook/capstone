@@ -1,30 +1,33 @@
+// src/app/api/spotify/callback/route.ts
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
+// --- 쿠키 직렬화 헬퍼 (수정 없음) ---
 type SameSite = "lax" | "strict" | "none";
 type CookieOpts = { httpOnly?: boolean; secure?: boolean; path?: string; sameSite?: SameSite; maxAge?: number };
+function serializeCookie(name: string, value: string, opts: CookieOpts = {}): string {
+    const segs = [`${name}=${encodeURIComponent(value)}`];
+    if (opts.maxAge !== undefined) segs.push(`Max-Age=${opts.maxAge}`);
+    segs.push(`Path=${opts.path ?? "/"}`);
+    if (opts.httpOnly) segs.push("HttpOnly");
+    if (opts.secure) segs.push("Secure");
+    if (opts.sameSite) segs.push(`SameSite=${opts.sameSite}`);
+    return segs.join("; ");
+}
 function parseCookieHeader(h: string | null): Record<string, string> {
   if (!h) return {};
   return Object.fromEntries(
     h.split(";").map(v => v.trim()).filter(Boolean).map(v => {
-      const i = v.indexOf("="); 
+      const i = v.indexOf("=");
       return i === -1 ? [v, ""] : [v.slice(0, i), decodeURIComponent(v.slice(i + 1))];
     })
   );
 }
-function serializeCookie(name: string, value: string, opts: CookieOpts = {}): string {
-  const segs = [`${name}=${encodeURIComponent(value)}`];
-  if (opts.maxAge !== undefined) segs.push(`Max-Age=${opts.maxAge}`);
-  segs.push(`Path=${opts.path ?? "/"}`);
-  if (opts.httpOnly) segs.push("HttpOnly");
-  if (opts.secure) segs.push("Secure");
-  if (opts.sameSite) segs.push(`SameSite=${opts.sameSite}`);
-  return segs.join("; ");
-}
+// --- 헬퍼 끝 ---
+
 
 const isProd = process.env.NODE_ENV === "production";
-
 type PkceCookie = { state: string; verifier: string; redirectUri: string };
 type TokenResp = { access_token: string; token_type: "Bearer"; expires_in: number; refresh_token?: string; scope: string };
 
@@ -71,21 +74,27 @@ export async function GET(req: Request) {
 
   const t = (await r.json()) as TokenResp;
 
-  const res = NextResponse.redirect("/");
+  // 성공 시 메인 페이지로 리디렉션
+  const res = NextResponse.redirect(new URL("/", req.url));
+
+  // ✅ [수정] 쿠키 이름을 'sp_access_token'과 'sp_refresh_token'으로 통일합니다.
   res.headers.append(
     "Set-Cookie",
-    serializeCookie("sp_at", t.access_token, {
+    serializeCookie("sp_access_token", t.access_token, {
       httpOnly: true, secure: isProd, sameSite: "lax", path: "/", maxAge: Math.max(60, (t.expires_in ?? 3600) - 60),
     })
   );
   if (t.refresh_token) {
     res.headers.append(
       "Set-Cookie",
-      serializeCookie("sp_rt", t.refresh_token, {
+      serializeCookie("sp_refresh_token", t.refresh_token, {
         httpOnly: true, secure: isProd, sameSite: "lax", path: "/", maxAge: 60 * 60 * 24 * 30,
       })
     );
   }
+  
+  // PKCE 쿠키는 사용 후 삭제
   res.headers.append("Set-Cookie", serializeCookie("sp_pkce", "", { path: "/", maxAge: 0 }));
+  
   return res;
 }

@@ -22,9 +22,8 @@ export default function RecommendClient() {
 
   // Spotify
   const [accessToken, setAccessToken] = useState<string | null>(null)
-  const isLoggedInSpotify = !!accessToken
 
-  // 🚨 [수정] localStorage 대신 API 라우트를 통해 토큰을 가져옵니다.
+  // ✅ [최종 수정] localStorage 대신 API 라우트를 통해 토큰을 가져옵니다.
   useEffect(() => {
     async function fetchUserToken() {
       try {
@@ -47,6 +46,7 @@ export default function RecommendClient() {
     fetchUserToken();
   }, []);
 
+  const isLoggedInSpotify = !!accessToken
   const { ready, activate, transferToThisDevice, playUris, resume, pause } = useSpotifyPlayer(accessToken)
 
   // Audio(preview)
