@@ -1,22 +1,28 @@
-// eslint.config.mjs  (ESLint v9 + Flat Config + Next.js 15)
-import js from '@eslint/js'
-import next from 'eslint-config-next'
-import tsParser from '@typescript-eslint/parser'
-import tsPlugin from '@typescript-eslint/eslint-plugin'
+// eslint.config.mjs
+
+import js from '@eslint/js';
+// ✅ [수정] next/core-web-vitals를 직접 import 합니다.
+import coreWebVitals from 'eslint-config-next/core-web-vitals';
+import tsParser from '@typescript-eslint/parser';
+import tsPlugin from '@typescript-eslint/eslint-plugin';
+// ❌ import next from 'eslint-config-next' 라인을 삭제했습니다.
 
 export default [
-  // JS 기본 추천 규칙
   js.configs.recommended,
 
-  // Next.js 15 권장 규칙(core-web-vitals 포함)
-  ...next,
-
+  // ✅ [수정] Next.js의 추천 규칙과 웹 바이탈 규칙을 별도로 적용합니다.
+  {
+    // core-web-vitals 규칙을 모든 관련 파일에 적용
+    files: ['**/*.{js,jsx,mjs,cjs,ts,tsx}'],
+    ...coreWebVitals,
+  },
+  
   // 무시 경로
   {
     ignores: ['.next/**', 'node_modules/**', 'dist/**', 'coverage/**']
   },
 
-  // TypeScript 파일 전용 설정
+  // TypeScript 파일 전용 설정 (기존과 동일)
   {
     files: ['**/*.{ts,tsx}'],
     languageOptions: {
@@ -43,4 +49,4 @@ export default [
       'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }]
     }
   }
-]
+];

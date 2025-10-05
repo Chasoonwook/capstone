@@ -14,6 +14,7 @@ import Header from "@/components/header/Header"
 import HistorySwitch from "@/components/history/HistorySwitch"
 
 import { Home, Search, User, Camera } from "lucide-react"
+import { API_BASE } from "@/lib/api" // ✅ API_BASE를 사용하기 위해 import 합니다.
 
 /* ───────────────── 하단 탭 ───────────────── */
 function BottomNav({ activeTab, onOpenSearch }: { activeTab: string; onOpenSearch: () => void }) {
@@ -124,7 +125,6 @@ export default function Page() {
     setSelectedGenres((prev) => (prev.includes(genre) ? prev.filter((g) => g !== genre) : [...prev, genre]))
   }
 
-  // 하단 탭의 "검색" 클릭 시 헤더의 검색 오버레이 열기
   const handleOpenSearch = () => {
     const el = document.getElementById("global-search-input") as HTMLInputElement | null
     if (el) {
@@ -138,7 +138,6 @@ export default function Page() {
   return (
     <>
       <div className="min-h-screen bg-background pb-20">
-        {/* ✅ 상단 헤더: 로고/계정 + 검색창 + 탭 네비게이션 */}
         <Suspense fallback={<div className="h-14" />}>
           <Header
             user={user}
@@ -153,9 +152,7 @@ export default function Page() {
           />
         </Suspense>
 
-        {/* 메인 콘텐츠 */}
         <main className="max-w-lg mx-auto">
-          {/* 탭에 따라 섹션 전환 */}
           <div className="pt-4">
             <Suspense fallback={<div className="px-4 text-sm text-muted-foreground">로딩 중…</div>}>
               <HistorySwitch
@@ -167,7 +164,6 @@ export default function Page() {
             </Suspense>
           </div>
 
-          {/* 업로드 CTA 섹션 */}
           <section className="px-4 pb-4">
             <div className="bg-gradient-to-br from-primary/10 via-accent/5 to-primary/10 rounded-2xl p-6 mb-6">
               <h2 className="text-xl font-bold text-foreground mb-2 text-balance">당신의 감정을 음악으로</h2>
@@ -185,14 +181,12 @@ export default function Page() {
             </div>
           </section>
 
-          {/* 기분 배지 */}
           <section className="px-4 mb-6">
             <h2 className="text-sm font-semibold text-foreground mb-3">지금 기분은?</h2>
             <MoodBadges selected={selectedGenres} onToggle={toggleGenre} />
           </section>
         </main>
 
-        {/* 우측 하단 업로드 FAB */}
         <button
           onClick={() => setShowUploadModal(true)}
           className="fixed bottom-20 right-4 w-14 h-14 bg-primary text-primary-foreground rounded-full shadow-lg flex items-center justify-center hover:scale-105 transition-transform z-40"
@@ -204,7 +198,6 @@ export default function Page() {
         <BottomNav activeTab="home" onOpenSearch={handleOpenSearch} />
       </div>
 
-      {/* 업로드 모달 */}
       {showUploadModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center">
           <div className="bg-background w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl p-6 animate-in slide-in-from-bottom duration-300">
@@ -241,7 +234,8 @@ export default function Page() {
           setShowSpotifyModal(false)
         }}
         onConnect={() => {
-          window.location.href = "/account/spotify"
+          // ✅ [수정] 잘못된 페이지 이동 대신, 백엔드의 로그인 API를 직접 호출합니다.
+          window.location.href = `${API_BASE}/api/spotify/login`;
         }}
       />
     </>
