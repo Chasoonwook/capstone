@@ -8,8 +8,14 @@ const fetch = global.fetch;
 
 const CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;
 const CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
-const REDIRECT_URI = "https://capstone-front-tau.vercel.app/spotify-callback"; // 예: https://your-frontend.vercel.app/spotify-callback
-const FRONTEND_URI = "https://capstone-front-tau.vercel.app/"; //인증하고 돌아갈 프론트엔드 주소
+
+// ✅ [수정] 스포티파이가 인증 코드를 돌려줄 주소는 바로 이 백엔드 서버의 callback 주소여야 합니다.
+const REDIRECT_URI = "https://capstone-app-back.onrender.com/api/spotify/callback"; 
+
+// ✅ 인증이 모두 끝난 후 최종적으로 돌아갈 프론트엔드 주소입니다. (이것은 올바르게 설정되어 있습니다)
+const FRONTEND_URI = "https://capstone-front-tau.vercel.app/";
+
+// --- 이하 코드는 수정할 필요 없습니다 ---
 
 // 앱 토큰(검색용) 캐시
 let appToken = null;
@@ -42,20 +48,16 @@ async function getAppToken() {
   }
 }
 
-/**
- * GET /api/spotify/search?query=...
- * - 앱 토큰을 사용한 공개 정보 검색 API
- */
 router.get("/search", async (req, res) => {
   try {
     const q = String(req.query.query || req.query.q || "").trim();
     if (!q) return res.status(400).json({ error: "missing query" });
     
     const token = await getAppToken();
-    const url = `https://api.spotify.com/v1/search?${new URLSearchParams({
+    const url = `https://api.spotify.com/v1/search?$${new URLSearchParams({
       type: "track",
       q,
-      limit: "5", // 필요 시 limit 조절
+      limit: "5",
       market: "KR",
     }).toString()}`;
 
@@ -66,7 +68,6 @@ router.get("/search", async (req, res) => {
       return res.status(r.status).json({ error: "spotify search failed" });
     }
     
-    // 프론트엔드가 필요한 정보만 간단히 가공하여 전달
     const items = (json?.tracks?.items || []).map((t) => ({
       id: t.id,
       name: t.name,
@@ -82,9 +83,7 @@ router.get("/search", async (req, res) => {
   }
 });
 
-// 1. 로그인 API: 사용자를 스포티파이 로그인 페이지로 보냅니다.
 router.get('/login', (req, res) => {
-  // ⭐️ streaming 권한이 전체듣기의 핵심입니다.
   const scope = 'streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state';
   
   const authUrl = new URL("https://api.spotify.com/v1/search?$");
@@ -93,7 +92,6 @@ router.get('/login', (req, res) => {
   authUrl.searchParams.append('scope', scope);
   authUrl.searchParams.append('redirect_uri', REDIRECT_URI);
   
-  // 프론트엔드에서 생성한 state 값을 전달받아 그대로 다시 사용 (CSRF 방어)
   if (req.query.state) {
     authUrl.searchParams.append('state', req.query.state);
   }
@@ -101,7 +99,6 @@ router.get('/login', (req, res) => {
   res.redirect(authUrl.toString());
 });
 
-// 2. 콜백 API: 스포티파이에서 로그인이 끝나면 호출됩니다.
 router.get('/callback', async (req, res) => {
   const code = req.query.code || null;
 
@@ -129,7 +126,6 @@ router.get('/callback', async (req, res) => {
 
     const { access_token, refresh_token, expires_in } = data;
 
-    // 프론트엔드로 토큰 정보를 쿼리 파라미터로 전달하며 리디렉션
     const queryParams = new URLSearchParams({
       access_token,
       refresh_token,
@@ -143,7 +139,6 @@ router.get('/callback', async (req, res) => {
   }
 });
 
-// 3. 토큰 갱신 API: Access Token이 만료되면 호출합니다.
 router.post('/refresh', async (req, res) => {
   const { refresh_token } = req.body;
   if (!refresh_token) {
