@@ -7,6 +7,7 @@ const cors = require("cors");
 const cookieParser = require("cookie-parser");
 require("dotenv").config({ debug: true });
 const pool = require("./db");
+const spotifyRoutes = require('./routes/spotify');
 
 const app = express();
 app.set("trust proxy", 1);
@@ -15,6 +16,7 @@ app.set("trust proxy", 1);
 app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
+app.use('/api/spotify', spotifyRoutes);
 
 // ---- CORS (credentials 허용)
 const normalize = (s) => (s ? s.replace(/\/+$/, "") : s);
@@ -103,7 +105,6 @@ const mounts = [
   ["/api", "routes/onboarding"],
   ["/api/history", "routes/history"],
   ["/api/music-requests", "routes/musicRequests"],
-  ["/api/spotify", "routes/spotify"],
   ["/api", "routes/feedback"],
   ["/api", "routes/stickers"],
   ["/api/diaries", "routes/diaries"],   // ★ 추가: 그림일기 라우트
