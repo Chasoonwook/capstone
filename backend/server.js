@@ -16,7 +16,6 @@ app.set("trust proxy", 1);
 app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
-app.use('/api/spotify', spotifyRoutes);
 
 // ---- CORS (credentials 허용)
 const normalize = (s) => (s ? s.replace(/\/+$/, "") : s);
@@ -93,6 +92,8 @@ function loadRoute(relPath) {
     return null;
   }
 }
+
+app.use('/api/spotify', spotifyRoutes);
 
 // ---- mount routers (여기에서만 등록)
 const mounts = [
