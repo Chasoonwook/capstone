@@ -1,4 +1,4 @@
-// src/app/api/spotify/token/route.ts
+// src/app/api/spotify/login/route.ts
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
