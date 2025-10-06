@@ -1,6 +1,6 @@
 "use client"
 
-import { Suspense,useEffect, useMemo, useState } from "react"
+import { Suspense, useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 
 import PhotoUpload from "@/components/upload/PhotoUpload"
@@ -14,7 +14,7 @@ import Header from "@/components/header/Header"
 import HistorySwitch from "@/components/history/HistorySwitch"
 
 import { Home, Search, User, Camera } from "lucide-react"
-import { API_BASE } from "@/lib/api" // ✅ API_BASE를 사용하기 위해 import 합니다.
+import { API_BASE } from "@/lib/api" // 백엔드 베이스 URL
 
 /* ───────────────── 하단 탭 ───────────────── */
 function BottomNav({ activeTab, onOpenSearch }: { activeTab: string; onOpenSearch: () => void }) {
@@ -86,40 +86,52 @@ export default function Page() {
   const [isSpotifyConnected, setIsSpotifyConnected] = useState(false)
   const [showSpotifyModal, setShowSpotifyModal] = useState(false)
 
+  // ✅ 쿠키 기반 연결 상태 확인 (localStorage 사용 제거)
   useEffect(() => {
-    const read = () => {
+    let mounted = true
+
+    const checkConnected = async () => {
       try {
-        const token = localStorage.getItem("spotify_access_token")
-        const dismissedUntil = Number(localStorage.getItem(dismissKey) || "0")
-        const now = Date.now()
-        const connected = !!(token && token.trim())
+        // 콜백 리다이렉트 후 ?spotify=connected 있으면 모달 닫아주기
+        if (typeof window !== "undefined") {
+          const url = new URL(window.location.href)
+          if (url.searchParams.get("spotify") === "connected") {
+            url.searchParams.delete("spotify")
+            window.history.replaceState({}, "", url.toString())
+          }
+        }
+
+        // 백엔드에 저장된 쿠키로 /me 호출해서 연결 여부 판단
+        const resp = await fetch(`${API_BASE}/api/spotify/me`, {
+          method: "GET",
+          credentials: "include", // ★ 중요: 쿠키 포함
+        })
+
+        const connected = resp.ok
+        if (!mounted) return
+
         setIsSpotifyConnected(connected)
-        setShowSpotifyModal(isLoggedIn ? !connected && now > dismissedUntil : false)
+
+        // 모달 노출 로직
+        try {
+          const dismissedUntil = Number(localStorage.getItem(dismissKey) || "0")
+          const now = Date.now()
+          setShowSpotifyModal(isLoggedIn ? !connected && now > dismissedUntil : false)
+        } catch {
+          setShowSpotifyModal(isLoggedIn && !connected)
+        }
       } catch {
+        if (!mounted) return
         setIsSpotifyConnected(false)
-        setShowSpotifyModal(isLoggedIn)
+        setShowSpotifyModal(isLoggedIn) // 연결 실패시 노출
       }
     }
-    read()
 
-    const onStorage = (e: StorageEvent) => {
-      try {
-        if (e.key === "spotify_access_token") {
-          const connected = !!(e.newValue && e.newValue.trim())
-          setIsSpotifyConnected(connected)
-          if (connected) setShowSpotifyModal(false)
-        }
-        if (e.key === dismissKey) {
-          const now = Date.now()
-          const dismissedUntil = Number(localStorage.getItem(dismissKey) || "0")
-          setShowSpotifyModal(isLoggedIn && !isSpotifyConnected && now > dismissedUntil)
-        }
-      } catch {}
+    checkConnected()
+    return () => {
+      mounted = false
     }
-
-    window.addEventListener("storage", onStorage)
-    return () => window.removeEventListener("storage", onStorage)
-  }, [dismissKey, isLoggedIn, isSpotifyConnected])
+  }, [dismissKey, isLoggedIn])
 
   const toggleGenre = (genre: string) => {
     setSelectedGenres((prev) => (prev.includes(genre) ? prev.filter((g) => g !== genre) : [...prev, genre]))
@@ -155,12 +167,7 @@ export default function Page() {
         <main className="max-w-lg mx-auto">
           <div className="pt-4">
             <Suspense fallback={<div className="px-4 text-sm text-muted-foreground">로딩 중…</div>}>
-              <HistorySwitch
-                user={user}
-                history={history}
-                loading={historyLoading}
-                error={historyError}
-              />
+              <HistorySwitch user={user} history={history} loading={historyLoading} error={historyError} />
             </Suspense>
           </div>
 
@@ -234,8 +241,10 @@ export default function Page() {
           setShowSpotifyModal(false)
         }}
         onConnect={() => {
-          // ✅ [수정] 잘못된 페이지 이동 대신, 백엔드의 로그인 API를 직접 호출합니다.
-          window.location.href = `${API_BASE}/api/spotify/login`;
+          // ✅ 백엔드의 권한 라우트로 이동 (PKCE + 콜백 처리)
+          //    Redirect URI: https://capstone-app-back.onrender.com/api/spotify/callback
+          //    콜백 성공 후 FRONT_BASE/?spotify=connected 로 복귀
+          window.location.href = `${API_BASE}/api/spotify/authorize?return=/`
         }}
       />
     </>
