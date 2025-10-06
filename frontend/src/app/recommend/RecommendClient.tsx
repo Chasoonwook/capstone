@@ -1,10 +1,11 @@
+// src/app/recommend/RecommendClient.tsx
 "use client"
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { X, Play, Pause, SkipBack, SkipForward, ThumbsUp, ThumbsDown, Music, ChevronUp } from "lucide-react"
 import { API_BASE } from "@/lib/api"
-import { useSpotifyPlayer } from "@/hooks/useSpotifyPlayer" // ✅ 인자 없는 훅
+import { useSpotifyPlayer } from "@/hooks/useSpotifyPlayer" // 인자 없는 훅
 import { Button } from "@/components/ui/button"
 import Image from "next/image"
 
@@ -20,10 +21,10 @@ export default function RecommendClient() {
 
   const [showPlaylist, setShowPlaylist] = useState(false)
 
-  // ✅ Web Playback SDK 훅 (쿠키 기반, accessToken 필요 없음)
+  // Web Playback SDK 훅 (쿠키 기반)
   const { ready, activate, transferToThisDevice, playUris, resume, pause } = useSpotifyPlayer()
 
-  // ✅ Spotify 연동 여부(쿠키) 확인
+  // Spotify 연동 여부(쿠키) 확인
   const [spotifyLinked, setSpotifyLinked] = useState(false)
   useEffect(() => {
     let mounted = true
@@ -116,7 +117,7 @@ export default function RecommendClient() {
     return () => { mounted = false }
   }, [photoId])
 
-  // Fetch recommendations (기존 그대로)
+  // Fetch recommendations
   const fetchRecommendations = useCallback(
     async (signal?: AbortSignal) => {
       if (!photoId) {
@@ -276,7 +277,7 @@ export default function RecommendClient() {
     [currentSong?.spotify_uri],
   )
 
-  // ✅ 자동 재생 (연동 + SDK 준비 완료 시)
+  // 자동 재생 (연동 + SDK 준비 완료 시)
   useEffect(() => {
     let cancelled = false
     ;(async () => {
@@ -312,7 +313,7 @@ export default function RecommendClient() {
     setDuration(parseDurationToSec(song.duration))
     const songUri = toSpotifyUri(song.spotify_uri ?? null)
 
-    // ✅ 전체 재생 (연동 + SDK 준비)
+    // 전체 재생 (연동 + SDK 준비)
     if (spotifyLinked && ready && songUri) {
       try {
         await activate()
@@ -324,7 +325,7 @@ export default function RecommendClient() {
       } catch {}
     }
 
-    // ⛔ 미연동/실패 시에만 미리듣기
+    // 미연동/실패 시에만 미리듣기
     let preview = song.preview_url ?? null
     let cover = song.image ?? null
     let uri = songUri ?? null
@@ -407,7 +408,7 @@ export default function RecommendClient() {
     } finally { setBusy(false) }
   }
 
-  // Feedback (변경 없음)
+  // Feedback
   const [feedbackMap, setFeedbackMap] = useState<Record<string | number, 1 | -1 | 0>>({})
   const sendFeedback = useCallback(
     async (musicId: string | number, value: 1 | -1) => {
@@ -488,14 +489,226 @@ export default function RecommendClient() {
   const safeImageSrc = uploadedImage || "/placeholder.svg"
   const currentSongIndex = currentSong ? recommendations.findIndex((s) => s.id === currentSong.id) : 0
 
+  const isEmpty = !currentSong && recommendations.length === 0
+
   return (
-    // ... ⬇⬇ 기존 JSX 그대로 (변경 없음)
-    // ⛔ JSX는 질문에 올려준 그대로 두시면 됩니다
-    // (위에서 로직만 바뀌었어요)
-    <div className="fixed inset-0 bg-black">
-      {/* 상단/배경/컨트롤/리스트 JSX는 기존 그대로 */}
-      {/* ... (생략: 질문의 JSX 그대로 사용) */}
-      {/* 코드가 너무 길어 생략했지만, 위에서 준 RecommendClient의 JSX를 유지하세요 */}
+    <div className="fixed inset-0 bg-black relative">
+      {/* 상단 진행바 */}
+      <div className="absolute top-0 left-0 right-0 z-50 flex gap-1 p-2">
+        {recommendations.map((_, idx) => (
+          <div key={idx} className="flex-1 h-0.5 bg-white/30 rounded-full overflow-hidden">
+            <div
+              className={`h-full bg-white transition-all duration-300 ${
+                idx < currentSongIndex ? "w-full" : idx === currentSongIndex ? "w-1/2" : "w-0"
+              }`}
+            />
+          </div>
+        ))}
+      </div>
+
+      {/* Top header */}
+      <div className="absolute top-0 left-0 right-0 z-50 bg-gradient-to-b from-black/80 to-transparent pt-10 px-4 pb-6">
+        <div className="flex items-center justify-between mb-3">
+          <button
+            onClick={handleClose}
+            className="w-8 h-8 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center"
+          >
+            <X className="w-5 h-5 text-white" />
+          </button>
+          <div className="flex-1 mx-3">
+            {currentSong && (
+              <div className="text-white">
+                <p className="text-sm font-semibold truncate">{currentSong.title}</p>
+                <p className="text-xs text-white/80 truncate">{currentSong.artist}</p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Background image (항상 가장 아래 레이어) */}
+      <div className="absolute inset-0 z-0 pointer-events-none">
+        <Image src={safeImageSrc || "/placeholder.svg"} alt="Photo" fill className="object-cover" unoptimized />
+        <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-black/60" />
+      </div>
+
+      {/* Bottom controls */}
+      <div className="absolute bottom-0 left-0 right-0 z-50 bg-gradient-to-t from-black/90 to-transparent px-4 pb-8 pt-12">
+        {currentSong && (
+          <div className="space-y-4">
+            <button
+              onClick={() => setShowPlaylist(!showPlaylist)}
+              className="w-full flex items-center justify-center gap-2 py-2 text-white/80 hover:text-white transition-colors"
+            >
+              <Music className="w-4 h-4" />
+              <span className="text-sm font-medium truncate">추천{recommendations.length}곡 리스트</span>
+              <ChevronUp className={`w-4 h-4 transition-transform ${showPlaylist ? "rotate-180" : ""}`} />
+            </button>
+
+            {/* Progress bar */}
+            <div className="space-y-1">
+              <input
+                type="range"
+                min={0}
+                max={duration}
+                value={currentTime}
+                onChange={(e) => {
+                  const v = Number(e.target.value)
+                  setCurrentTime(v)
+                  if (source === "preview" && audioRef.current) audioRef.current.currentTime = v
+                }}
+                className="w-full h-1 bg-white/20 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
+              />
+              <div className="flex justify-between text-xs text-white/70">
+                <span>{formatTime(currentTime)}</span>
+                <span>{formatTime(duration)}</span>
+              </div>
+            </div>
+
+            {/* Player controls */}
+            <div className="flex items-center justify-center gap-6">
+              <Button
+                size="icon"
+                variant="ghost"
+                disabled={busy}
+                onClick={playPreviousSong}
+                className="w-12 h-12 rounded-full bg-white/10 hover:bg-white/20 text-white"
+              >
+                <SkipBack className="w-5 h-5" />
+              </Button>
+
+              <Button
+                size="icon"
+                disabled={busy}
+                onClick={togglePlay}
+                className="w-16 h-16 rounded-full bg-white hover:bg-white/90 text-black"
+              >
+                {isPlaying ? <Pause className="w-7 h-7" /> : <Play className="w-7 h-7 ml-0.5" />}
+              </Button>
+
+              <Button
+                size="icon"
+                variant="ghost"
+                disabled={busy}
+                onClick={playNextSong}
+                className="w-12 h-12 rounded-full bg-white/10 hover:bg-white/20 text-white"
+              >
+                <SkipForward className="w-5 h-5" />
+              </Button>
+            </div>
+
+            {/* Feedback buttons */}
+            <div className="flex gap-3">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => handleFeedback(1)}
+                className={`flex-1 h-11 rounded-full backdrop-blur-sm ${
+                  feedbackMap[currentSong.id] === 1 ? "bg-white text-black" : "bg-white/10 text-white hover:bg-white/20"
+                }`}
+              >
+                <ThumbsUp className="w-4 h-4 mr-2" />
+                좋아요
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => handleFeedback(-1)}
+                className={`flex-1 h-11 rounded-full backdrop-blur-sm ${
+                  feedbackMap[currentSong.id] === -1
+                    ? "bg-white text-black"
+                    : "bg-white/10 text-white hover:bg-white/20"
+                }`}
+              >
+                <ThumbsDown className="w-4 h-4 mr-2" />
+                별로예요
+              </Button>
+            </div>
+
+            {/* Save button */}
+            {selectedSongId && photoId && (
+              <Button
+                onClick={goEditOnly}
+                className="w-full h-12 rounded-full bg-white text-black hover:bg-white/90 font-medium"
+              >
+                저장 및 편집하기
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* 빈 상태 가드: 데이터가 없을 때도 UI가 보이도록 */}
+      {isEmpty && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center text-white gap-4">
+          <p className="opacity-80 text-sm">추천을 불러오는 중이거나 결과가 없습니다.</p>
+          <div className="flex gap-2">
+            <Button onClick={handleRefresh} className="bg-white text-black hover:bg-white/90">다시 불러오기</Button>
+            <Button variant="ghost" onClick={handleClose} className="text-white">닫기</Button>
+          </div>
+        </div>
+      )}
+
+      {/* Playlist drawer */}
+      <div
+        className={`fixed inset-x-0 bottom-0 z-50 bg-black/95 backdrop-blur-xl rounded-t-3xl transition-transform duration-300 ${
+          showPlaylist ? "translate-y-0" : "translate-y-full"
+        }`}
+        style={{ maxHeight: "70vh" }}
+      >
+        <div className="p-4">
+          <div className="w-12 h-1 bg-white/30 rounded-full mx-auto mb-4" />
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-white font-semibold text-lg">플레이리스트</h3>
+            <button onClick={() => setShowPlaylist(false)} className="text-white/60 hover:text-white">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="overflow-y-auto" style={{ maxHeight: "calc(70vh - 100px)" }}>
+            <div className="space-y-2">
+              {recommendations.map((song) => (
+                <button
+                  key={song.id}
+                  onClick={() => onClickSong(song)}
+                  disabled={busy}
+                  className={`w-full flex items-center gap-3 p-3 rounded-xl transition-colors ${
+                    currentSong?.id === song.id ? "bg-white/20" : "bg-white/5 hover:bg-white/10 active:bg-white/15"
+                  }`}
+                >
+                  <div className="relative w-12 h-12 rounded-lg overflow-hidden flex-shrink-0 bg-white/10">
+                    {song.image ? (
+                      <Image
+                        src={song.image || "/placeholder.svg"}
+                        alt={song.title}
+                        fill
+                        className="object-cover"
+                        unoptimized
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center">
+                        <Music className="w-6 h-6 text-white/40" />
+                      </div>
+                    )}
+                    {currentSong?.id === song.id && (
+                      <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                        {isPlaying ? <Pause className="w-5 h-5 text-white" /> : <Play className="w-5 h-5 text-white" />}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex-1 text-left min-w-0">
+                    <p className="text-white font-medium text-sm truncate">{song.title}</p>
+                    <p className="text-white/60 text-xs truncate">{song.artist}</p>
+                  </div>
+                  <span className="text-white/40 text-xs flex-shrink-0">{song.duration}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Overlay to close playlist when clicking outside */}
+      {showPlaylist && <div className="fixed inset-0 bg-black/20 z-40" onClick={() => setShowPlaylist(false)} />}
     </div>
   )
 }
