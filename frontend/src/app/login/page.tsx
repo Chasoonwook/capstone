@@ -1,3 +1,4 @@
+// src/app/login/page.tsx
 "use client";
 
 import type React from "react";
@@ -10,15 +11,13 @@ import { Separator } from "@/components/ui/separator";
 import { Music, Eye, EyeOff, Mail, Lock } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { API_BASE, authHeaders } from "@/lib/api"; // ✅ authHeaders 사용(없으면 지워도 동작)
+import { API_BASE, authHeaders } from "@/lib/api";
 
-type LoginForm = {
-  email: string;
-  password: string;
-};
+type LoginForm = { email: string; password: string };
 
 type LoginUser = {
-  id: number | string;
+  id?: number | string;
+  user_id?: number | string; // 백엔드에 따라 존재할 수 있음
   email: string;
   name: string;
 };
@@ -36,6 +35,16 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
 
 const hasErrorMessage = (v: unknown): v is { error: string } =>
   isRecord(v) && typeof v.error === "string";
+
+/** 다양한 모양의 id에서 "정수(>=1)"만 추출 */
+function pickNumericId(u?: LoginUser | null): number | null {
+  const toNum = (v: unknown) => {
+    const n = typeof v === "string" ? Number(v) : typeof v === "number" ? v : NaN;
+    return Number.isFinite(n) && n >= 1 ? n : null;
+  };
+  if (!u) return null;
+  return toNum(u.user_id) ?? toNum(u.id);
+}
 
 export default function LoginPage() {
   const [formData, setFormData] = useState<LoginForm>({ email: "", password: "" });
@@ -55,7 +64,7 @@ export default function LoginPage() {
     setError(null);
 
     try {
-      // 1) 로그인
+      // 1) 로그인 호출
       const res = await fetch(`${API_BASE}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -81,37 +90,48 @@ export default function LoginPage() {
 
       const { token, user } = data;
 
-      // 2) 세션 저장
-      const uid = String(user.id);
+      // 2) 숫자형 user_id 확정 및 필수 저장
+      const numericUid = pickNumericId(user);
+      if (numericUid == null) {
+        throw new Error("로그인 응답에 사용자 ID가 없습니다.");
+      }
+
+      // 필수 세션 저장 (일기 작성 페이지에서 사용)
       localStorage.setItem("token", token);
-      localStorage.setItem("uid", uid);
+      localStorage.setItem("account_id", String(numericUid)); // ✅ 핵심: 숫자 ID 저장
+      localStorage.setItem("uid", String(numericUid));        // (기존 호환)
       localStorage.setItem("email", user.email);
       localStorage.setItem("name", user.name);
+      try {
+        // 참고용 사용자 전체 객체도 저장(필요 시)
+        localStorage.setItem("auth_user", JSON.stringify({ ...user, user_id: numericUid }));
+      } catch {}
 
-      // 3) 로그인 응답만 믿지 말고, 항상 서버의 최신 상태 재조회
+      // 3) 서버에서 최신 사용자 상태(장르 세팅 여부 등) 재조회 (있을 때만)
       let genreDone = false;
       try {
         const meRes = await fetch(`${API_BASE}/api/users/me`, {
-          headers: { "X-User-Id": uid, ...(authHeaders?.() as HeadersInit) },
-          cache: "no-store", // ✅ 반드시 최신값
+          headers: { "X-User-Id": String(numericUid), ...(authHeaders?.() as HeadersInit) },
+          cache: "no-store",
+          credentials: "include",
         });
         if (meRes.ok) {
           const me = await meRes.json();
           genreDone = Boolean(me?.genre_setup_complete);
         }
       } catch {
-        // 무시하고 아래 폴백으로
+        // 무시하고 아래 폴백 사용
       }
 
-      // 4) 그래도 못 받으면 로그인 응답의 보조 플래그로 폴백
+      // 4) 폴백 플래그 사용
       if (!genreDone) {
         genreDone = Boolean(data.genre_setup_complete ?? data.onboarding_done);
       }
 
-      // 5) (선택) 쿠키
+      // 5) (선택) 쿠키로도 기록
       document.cookie = `onboardingDone=${genreDone ? "1" : "0"}; path=/; max-age=31536000`;
 
-      // 6) 최종 라우팅
+      // 6) 라우팅
       router.replace(genreDone ? "/" : "/onboarding/genres");
     } catch (err: unknown) {
       const msg =
@@ -205,7 +225,6 @@ export default function LoginPage() {
 
             <div className="grid grid-cols-2 gap-4">
               <Button variant="outline" onClick={() => handleSocialLogin("Google")} className="w-full">
-                {/* Google 아이콘 */}
                 <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24">
                   <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
                   <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
@@ -219,7 +238,6 @@ export default function LoginPage() {
                 onClick={() => handleSocialLogin("Kakao")}
                 className="w-full bg-yellow-400 hover:bg-yellow-500 text-black border-yellow-400"
               >
-                {/* Kakao 아이콘 */}
                 <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M12 3c5.799 0 10.5 3.664 10.5 8.185 0 4.52-4.701 8.184-10.5 8.184a13.5 13.5 0 0 1-1.727-.11l-4.408 2.883c-.501.265-.678.236-.472-.413l.892-3.678c-2.88-1.46-4.785-3.99-4.785-6.866C1.5 6.665 6.201 3 12 3z" />
                 </svg>
