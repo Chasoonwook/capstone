@@ -105,8 +105,6 @@ const mounts = [
   ["/api", "routes/onboarding"],
   ["/api/history", "routes/history"],
   ["/api/music-requests", "routes/musicRequests"],
-  // ✅ [수정] 위에서 직접 연결했으므로 이 배열에서는 spotify 라우트를 삭제합니다.
-  // ["/api/spotify", "routes/spotify"], 
   ["/api", "routes/feedback"],
   ["/api", "routes/stickers"],
   ["/api/diaries", "routes/diaries"],

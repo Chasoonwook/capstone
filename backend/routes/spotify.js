@@ -1,187 +1,145 @@
 // routes/spotify.js
-
-console.log("[spotify] router loaded v4 - final fix");
-
 const express = require("express");
+const axios = require("axios");
+const crypto = require("crypto");
+
 const router = express.Router();
-const fetch = global.fetch;
 
 const CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;
 const CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
-const REDIRECT_URI = "https://capstone-app-back.onrender.com/api/spotify/callback";
-const FRONTEND_URI = "https://capstone-front-tau.vercel.app/";
+const REDIRECT_URI = process.env.SPOTIFY_REDIRECT_URI; // ex) https://capstone-app-back.onrender.com/api/spotify/callback
+const FRONT_BASE  = process.env.FRONT_BASE || "https://capstone-front-tau.vercel.app";
 
-// ✅ [수정] 스포티파이 API 공식 주소들
-const SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token";
-const SPOTIFY_AUTHORIZE_URL = "https://accounts.spotify.com/authorize";
-const SPOTIFY_SEARCH_URL = "api.spotify.com/v1/search";
+const CK_ACCESS  = "sp_access";
+const CK_REFRESH = "sp_refresh";
 
-// 앱 토큰(검색용) 캐시
-let appToken = null;
-let appTokenExp = 0;
+const SCOPE = [
+  "streaming",
+  "user-read-email",
+  "user-read-private",
+  "user-read-playback-state",
+  "user-modify-playback-state",
+].join(" ");
 
-async function getAppToken() {
-  const now = Date.now();
-  if (appToken && now < appTokenExp - 5000) return appToken;
+// PKCE helpers
+const b64url = (buf) => buf.toString("base64").replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+const makeVerifier = () => b64url(crypto.randomBytes(32));
+const makeChallenge = (v) => b64url(crypto.createHash("sha256").update(v).digest());
 
-  const basic = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64");
-  const body = new URLSearchParams({ grant_type: "client_credentials" });
+// sanity check route
+router.get("/ping", (_req,res)=>res.json({ok:true}));
 
-  try {
-    // ✅ [수정] 토큰 발급 주소 변경
-    const r = await fetch(SPOTIFY_TOKEN_URL, {
-      method: "POST",
-      headers: { Authorization: `Basic ${basic}`, "Content-Type": "application/x-www-form-urlencoded" },
-      body,
-    });
-    const json = await r.json();
-    if (!r.ok) {
-      console.error("[spotify] app token error:", r.status, json);
-      throw new Error(`spotify token ${r.status}`);
-    }
-    appToken = json.access_token;
-    appTokenExp = now + (json.expires_in || 3600) * 1000;
-    return appToken;
-  } catch (error) {
-    console.error("[spotify] Failed to get app token:", error);
-    throw error;
-  }
-}
+// 1) 권한 페이지로 리다이렉트
+router.get("/authorize", (req, res) => {
+  const returnTo = req.query.return || "/";
+  const state = b64url(Buffer.from(JSON.stringify({ r: returnTo })));
 
-router.get("/search", async (req, res) => {
-  try {
-    const q = String(req.query.query || req.query.q || "").trim();
-    if (!q) return res.status(400).json({ error: "missing query" });
-    
-    const token = await getAppToken();
-    
-    // ✅ [수정] 검색 API 주소 및 파라미터 생성 방식 변경
-    const searchUrl = new URL(SPOTIFY_SEARCH_URL);
-    searchUrl.search = new URLSearchParams({
-      type: "track",
-      q,
-      limit: "5",
-      market: "KR",
-    }).toString();
+  const verifier = makeVerifier();
+  const challenge = makeChallenge(verifier);
+  res.cookie("sp_pkce", verifier, {
+    httpOnly: true, secure: true, sameSite: "none", path: "/", maxAge: 5*60*1000
+  });
 
-    const r = await fetch(searchUrl.toString(), { headers: { Authorization: `Bearer ${token}` } });
-    const json = await r.json();
-    if (!r.ok) {
-      console.error("[spotify/search] error:", r.status, json);
-      return res.status(r.status).json({ error: "spotify search failed" });
-    }
-    
-    const items = (json?.tracks?.items || []).map((t) => ({
-      id: t.id,
-      name: t.name,
-      artist: t.artists.map(a => a.name).join(', '),
-      image: t.album?.images?.[0]?.url || null,
-      uri: t.uri
-    }));
-    
-    res.json({ items });
-  } catch (e) {
-    console.error("[spotify/search] exception:", e);
-    res.status(500).json({ error: "server error" });
-  }
-});
-
-router.get('/login', (req, res) => {
-  const scope = 'streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state';
-  
-  // ✅ [수정] 로그인 인증 주소 변경
-  const authUrl = new URL(SPOTIFY_AUTHORIZE_URL);
-  authUrl.searchParams.append('response_type', 'code');
-  authUrl.searchParams.append('client_id', CLIENT_ID);
-  authUrl.searchParams.append('scope', scope);
-  authUrl.searchParams.append('redirect_uri', REDIRECT_URI);
-  
-  if (req.query.state) {
-    authUrl.searchParams.append('state', req.query.state);
-  }
-  
-  res.redirect(authUrl.toString());
-});
-
-router.get('/callback', async (req, res) => {
-  const code = req.query.code || null;
-  if (!code) {
-    return res.redirect(`${FRONTEND_URI}/spotify-callback?error=no_code`);
-  }
-
-  const basic = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
-  const body = new URLSearchParams({
-    grant_type: 'authorization_code',
-    code: code,
+  const p = new URLSearchParams({
+    client_id: String(CLIENT_ID),
+    response_type: "code",
     redirect_uri: REDIRECT_URI,
+    scope: SCOPE,
+    state,
+    code_challenge_method: "S256",
+    code_challenge: challenge,
   });
 
+  res.redirect(`https://accounts.spotify.com/authorize?${p.toString()}`);
+});
+
+// 2) 콜백: code -> 토큰 교환 후 쿠키 저장
+router.get("/callback", async (req, res) => {
   try {
-    // ✅ [수정] 토큰 교환 주소 변경
-    const response = await fetch(SPOTIFY_TOKEN_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Basic ${basic}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: body,
+    const { code, state } = req.query;
+    if (!code) return res.status(400).send("No code");
+
+    let returnTo = "/";
+    try {
+      if (state) {
+        const parsed = JSON.parse(Buffer.from(String(state), "base64url").toString("utf8"));
+        if (parsed?.r) returnTo = parsed.r;
+      }
+    } catch {}
+
+    const verifier = req.cookies?.sp_pkce;
+    if (!verifier) return res.status(400).send("Missing PKCE verifier");
+
+    const body = new URLSearchParams({
+      grant_type: "authorization_code",
+      code: String(code),
+      redirect_uri: REDIRECT_URI,
+      client_id: String(CLIENT_ID),
+      code_verifier: verifier,
     });
 
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.error_description || 'Failed to fetch token');
+    const tokenRes = await axios.post("https://accounts.spotify.com/api/token", body.toString(), {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    });
+
+    const { access_token, refresh_token, expires_in } = tokenRes.data || {};
+
+    const common = { httpOnly: true, secure: true, sameSite: "none", path: "/" };
+    res.cookie(CK_ACCESS, access_token,  { ...common, maxAge: (expires_in||3600)*1000 });
+    if (refresh_token) {
+      res.cookie(CK_REFRESH, refresh_token, { ...common, maxAge: 30*24*3600*1000 });
     }
+    res.clearCookie("sp_pkce", { path: "/" });
 
-    const { access_token, refresh_token, expires_in } = data;
-
-    const queryParams = new URLSearchParams({
-      access_token,
-      refresh_token,
-      expires_in,
-    });
-    res.redirect(`${FRONTEND_URI}/spotify-callback?${queryParams.toString()}`);
-
-  } catch (error) {
-    console.error('[spotify/callback] error:', error);
-    res.redirect(`${FRONTEND_URI}/spotify-callback?error=token_exchange_failed`);
+    res.redirect(`${FRONT_BASE}${returnTo}${returnTo.includes("?") ? "&" : "?"}spotify=connected`);
+  } catch (err) {
+    console.error("[spotify/callback]", err.response?.data || err.message);
+    res.status(500).send("Spotify authentication failed");
   }
 });
 
-router.post('/refresh', async (req, res) => {
-  const { refresh_token } = req.body;
-  if (!refresh_token) {
-    return res.status(400).json({ error: 'Refresh token is required' });
-  }
-
-  const basic = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
-  const body = new URLSearchParams({
-    grant_type: 'refresh_token',
-    refresh_token: refresh_token,
-  });
-
+// 3) 토큰 리프레시
+router.get("/refresh", async (req, res) => {
   try {
-    // ✅ [수정] 토큰 갱신 주소 변경
-    const response = await fetch(SPOTIFY_TOKEN_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Basic ${basic}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: body,
+    const refresh = req.cookies?.[CK_REFRESH];
+    if (!refresh) return res.status(401).json({ error: "NO_REFRESH_TOKEN" });
+
+    const body = new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refresh,
+      client_id: String(CLIENT_ID),
+      client_secret: String(CLIENT_SECRET),
     });
 
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.error_description || 'Failed to refresh token');
-    }
-
-    res.json({
-      access_token: data.access_token,
-      expires_in: data.expires_in,
+    const tokenRes = await axios.post("https://accounts.spotify.com/api/token", body.toString(), {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
     });
-  } catch (error) {
-    console.error('[spotify/refresh] error:', error);
-    res.status(500).json({ error: 'Failed to refresh token' });
+
+    const { access_token, expires_in } = tokenRes.data || {};
+    res.cookie(CK_ACCESS, access_token, {
+      httpOnly: true, secure: true, sameSite: "none", path: "/", maxAge: (expires_in||3600)*1000
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[spotify/refresh]", err.response?.data || err.message);
+    res.status(500).json({ error: "REFRESH_FAILED" });
+  }
+});
+
+// 4) /me 프록시(연결 상태 확인용)
+router.get("/me", async (req, res) => {
+  try {
+    const access = req.cookies?.[CK_ACCESS];
+    if (!access) return res.status(401).json({ error: "NO_ACCESS_TOKEN" });
+
+    const r = await axios.get("https://api.spotify.com/v1/me", {
+      headers: { Authorization: `Bearer ${access}` },
+    });
+    res.json(r.data);
+  } catch (err) {
+    const status = err.response?.status || 500;
+    res.status(status).json(err.response?.data || { error: "SPOTIFY_ME_FAILED" });
   }
 });
 
