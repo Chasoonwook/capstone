@@ -8,9 +8,6 @@ const cookieParser = require("cookie-parser");
 require("dotenv").config({ debug: true });
 const pool = require("./db");
 
-// ✅ [추가] spotify.js 라우터 파일을 직접 불러옵니다.
-const spotifyRoutes = require('./routes/spotify');
-
 const app = express();
 app.set("trust proxy", 1);
 
@@ -19,7 +16,7 @@ app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-// ---- CORS (기존 코드와 동일, 수정 없음)
+// ---- CORS
 const normalize = (s) => (s ? s.replace(/\/+$/, "") : s);
 const envAllow = (process.env.CORS_ORIGINS || "")
   .split(",")
@@ -47,12 +44,11 @@ const corsOptions = {
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: [ "Content-Type", "Authorization", "X-Requested-With", "x-user-id", "x-preferred-genres" ],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "x-user-id", "x-preferred-genres"],
   optionsSuccessStatus: 204,
 };
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
-
 
 // ---- health
 app.get("/", (_req, res) => res.send("정상작동"));
@@ -66,11 +62,47 @@ app.get("/health", async (_req, res) => {
   }
 });
 
+// ===== 🔎 Spotify 라우터 마운트 (가장 먼저, 확실하게)
+let SPOTIFY_MOUNTED = false;
+let SPOTIFY_FILE_EXISTS = false;
+try {
+  const spotifyPath = path.join(__dirname, "routes/spotify.js");
+  SPOTIFY_FILE_EXISTS = fs.existsSync(spotifyPath);
+  if (!SPOTIFY_FILE_EXISTS) {
+    console.error(`[router] routes/spotify.js 파일이 없습니다: ${spotifyPath}`);
+  } else {
+    const spotifyRoutes = require("./routes/spotify");
+    if (typeof spotifyRoutes !== "function") {
+      // Express Router는 함수여야 함
+      throw new Error("routes/spotify export가 함수가 아닙니다 (module.exports = router 필요)");
+    }
+    // 히트 로깅 미들웨어 + 라우터
+    app.use("/api/spotify", (req, _res, next) => {
+      console.log(`[hit] /api/spotify ${req.method} ${req.originalUrl}`);
+      next();
+    }, spotifyRoutes);
+    SPOTIFY_MOUNTED = true;
+    console.log("[router] mounted: /api/spotify (routes/spotify.js)");
+  }
+} catch (e) {
+  console.error("[router] FAILED to mount /api/spotify:", e && (e.stack || e.message || e));
+}
 
-// ✅ [수정] '/api/spotify' 경로를 다른 모든 라우터보다 먼저 직접 연결합니다.
-// 이렇게 순서를 위로 올려야 다른 코드에 의해 무시되거나 충돌하는 문제를 원천적으로 방지합니다.
-app.use('/api/spotify', spotifyRoutes);
-
+// 🔧 즉시 진단용 라우트
+app.get("/debug/spotify", (_req, res) => {
+  res.json({
+    mounted: SPOTIFY_MOUNTED,
+    file_exists: SPOTIFY_FILE_EXISTS,
+    cwd: process.cwd(),
+    __dirname,
+    env: {
+      has_CLIENT_ID: !!process.env.SPOTIFY_CLIENT_ID,
+      has_CLIENT_SECRET: !!process.env.SPOTIFY_CLIENT_SECRET,
+      REDIRECT_URI: process.env.SPOTIFY_REDIRECT_URI || null,
+      FRONT_BASE: process.env.FRONT_BASE || null,
+    },
+  });
+});
 
 // ---- router loader (기존 코드)
 function loadRoute(relPath) {
@@ -120,9 +152,6 @@ for (const [base, rel] of mounts) {
 }
 console.log("[router] mounted:", mounted);
 
-
-// ---- 이하 코드는 수정할 필요 없습니다 ---
-
 // ---- debug routes
 function collectRoutes(layer, prefix = "") {
   const out = [];
@@ -150,6 +179,7 @@ app.get("/debug/routes", (_req, res) => {
         .filter((r) => r.path)
         .sort((a, b) => (a.path + a.method).localeCompare(b.path + b.method)),
       mounted,
+      spotifyMounted: SPOTIFY_MOUNTED,
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -162,7 +192,7 @@ app.get("/debug/db", async (_req, res) => {
     const who = await pool.query(
       "SELECT current_database() AS db, current_schema() AS schema, current_user AS usr"
     );
-  const result = { whoami: who.rows[0] };
+    const result = { whoami: who.rows[0] };
     res.json(result);
   } catch (e) {
     res.status(500).json({ error: String(e) });

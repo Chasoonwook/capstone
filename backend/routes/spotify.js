@@ -26,10 +26,10 @@ const b64url = (buf) => buf.toString("base64").replace(/\+/g,"-").replace(/\//g,
 const makeVerifier = () => b64url(crypto.randomBytes(32));
 const makeChallenge = (v) => b64url(crypto.createHash("sha256").update(v).digest());
 
-// sanity check route
-router.get("/ping", (_req,res)=>res.json({ok:true}));
+// sanity check
+router.get("/ping", (_req, res) => res.json({ ok: true, route: "/api/spotify/ping" }));
 
-// 1) 권한 페이지로 리다이렉트
+// authorize
 router.get("/authorize", (req, res) => {
   const returnTo = req.query.return || "/";
   const state = b64url(Buffer.from(JSON.stringify({ r: returnTo })));
@@ -37,7 +37,7 @@ router.get("/authorize", (req, res) => {
   const verifier = makeVerifier();
   const challenge = makeChallenge(verifier);
   res.cookie("sp_pkce", verifier, {
-    httpOnly: true, secure: true, sameSite: "none", path: "/", maxAge: 5*60*1000
+    httpOnly: true, secure: true, sameSite: "none", path: "/", maxAge: 5 * 60 * 1000,
   });
 
   const p = new URLSearchParams({
@@ -53,7 +53,7 @@ router.get("/authorize", (req, res) => {
   res.redirect(`https://accounts.spotify.com/authorize?${p.toString()}`);
 });
 
-// 2) 콜백: code -> 토큰 교환 후 쿠키 저장
+// callback
 router.get("/callback", async (req, res) => {
   try {
     const { code, state } = req.query;
@@ -83,11 +83,11 @@ router.get("/callback", async (req, res) => {
     });
 
     const { access_token, refresh_token, expires_in } = tokenRes.data || {};
-
     const common = { httpOnly: true, secure: true, sameSite: "none", path: "/" };
-    res.cookie(CK_ACCESS, access_token,  { ...common, maxAge: (expires_in||3600)*1000 });
+
+    res.cookie(CK_ACCESS, access_token, { ...common, maxAge: (expires_in || 3600) * 1000 });
     if (refresh_token) {
-      res.cookie(CK_REFRESH, refresh_token, { ...common, maxAge: 30*24*3600*1000 });
+      res.cookie(CK_REFRESH, refresh_token, { ...common, maxAge: 30 * 24 * 3600 * 1000 });
     }
     res.clearCookie("sp_pkce", { path: "/" });
 
@@ -98,7 +98,7 @@ router.get("/callback", async (req, res) => {
   }
 });
 
-// 3) 토큰 리프레시
+// refresh
 router.get("/refresh", async (req, res) => {
   try {
     const refresh = req.cookies?.[CK_REFRESH];
@@ -117,7 +117,7 @@ router.get("/refresh", async (req, res) => {
 
     const { access_token, expires_in } = tokenRes.data || {};
     res.cookie(CK_ACCESS, access_token, {
-      httpOnly: true, secure: true, sameSite: "none", path: "/", maxAge: (expires_in||3600)*1000
+      httpOnly: true, secure: true, sameSite: "none", path: "/", maxAge: (expires_in || 3600) * 1000,
     });
 
     res.json({ ok: true });
@@ -127,7 +127,7 @@ router.get("/refresh", async (req, res) => {
   }
 });
 
-// 4) /me 프록시(연결 상태 확인용)
+// me
 router.get("/me", async (req, res) => {
   try {
     const access = req.cookies?.[CK_ACCESS];
