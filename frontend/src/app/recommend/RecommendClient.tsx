@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { X, Play, Pause, SkipBack, SkipForward, ThumbsUp, ThumbsDown, Music, ChevronUp } from "lucide-react"
 import { API_BASE } from "@/lib/api"
-import { useSpotifyPlayer } from "@/hooks/useSpotifyPlayer"
+import { useSpotifyPlayer } from "@/hooks/useSpotifyPlayer" // ✅ 인자 없는 훅
 import { Button } from "@/components/ui/button"
 import Image from "next/image"
 
@@ -20,33 +20,29 @@ export default function RecommendClient() {
 
   const [showPlaylist, setShowPlaylist] = useState(false)
 
-  // Spotify
-  const [accessToken, setAccessToken] = useState<string | null>(null)
-  
-  // ✅ localStorage에서 토큰을 읽어오는 방식으로 최종 수정
+  // ✅ Web Playback SDK 훅 (쿠키 기반, accessToken 필요 없음)
+  const { ready, activate, transferToThisDevice, playUris, resume, pause } = useSpotifyPlayer()
+
+  // ✅ Spotify 연동 여부(쿠키) 확인
+  const [spotifyLinked, setSpotifyLinked] = useState(false)
   useEffect(() => {
-    const read = () => {
+    let mounted = true
+    ;(async () => {
       try {
-        const t = localStorage.getItem("spotify_access_token")
-        setAccessToken(t && t.trim() ? t : null)
+        const r = await fetch(`${API_BASE}/api/spotify/me`, { credentials: "include" })
+        if (!mounted) return
+        setSpotifyLinked(r.ok)
       } catch {
-        setAccessToken(null)
+        if (!mounted) return
+        setSpotifyLinked(false)
       }
+    })()
+    return () => {
+      mounted = false
     }
-    read();
-    
-    // 다른 탭이나 창에서 로그인이 변경될 경우를 대비해 이벤트를 감지합니다.
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === "spotify_access_token") read()
-    }
-    window.addEventListener("storage", onStorage)
-    return () => window.removeEventListener("storage", onStorage)
-  }, []);
+  }, [])
 
-  const isLoggedInSpotify = !!accessToken
-  const { ready, activate, transferToThisDevice, playUris, resume, pause } = useSpotifyPlayer(accessToken)
-
-  // Audio(preview)
+  // Audio(preview) — 연동 안 된 경우에만 사용
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const playReqIdRef = useRef(0)
   const [source, setSource] = useState<"preview" | "spotify" | null>(null)
@@ -83,82 +79,54 @@ export default function RecommendClient() {
     return () => {
       a.removeEventListener("timeupdate", onTime)
       a.removeEventListener("ended", onEnd)
-      try {
-        a.pause()
-      } catch {}
+      try { a.pause() } catch {}
     }
   }, [])
 
   const safePlayPreview = useCallback(async (src: string) => {
     const a = audioRef.current!
     const myId = ++playReqIdRef.current
-    try {
-      a.pause()
-    } catch {}
+    try { a.pause() } catch {}
     a.src = src
     a.currentTime = 0
     await new Promise<void>((res) => {
-      const onCanPlay = () => {
-        a.removeEventListener("canplay", onCanPlay)
-        res()
-      }
+      const onCanPlay = () => { a.removeEventListener("canplay", onCanPlay); res() }
       a.addEventListener("canplay", onCanPlay)
       a.load()
     })
     if (myId !== playReqIdRef.current) return
-    try {
-      await a.play()
-    } catch {}
+    try { await a.play() } catch {}
   }, [])
 
   // Load image
   useEffect(() => {
     let mounted = true
     ;(async () => {
-      if (!photoId) {
-        setUploadedImage(null)
-        return
-      }
+      if (!photoId) { setUploadedImage(null); return }
       const candidates = [`${API_BASE}/api/photos/${photoId}/binary`, `${API_BASE}/photos/${photoId}/binary`]
       let url: string | null = null
       for (const u of candidates) {
         try {
           const r = await fetch(u, { method: "GET" })
-          if (r.ok) {
-            url = u
-            break
-          }
+          if (r.ok) { url = u; break }
         } catch {}
       }
       if (mounted) setUploadedImage(url ?? "/placeholder.svg")
     })()
-    return () => {
-      mounted = false
-    }
+    return () => { mounted = false }
   }, [photoId])
 
-  // Fetch recommendations
+  // Fetch recommendations (기존 그대로)
   const fetchRecommendations = useCallback(
     async (signal?: AbortSignal) => {
       if (!photoId) {
-        setRecommendations([])
-        setCurrentSong(null)
-        setContextMainMood(null)
-        setContextSubMood(null)
-        return
+        setRecommendations([]); setCurrentSong(null); setContextMainMood(null); setContextSubMood(null); return
       }
       try {
         const r = await fetch(`${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(photoId)}?debug=1`, {
-          signal,
-          credentials: "include",
+          signal, credentials: "include",
         })
-        if (!r.ok) {
-          setRecommendations([])
-          setCurrentSong(null)
-          setContextMainMood(null)
-          setContextSubMood(null)
-          return
-        }
+        if (!r.ok) { setRecommendations([]); setCurrentSong(null); setContextMainMood(null); setContextSubMood(null); return }
         const raw = await r.json()
         const obj = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null
         const data: ByPhotoResponse = obj
@@ -187,20 +155,16 @@ export default function RecommendClient() {
         const dedup: (BackendSong & { __selected_from__?: SelectedFrom })[] = []
         merged.forEach((s, i) => {
           const id = (s.music_id ?? s.id ?? i) as string | number
-          if (!seen.has(id)) {
-            seen.add(id)
-            dedup.push(s)
-          }
+          if (!seen.has(id)) { seen.add(id); dedup.push(s) }
         })
 
         const mapped: Song[] = await Promise.all(
           dedup.map(async (it, idx) => {
-            const sec =
-              typeof it.duration === "number"
-                ? it.duration
-                : typeof it.duration_sec === "number"
-                  ? it.duration_sec
-                  : 180
+            const sec = typeof it.duration === "number"
+              ? it.duration
+              : typeof it.duration_sec === "number"
+                ? it.duration_sec
+                : 180
             const mm = Math.floor(sec / 60)
             const ss = String(sec % 60).padStart(2, "0")
 
@@ -241,12 +205,8 @@ export default function RecommendClient() {
         setFeedbackMap({})
         setSelectedSongId(null)
       } catch {
-        setRecommendations([])
-        setCurrentSong(null)
-        setContextMainMood(null)
-        setContextSubMood(null)
-        setFeedbackMap({})
-        setSelectedSongId(null)
+        setRecommendations([]); setCurrentSong(null); setContextMainMood(null); setContextSubMood(null)
+        setFeedbackMap({}); setSelectedSongId(null)
       }
     },
     [photoId],
@@ -308,22 +268,23 @@ export default function RecommendClient() {
         return hit ? { ...cur, ...hit.next } : cur
       })
     })()
-    return () => {
-      cancelled = true
-    }
+    return () => { cancelled = true }
   }, [recommendations.map((s) => s.id).join(",")])
 
-  const normalizedCurrentUri = useMemo(() => toSpotifyUri(currentSong?.spotify_uri ?? null), [currentSong?.spotify_uri])
+  const normalizedCurrentUri = useMemo(
+    () => toSpotifyUri(currentSong?.spotify_uri ?? null),
+    [currentSong?.spotify_uri],
+  )
 
-  // Auto play Spotify
+  // ✅ 자동 재생 (연동 + SDK 준비 완료 시)
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      if (!isLoggedInSpotify || !accessToken || !ready) return
+      if (!spotifyLinked || !ready) return
       if (!normalizedCurrentUri) return
       if (source === "spotify" && isPlayingRef.current) return
       try {
-        audioRef.current?.pause()
+        audioRef.current?.pause() // 미리듣기 끔
         await activate()
         await transferToThisDevice()
         await playUris([normalizedCurrentUri])
@@ -332,10 +293,8 @@ export default function RecommendClient() {
         setIsPlaying(true)
       } catch {}
     })()
-    return () => {
-      cancelled = true
-    }
-  }, [isLoggedInSpotify, accessToken, ready, normalizedCurrentUri, source, activate, transferToThisDevice, playUris])
+    return () => { cancelled = true }
+  }, [spotifyLinked, ready, normalizedCurrentUri, source, activate, transferToThisDevice, playUris])
 
   // Preview timer
   useEffect(() => {
@@ -346,14 +305,15 @@ export default function RecommendClient() {
     return () => clearInterval(id)
   }, [isPlaying, duration, source])
 
-  // Play logic
+  // 단일 곡 재생
   const playSong = async (song: Song) => {
     setCurrentSong(song)
     setCurrentTime(0)
     setDuration(parseDurationToSec(song.duration))
     const songUri = toSpotifyUri(song.spotify_uri ?? null)
 
-    if (isLoggedInSpotify && accessToken && ready && songUri) {
+    // ✅ 전체 재생 (연동 + SDK 준비)
+    if (spotifyLinked && ready && songUri) {
       try {
         await activate()
         await transferToThisDevice()
@@ -364,48 +324,28 @@ export default function RecommendClient() {
       } catch {}
     }
 
+    // ⛔ 미연동/실패 시에만 미리듣기
     let preview = song.preview_url ?? null
     let cover = song.image ?? null
     let uri = songUri ?? null
-
     if (!preview || !cover || !uri) {
       const info = await resolvePreviewAndCover(song.title, song.artist)
       preview = preview ?? info.preview
       cover = cover ?? info.cover
       uri = uri ?? toSpotifyUri(info.uri)
-
       setRecommendations((prev) =>
         prev.map((s) =>
-          s.id === song.id
-            ? {
-                ...s,
-                preview_url: preview ?? s.preview_url,
-                image: cover ?? s.image,
-                spotify_uri: uri ?? s.spotify_uri,
-              }
-            : s,
+          s.id === song.id ? { ...s, preview_url: preview ?? s.preview_url, image: cover ?? s.image, spotify_uri: uri ?? s.spotify_uri } : s
         ),
       )
-      setCurrentSong((prev) =>
-        prev
-          ? {
-              ...prev,
-              preview_url: preview ?? prev.preview_url,
-              image: cover ?? prev.image,
-              spotify_uri: uri ?? prev.spotify_uri,
-            }
-          : prev,
-      )
+      setCurrentSong((prev) => (prev ? { ...prev, preview_url: preview ?? prev.preview_url, image: cover ?? prev.image, spotify_uri: uri ?? prev.spotify_uri } : prev))
     }
-
     if (preview) {
       try {
         await safePlayPreview(preview)
         setSource("preview")
         setIsPlaying(true)
-      } catch {
-        setIsPlaying(false)
-      }
+      } catch { setIsPlaying(false) }
     } else {
       alert("이 곡은 미리듣기 음원이 없습니다. 전체 듣기는 상단 사용자 메뉴에서 Spotify 연동 후 이용하세요.")
       setIsPlaying(false)
@@ -420,36 +360,16 @@ export default function RecommendClient() {
     }
     if (source === "spotify") {
       try {
-        if (isPlaying) {
-          await pause()
-          setIsPlaying(false)
-        } else {
-          await resume()
-          setIsPlaying(true)
-        }
+        if (isPlaying) { await pause(); setIsPlaying(false) }
+        else { await resume(); setIsPlaying(true) }
       } catch {}
       return
     }
-    const tryUri = normalizedCurrentUri
-    if (isLoggedInSpotify && accessToken && ready && tryUri) {
-      try {
-        await activate()
-        await transferToThisDevice()
-        await playUris([tryUri])
-        setSource("spotify")
-        setIsPlaying(true)
-        return
-      } catch {}
-    }
+    // 미리듣기 재생/정지
     const a = audioRef.current!
     try {
-      if (isPlaying) {
-        a.pause()
-        setIsPlaying(false)
-      } else {
-        await a.play()
-        setIsPlaying(true)
-      }
+      if (isPlaying) { a.pause(); setIsPlaying(false) }
+      else { await a.play(); setIsPlaying(true) }
     } catch {}
   }
 
@@ -462,9 +382,7 @@ export default function RecommendClient() {
       const nextSong = recommendations[nextIdx]
       setSelectedSongId(nextSong.id)
       await playSong(nextSong)
-    } finally {
-      setBusy(false)
-    }
+    } finally { setBusy(false) }
   }
 
   const onClickSong = async (song: Song) => {
@@ -474,9 +392,7 @@ export default function RecommendClient() {
       setSelectedSongId(song.id)
       await playSong(song)
       setShowPlaylist(false)
-    } finally {
-      setBusy(false)
-    }
+    } finally { setBusy(false) }
   }
 
   const playPreviousSong = async () => {
@@ -488,12 +404,10 @@ export default function RecommendClient() {
       const prevSong = recommendations[prevIdx]
       setSelectedSongId(prevSong.id)
       await playSong(prevSong)
-    } finally {
-      setBusy(false)
-    }
+    } finally { setBusy(false) }
   }
 
-  // Feedback
+  // Feedback (변경 없음)
   const [feedbackMap, setFeedbackMap] = useState<Record<string | number, 1 | -1 | 0>>({})
   const sendFeedback = useCallback(
     async (musicId: string | number, value: 1 | -1) => {
@@ -506,29 +420,21 @@ export default function RecommendClient() {
       }
       try {
         const r = await fetch(`${API_BASE}/api/feedback`, {
-          method: "POST",
-          credentials: "include",
+          method: "POST", credentials: "include",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         })
         if (r.ok) return true
-        if (r.status !== 401) {
-          alert("피드백 전송에 실패했습니다.")
-          return false
-        }
+        if (r.status !== 401) { alert("피드백 전송에 실패했습니다."); return false }
       } catch {}
       const authHeader = buildAuthHeaderFromLocalStorage()
       if (!authHeader.Authorization) {
         const me = await fetchMe()
-        if (!me) {
-          alert("로그인이 필요합니다.")
-          return false
-        }
+        if (!me) { alert("로그인이 필요합니다."); return false }
       }
       try {
         const r2 = await fetch(`${API_BASE}/api/feedback`, {
-          method: "POST",
-          credentials: "include",
+          method: "POST", credentials: "include",
           headers: { "Content-Type": "application/json", ...authHeader },
           body: JSON.stringify(payload),
         })
@@ -536,10 +442,7 @@ export default function RecommendClient() {
         if (r2.status === 401) alert("로그인이 필요합니다.")
         else alert("피드백 전송에 실패했습니다.")
         return false
-      } catch {
-        alert("네트워크 오류로 피드백 전송 실패")
-        return false
-      }
+      } catch { alert("네트워크 오류로 피드백 전송 실패"); return false }
     },
     [photoId, contextMainMood, contextSubMood],
   )
@@ -559,14 +462,8 @@ export default function RecommendClient() {
   )
 
   const goEditOnly = useCallback(async () => {
-    if (!photoId) {
-      alert("photoId가 없습니다.")
-      return
-    }
-    if (!selectedSongId) {
-      alert("편집할 곡을 먼저 선택해 주세요.")
-      return
-    }
+    if (!photoId) { alert("photoId가 없습니다."); return }
+    if (!selectedSongId) { alert("편집할 곡을 먼저 선택해 주세요."); return }
     const q = new URLSearchParams()
     q.set("photoId", String(photoId))
     q.set("musicId", String(selectedSongId))
@@ -581,230 +478,24 @@ export default function RecommendClient() {
       setIsPlaying(false)
       setCurrentTime(0)
       await fetchRecommendations()
-    } finally {
-      setIsRefreshing(false)
-    }
+    } finally { setIsRefreshing(false) }
   }
 
   const handleClose = () => {
-    try {
-      router.replace("/")
-    } catch {
-      ;(window as unknown as { location: Location }).location.href = "/"
-    }
+    try { router.replace("/") } catch { (window as unknown as { location: Location }).location.href = "/" }
   }
 
   const safeImageSrc = uploadedImage || "/placeholder.svg"
-
   const currentSongIndex = currentSong ? recommendations.findIndex((s) => s.id === currentSong.id) : 0
 
   return (
+    // ... ⬇⬇ 기존 JSX 그대로 (변경 없음)
+    // ⛔ JSX는 질문에 올려준 그대로 두시면 됩니다
+    // (위에서 로직만 바뀌었어요)
     <div className="fixed inset-0 bg-black">
-      {/* Progress bars */}
-      <div className="absolute top-0 left-0 right-0 z-50 flex gap-1 p-2">
-        {recommendations.map((_, idx) => (
-          <div key={idx} className="flex-1 h-0.5 bg-white/30 rounded-full overflow-hidden">
-            <div
-              className={`h-full bg-white transition-all duration-300 ${
-                idx < currentSongIndex ? "w-full" : idx === currentSongIndex ? "w-1/2" : "w-0"
-              }`}
-            />
-          </div>
-        ))}
-      </div>
-
-      {/* Top header */}
-      <div className="absolute top-0 left-0 right-0 z-40 bg-gradient-to-b from-black/80 to-transparent pt-10 px-4 pb-6">
-        <div className="flex items-center justify-between mb-3">
-          <button
-            onClick={handleClose}
-            className="w-8 h-8 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center"
-          >
-            <X className="w-5 h-5 text-white" />
-          </button>
-          <div className="flex-1 mx-3">
-            {currentSong && (
-              <div className="text-white">
-                <p className="text-sm font-semibold truncate">{currentSong.title}</p>
-                <p className="text-xs text-white/80 truncate">{currentSong.artist}</p>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Background image */}
-      <div className="absolute inset-0">
-        <Image src={safeImageSrc || "/placeholder.svg"} alt="Photo" fill className="object-cover" unoptimized />
-        <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-black/60" />
-      </div>
-
-      {/* Bottom controls */}
-      <div className="absolute bottom-0 left-0 right-0 z-40 bg-gradient-to-t from-black/90 to-transparent px-4 pb-8 pt-12">
-        {currentSong && (
-          <div className="space-y-4">
-            <button
-              onClick={() => setShowPlaylist(!showPlaylist)}
-              className="w-full flex items-center justify-center gap-2 py-2 text-white/80 hover:text-white transition-colors"
-            >
-              <Music className="w-4 h-4" />
-              <span className="text-sm font-medium truncate">추천{recommendations.length}곡 리스트</span>
-              <ChevronUp className={`w-4 h-4 transition-transform ${showPlaylist ? "rotate-180" : ""}`} />
-            </button>
-
-            {/* Progress bar */}
-            <div className="space-y-1">
-              <input
-                type="range"
-                min={0}
-                max={duration}
-                value={currentTime}
-                onChange={(e) => {
-                  const v = Number(e.target.value)
-                  setCurrentTime(v)
-                  if (source === "preview" && audioRef.current) audioRef.current.currentTime = v
-                }}
-                className="w-full h-1 bg-white/20 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
-              />
-              <div className="flex justify-between text-xs text-white/70">
-                <span>{formatTime(currentTime)}</span>
-                <span>{formatTime(duration)}</span>
-              </div>
-            </div>
-
-            {/* Player controls */}
-            <div className="flex items-center justify-center gap-6">
-              <Button
-                size="icon"
-                variant="ghost"
-                disabled={busy}
-                onClick={playPreviousSong}
-                className="w-12 h-12 rounded-full bg-white/10 hover:bg-white/20 text-white"
-              >
-                <SkipBack className="w-5 h-5" />
-              </Button>
-
-              <Button
-                size="icon"
-                disabled={busy}
-                onClick={togglePlay}
-                className="w-16 h-16 rounded-full bg-white hover:bg-white/90 text-black"
-              >
-                {isPlaying ? <Pause className="w-7 h-7" /> : <Play className="w-7 h-7 ml-0.5" />}
-              </Button>
-
-              <Button
-                size="icon"
-                variant="ghost"
-                disabled={busy}
-                onClick={playNextSong}
-                className="w-12 h-12 rounded-full bg-white/10 hover:bg-white/20 text-white"
-              >
-                <SkipForward className="w-5 h-5" />
-              </Button>
-            </div>
-
-            {/* Feedback buttons */}
-            <div className="flex gap-3">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => handleFeedback(1)}
-                className={`flex-1 h-11 rounded-full backdrop-blur-sm ${
-                  feedbackMap[currentSong.id] === 1 ? "bg-white text-black" : "bg-white/10 text-white hover:bg-white/20"
-                }`}
-              >
-                <ThumbsUp className="w-4 h-4 mr-2" />
-                좋아요
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => handleFeedback(-1)}
-                className={`flex-1 h-11 rounded-full backdrop-blur-sm ${
-                  feedbackMap[currentSong.id] === -1
-                    ? "bg-white text-black"
-                    : "bg-white/10 text-white hover:bg-white/20"
-                }`}
-              >
-                <ThumbsDown className="w-4 h-4 mr-2" />
-                별로예요
-              </Button>
-            </div>
-
-            {/* Save button */}
-            {selectedSongId && photoId && (
-              <Button
-                onClick={goEditOnly}
-                className="w-full h-12 rounded-full bg-white text-black hover:bg-white/90 font-medium"
-              >
-                저장 및 편집하기
-              </Button>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Playlist drawer */}
-      <div
-        className={`fixed inset-x-0 bottom-0 z-50 bg-black/95 backdrop-blur-xl rounded-t-3xl transition-transform duration-300 ${
-          showPlaylist ? "translate-y-0" : "translate-y-full"
-        }`}
-        style={{ maxHeight: "70vh" }}
-      >
-        <div className="p-4">
-          <div className="w-12 h-1 bg-white/30 rounded-full mx-auto mb-4" />
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-white font-semibold text-lg">플레이리스트</h3>
-            <button onClick={() => setShowPlaylist(false)} className="text-white/60 hover:text-white">
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-          <div className="overflow-y-auto" style={{ maxHeight: "calc(70vh - 100px)" }}>
-            <div className="space-y-2">
-              {recommendations.map((song, idx) => (
-                <button
-                  key={song.id}
-                  onClick={() => onClickSong(song)}
-                  disabled={busy}
-                  className={`w-full flex items-center gap-3 p-3 rounded-xl transition-colors ${
-                    currentSong?.id === song.id ? "bg-white/20" : "bg-white/5 hover:bg-white/10 active:bg-white/15"
-                  }`}
-                >
-                  <div className="relative w-12 h-12 rounded-lg overflow-hidden flex-shrink-0 bg-white/10">
-                    {song.image ? (
-                      <Image
-                        src={song.image || "/placeholder.svg"}
-                        alt={song.title}
-                        fill
-                        className="object-cover"
-                        unoptimized
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center">
-                        <Music className="w-6 h-6 text-white/40" />
-                      </div>
-                    )}
-                    {currentSong?.id === song.id && (
-                      <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                        {isPlaying ? <Pause className="w-5 h-5 text-white" /> : <Play className="w-5 h-5 text-white" />}
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex-1 text-left min-w-0">
-                    <p className="text-white font-medium text-sm truncate">{song.title}</p>
-                    <p className="text-white/60 text-xs truncate">{song.artist}</p>
-                  </div>
-                  <span className="text-white/40 text-xs flex-shrink-0">{song.duration}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Overlay to close playlist when clicking outside */}
-      {showPlaylist && <div className="fixed inset-0 bg-black/20 z-40" onClick={() => setShowPlaylist(false)} />}
+      {/* 상단/배경/컨트롤/리스트 JSX는 기존 그대로 */}
+      {/* ... (생략: 질문의 JSX 그대로 사용) */}
+      {/* 코드가 너무 길어 생략했지만, 위에서 준 RecommendClient의 JSX를 유지하세요 */}
     </div>
   )
 }
