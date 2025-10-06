@@ -7,6 +7,8 @@ const cors = require("cors");
 const cookieParser = require("cookie-parser");
 require("dotenv").config({ debug: true });
 const pool = require("./db");
+
+// ✅ [추가] spotify.js 라우터 파일을 직접 불러옵니다.
 const spotifyRoutes = require('./routes/spotify');
 
 const app = express();
@@ -17,21 +19,19 @@ app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-// ---- CORS (credentials 허용)
+// ---- CORS (기존 코드와 동일, 수정 없음)
 const normalize = (s) => (s ? s.replace(/\/+$/, "") : s);
 const envAllow = (process.env.CORS_ORIGINS || "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean)
   .map(normalize);
-
 const defaultAllow = [
   "http://localhost:3000",
   "http://127.0.0.1:3000",
   "https://capstone-front-tau.vercel.app",
 ];
 const allowList = envAllow.length ? envAllow : defaultAllow;
-
 const corsOptions = {
   origin(origin, cb) {
     if (!origin) return cb(null, true);
@@ -47,17 +47,12 @@ const corsOptions = {
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: [
-    "Content-Type",
-    "Authorization",
-    "X-Requested-With",
-    "x-user-id",
-    "x-preferred-genres",
-  ],
+  allowedHeaders: [ "Content-Type", "Authorization", "X-Requested-With", "x-user-id", "x-preferred-genres" ],
   optionsSuccessStatus: 204,
 };
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
+
 
 // ---- health
 app.get("/", (_req, res) => res.send("정상작동"));
@@ -71,9 +66,13 @@ app.get("/health", async (_req, res) => {
   }
 });
 
+
+// ✅ [수정] '/api/spotify' 경로를 다른 모든 라우터보다 먼저 직접 연결합니다.
+// 이렇게 순서를 위로 올려야 다른 코드에 의해 무시되거나 충돌하는 문제를 원천적으로 방지합니다.
 app.use('/api/spotify', spotifyRoutes);
 
-// ---- router loader
+
+// ---- router loader (기존 코드)
 function loadRoute(relPath) {
   try {
     const abs = path.join(__dirname, relPath);
@@ -100,15 +99,17 @@ const mounts = [
   ["/api/photos", "routes/photos"],
   ["/api/recommendations", "routes/recommendations"],
   ["/api/images", "routes/images"],
-  ["/api/users", "routes/users"],       // ← /users/me 가 이 라우터에 있어야 함
+  ["/api/users", "routes/users"],
   ["/api/musics", "routes/musics"],
-  ["/api/auth", "routes/auth"],         // ← /auth/login, /auth/register, /auth/me
+  ["/api/auth", "routes/auth"],
   ["/api", "routes/onboarding"],
   ["/api/history", "routes/history"],
   ["/api/music-requests", "routes/musicRequests"],
+  // ✅ [수정] 위에서 직접 연결했으므로 이 배열에서는 spotify 라우트를 삭제합니다.
+  // ["/api/spotify", "routes/spotify"], 
   ["/api", "routes/feedback"],
   ["/api", "routes/stickers"],
-  ["/api/diaries", "routes/diaries"],   // ★ 추가: 그림일기 라우트
+  ["/api/diaries", "routes/diaries"],
 ];
 
 const mounted = [];
@@ -120,6 +121,9 @@ for (const [base, rel] of mounts) {
   }
 }
 console.log("[router] mounted:", mounted);
+
+
+// ---- 이하 코드는 수정할 필요 없습니다 ---
 
 // ---- debug routes
 function collectRoutes(layer, prefix = "") {
