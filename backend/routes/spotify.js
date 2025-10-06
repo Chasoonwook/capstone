@@ -21,15 +21,24 @@ const SCOPE = [
   "user-modify-playback-state",
 ].join(" ");
 
-// PKCE helpers
+// ─────────────── helpers ───────────────
 const b64url = (buf) => buf.toString("base64").replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
 const makeVerifier = () => b64url(crypto.randomBytes(32));
 const makeChallenge = (v) => b64url(crypto.createHash("sha256").update(v).digest());
 
-// sanity check
+function getAccessFromCookie(req, res) {
+  const t = req.cookies?.[CK_ACCESS];
+  if (!t) {
+    res.status(401).json({ error: "NO_ACCESS_TOKEN" });
+    return null;
+  }
+  return t;
+}
+
+// ─────────────── sanity check ───────────────
 router.get("/ping", (_req, res) => res.json({ ok: true, route: "/api/spotify/ping" }));
 
-// authorize
+// ─────────────── authorize ───────────────
 router.get("/authorize", (req, res) => {
   const returnTo = req.query.return || "/";
   const state = b64url(Buffer.from(JSON.stringify({ r: returnTo })));
@@ -53,7 +62,7 @@ router.get("/authorize", (req, res) => {
   res.redirect(`https://accounts.spotify.com/authorize?${p.toString()}`);
 });
 
-// callback
+// ─────────────── callback ───────────────
 router.get("/callback", async (req, res) => {
   try {
     const { code, state } = req.query;
@@ -98,7 +107,7 @@ router.get("/callback", async (req, res) => {
   }
 });
 
-// refresh
+// ─────────────── refresh ───────────────
 router.get("/refresh", async (req, res) => {
   try {
     const refresh = req.cookies?.[CK_REFRESH];
@@ -127,11 +136,10 @@ router.get("/refresh", async (req, res) => {
   }
 });
 
-// me
+// ─────────────── me ───────────────
 router.get("/me", async (req, res) => {
   try {
-    const access = req.cookies?.[CK_ACCESS];
-    if (!access) return res.status(401).json({ error: "NO_ACCESS_TOKEN" });
+    const access = getAccessFromCookie(req, res); if (!access) return;
 
     const r = await axios.get("https://api.spotify.com/v1/me", {
       headers: { Authorization: `Bearer ${access}` },
@@ -140,6 +148,114 @@ router.get("/me", async (req, res) => {
   } catch (err) {
     const status = err.response?.status || 500;
     res.status(status).json(err.response?.data || { error: "SPOTIFY_ME_FAILED" });
+  }
+});
+
+/* =====================================================
+   🎵 Web Playback SDK / Spotify Connect 보조 엔드포인트
+   ===================================================== */
+
+// SDK 초기화용: 현재 access token 반환
+router.get("/token", (req, res) => {
+  const access = req.cookies?.[CK_ACCESS];
+  if (!access) return res.status(401).json({ error: "NO_ACCESS_TOKEN" });
+  res.json({ access_token: access });
+});
+
+// 연결된 디바이스 조회
+router.get("/devices", async (req, res) => {
+  const access = getAccessFromCookie(req, res); if (!access) return;
+  try {
+    const r = await axios.get("https://api.spotify.com/v1/me/player/devices", {
+      headers: { Authorization: `Bearer ${access}` },
+    });
+    res.json(r.data);
+  } catch (err) {
+    const status = err.response?.status || 500;
+    res.status(status).json(err.response?.data || { error: "DEVICES_FAILED" });
+  }
+});
+
+// 이 웹 플레이어로 전환
+router.put("/transfer", async (req, res) => {
+  const access = getAccessFromCookie(req, res); if (!access) return;
+  const { device_id, play } = req.body || {};
+  if (!device_id) return res.status(400).json({ error: "MISSING_DEVICE_ID" });
+  try {
+    await axios.put("https://api.spotify.com/v1/me/player",
+      { device_ids: [device_id], play: !!play },
+      { headers: { Authorization: `Bearer ${access}` } }
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    const status = err.response?.status || 500;
+    res.status(status).json(err.response?.data || { error: "TRANSFER_FAILED" });
+  }
+});
+
+// 재생 시작 (uris or context_uri)
+router.put("/play", async (req, res) => {
+  const access = getAccessFromCookie(req, res); if (!access) return;
+
+  const { device_id, uris, context_uri, offset, position_ms } = req.body || {};
+  try {
+    const url = new URL("https://api.spotify.com/v1/me/player/play");
+    if (device_id) url.searchParams.set("device_id", String(device_id));
+
+    const payload = {};
+    if (Array.isArray(uris) && uris.length) payload.uris = uris;
+    if (context_uri) payload.context_uri = context_uri;
+    if (offset) payload.offset = offset;
+    if (typeof position_ms === "number") payload.position_ms = position_ms;
+
+    await axios.put(url.toString(), payload, {
+      headers: { Authorization: `Bearer ${access}` },
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    const status = err.response?.status || 500;
+    res.status(status).json(err.response?.data || { error: "PLAY_FAILED" });
+  }
+});
+
+// 일시정지
+router.put("/pause", async (req, res) => {
+  const access = getAccessFromCookie(req, res); if (!access) return;
+  try {
+    await axios.put("https://api.spotify.com/v1/me/player/pause", {}, {
+      headers: { Authorization: `Bearer ${access}` },
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    const status = err.response?.status || 500;
+    res.status(status).json(err.response?.data || { error: "PAUSE_FAILED" });
+  }
+});
+
+// 다음/이전 트랙
+router.post("/next", async (req, res) => {
+  const access = getAccessFromCookie(req, res); if (!access) return;
+  try {
+    await axios.post("https://api.spotify.com/v1/me/player/next", {}, {
+      headers: { Authorization: `Bearer ${access}` },
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    const status = err.response?.status || 500;
+    res.status(status).json(err.response?.data || { error: "NEXT_FAILED" });
+  }
+});
+
+router.post("/previous", async (req, res) => {
+  const access = getAccessFromCookie(req, res); if (!access) return;
+  try {
+    await axios.post("https://api.spotify.com/v1/me/player/previous", {}, {
+      headers: { Authorization: `Bearer ${access}` },
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    const status = err.response?.status || 500;
+    res.status(status).json(err.response?.data || { error: "PREV_FAILED" });
   }
 });
 
