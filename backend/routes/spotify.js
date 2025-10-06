@@ -1,6 +1,6 @@
 // routes/spotify.js
 
-console.log("[spotify] router loaded v3 - full auth");
+console.log("[spotify] router loaded v4 - final fix");
 
 const express = require("express");
 const router = express.Router();
@@ -8,14 +8,13 @@ const fetch = global.fetch;
 
 const CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;
 const CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
-
-// ✅ [수정] 스포티파이가 인증 코드를 돌려줄 주소는 바로 이 백엔드 서버의 callback 주소여야 합니다.
-const REDIRECT_URI = "https://capstone-app-back.onrender.com/api/spotify/callback"; 
-
-// ✅ 인증이 모두 끝난 후 최종적으로 돌아갈 프론트엔드 주소입니다. (이것은 올바르게 설정되어 있습니다)
+const REDIRECT_URI = "https://capstone-app-back.onrender.com/api/spotify/callback";
 const FRONTEND_URI = "https://capstone-front-tau.vercel.app/";
 
-// --- 이하 코드는 수정할 필요 없습니다 ---
+// ✅ [수정] 스포티파이 API 공식 주소들
+const SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token";
+const SPOTIFY_AUTHORIZE_URL = "https://accounts.spotify.com/authorize";
+const SPOTIFY_SEARCH_URL = "api.spotify.com/v1/search";
 
 // 앱 토큰(검색용) 캐시
 let appToken = null;
@@ -29,7 +28,8 @@ async function getAppToken() {
   const body = new URLSearchParams({ grant_type: "client_credentials" });
 
   try {
-    const r = await fetch("https://accounts.spotify.com/api/token", {
+    // ✅ [수정] 토큰 발급 주소 변경
+    const r = await fetch(SPOTIFY_TOKEN_URL, {
       method: "POST",
       headers: { Authorization: `Basic ${basic}`, "Content-Type": "application/x-www-form-urlencoded" },
       body,
@@ -54,14 +54,17 @@ router.get("/search", async (req, res) => {
     if (!q) return res.status(400).json({ error: "missing query" });
     
     const token = await getAppToken();
-    const url = `https://api.spotify.com/v1/search?$${new URLSearchParams({
+    
+    // ✅ [수정] 검색 API 주소 및 파라미터 생성 방식 변경
+    const searchUrl = new URL(SPOTIFY_SEARCH_URL);
+    searchUrl.search = new URLSearchParams({
       type: "track",
       q,
       limit: "5",
       market: "KR",
-    }).toString()}`;
+    }).toString();
 
-    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const r = await fetch(searchUrl.toString(), { headers: { Authorization: `Bearer ${token}` } });
     const json = await r.json();
     if (!r.ok) {
       console.error("[spotify/search] error:", r.status, json);
@@ -86,7 +89,8 @@ router.get("/search", async (req, res) => {
 router.get('/login', (req, res) => {
   const scope = 'streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state';
   
-  const authUrl = new URL("https://api.spotify.com/v1/search?$");
+  // ✅ [수정] 로그인 인증 주소 변경
+  const authUrl = new URL(SPOTIFY_AUTHORIZE_URL);
   authUrl.searchParams.append('response_type', 'code');
   authUrl.searchParams.append('client_id', CLIENT_ID);
   authUrl.searchParams.append('scope', scope);
@@ -101,6 +105,9 @@ router.get('/login', (req, res) => {
 
 router.get('/callback', async (req, res) => {
   const code = req.query.code || null;
+  if (!code) {
+    return res.redirect(`${FRONTEND_URI}/spotify-callback?error=no_code`);
+  }
 
   const basic = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
   const body = new URLSearchParams({
@@ -110,7 +117,8 @@ router.get('/callback', async (req, res) => {
   });
 
   try {
-    const response = await fetch("https://accounts.spotify.com/api/token", {
+    // ✅ [수정] 토큰 교환 주소 변경
+    const response = await fetch(SPOTIFY_TOKEN_URL, {
       method: 'POST',
       headers: {
         'Authorization': `Basic ${basic}`,
@@ -152,7 +160,8 @@ router.post('/refresh', async (req, res) => {
   });
 
   try {
-    const response = await fetch("https://accounts.spotify.com/api/token", {
+    // ✅ [수정] 토큰 갱신 주소 변경
+    const response = await fetch(SPOTIFY_TOKEN_URL, {
       method: 'POST',
       headers: {
         'Authorization': `Basic ${basic}`,
