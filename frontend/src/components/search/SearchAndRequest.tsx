@@ -5,7 +5,7 @@ import Image from "next/image"
 import { useRouter } from "next/navigation"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import { Search, X, ArrowLeft } from "lucide-react"
+import { Search, X } from "lucide-react"
 import { useRequestCounter } from "@/hooks/useRequestCounter"
 import { API_BASE } from "@/lib/api"
 import type { MusicItem } from "@/types/music"
@@ -190,7 +190,7 @@ export default function SearchAndRequest({
   }
 
   /* ── 오버레이 열기/닫기 ─────────────────────────────────── */
- const openOverlay = () => {
+  const openOverlay = () => {
     inlineInputRef.current?.blur()            // 인라인 포커스 제거
     setOverlayOpen(true)                      // ✅ 항상 오버레이로
     setTimeout(() => overlayInputRef.current?.focus(), 0)
@@ -228,14 +228,17 @@ export default function SearchAndRequest({
         />
         {/* 🔹 인풋은 z-0로 */}
         <Input
-        id="global-search-input"
+          id="global-search-input"
           ref={inlineInputRef}
           placeholder="노래 제목 또는 가수 검색"
           value={q}
           readOnly
           onFocus={openOverlay}
           onClick={openOverlay}
-          className="z-0 pl-12 pr-4 py-4 text-base border-gray-200 focus:border-purple-300 rounded-2xl bg-white/80 backdrop-blur-sm cursor-pointer"
+          /* ⬇️ 텍스트/플레이스홀더 색을 명시적으로 지정 */
+          className="z-0 pl-12 pr-4 py-4 text-base border-gray-200 focus:border-purple-300 rounded-2xl bg-white/80 backdrop-blur-sm cursor-pointer
+                     text-gray-900 placeholder:text-gray-400 caret-primary
+                     dark:bg-neutral-900/80 dark:text-gray-100 dark:placeholder:text-gray-500"
         />
       </div>
     </>
@@ -329,7 +332,10 @@ export default function SearchAndRequest({
               placeholder="노래 제목 또는 가수 검색"
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              className="pl-10 pr-3 py-3 text-base border-gray-200 focus:border-purple-300 rounded-xl bg-white/80"
+              /* ⬇️ 텍스트/플레이스홀더 색을 명시적으로 지정 */
+              className="pl-10 pr-3 py-3 text-base border-gray-200 focus:border-purple-300 rounded-xl bg-white/80
+                         text-gray-900 placeholder:text-gray-400 caret-primary
+                         dark:bg-neutral-900/80 dark:text-gray-100 dark:placeholder:text-gray-500"
             />
           </div>
 
@@ -374,9 +380,19 @@ export default function SearchAndRequest({
             <DialogDescription>추가하고 싶은 노래의 제목과 가수를 입력해 주세요.</DialogDescription>
           </DialogHeader>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
-            <Input placeholder="노래 제목" value={title} onChange={(e) => setTitle(e.target.value)} />
-            <Input placeholder="가수 이름" value={artist} onChange={(e) => setArtist(e.target.value)} />
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
+            <Input
+              placeholder="노래 제목"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              className="text-gray-900 placeholder:text-gray-400 dark:text-gray-100 dark:placeholder:text-gray-500"
+            />
+            <Input
+              placeholder="가수 이름"
+              value={artist}
+              onChange={(e) => setArtist(e.target.value)}
+              className="text-gray-900 placeholder:text-gray-400 dark:text-gray-100 dark:placeholder:text-gray-500"
+            />
           </div>
 
           <div className="text-xs text-gray-600 mt-2">

@@ -16,7 +16,7 @@ export default function HistorySwitch({
 }) {
   const params = useSearchParams()
   // 첫 진입 시 히스토리(콘텐츠) 탭을 기본으로
-  const tab = params.get("tab") ?? "contents"
+  const tab = params.get("tab") ?? "history"
 
   switch (tab) {
     case "history":
