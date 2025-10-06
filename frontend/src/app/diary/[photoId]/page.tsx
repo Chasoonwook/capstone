@@ -40,17 +40,13 @@ function pickNumericUserIdSync(maybeUser: any): number | null {
     const n = typeof v === "string" ? Number(v) : typeof v === "number" ? v : Number.NaN
     return Number.isFinite(n) && n >= 1 ? n : null
   }
-
   const fromHook = toNum(maybeUser?.user_id) ?? toNum(maybeUser?.id)
   if (fromHook != null) return fromHook
-
   if (typeof window !== "undefined") {
     const rawUid = localStorage.getItem("uid") ?? ""
     if (/^[1-9]\d*$/.test(rawUid)) return Number(rawUid)
-
     const rawAccount = localStorage.getItem("account_id") ?? ""
     if (/^[1-9]\d*$/.test(rawAccount)) return Number(rawAccount)
-
     try {
       const raw = localStorage.getItem("user") ?? localStorage.getItem("auth_user")
       if (raw) {
@@ -310,24 +306,14 @@ export default function DiaryPage() {
         </section>
       </main>
 
+      {/* 하단 고정 액션: 임시저장 버튼 제거, 저장만 유지 */}
       <div className="fixed bottom-0 left-0 right-0 border-t border-border bg-background/95 backdrop-blur-xl shadow-lg">
         <div className="max-w-2xl mx-auto px-4 py-4 flex items-center gap-3">
           <button
             type="button"
-            onClick={() => {
-              try {
-                localStorage.setItem(storageKey, JSON.stringify({ subject, content }))
-              } catch {}
-            }}
-            className="flex-1 h-11 rounded-xl border border-border hover:border-primary bg-card hover:bg-muted text-sm font-medium text-foreground transition-all"
-          >
-            임시저장
-          </button>
-          <button
-            type="button"
             disabled={saving}
             onClick={saveDiary}
-            className="flex-[2] h-11 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-semibold shadow-md transition-all disabled:opacity-60 flex items-center justify-center gap-2"
+            className="flex-1 h-11 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-semibold shadow-md transition-all disabled:opacity-60 flex items-center justify-center gap-2"
           >
             <Save className="w-4 h-4" />
             {saving ? "저장 중..." : "저장하기"}
