@@ -1,6 +1,6 @@
 // routes/diaries.js
 const express = require("express");
-const pool = require("../db"); // 기존 PG Pool
+const pool = require("../db");
 const router = express.Router();
 
 const nn = (v) => {
@@ -9,12 +9,27 @@ const nn = (v) => {
   return s.length ? s : null;
 };
 
-const toNumOrNull = (v) => (v === undefined || v === null || v === "" ? null : Number(v) || null);
+const toNumOrNull = (v) =>
+  v === undefined || v === null || v === "" ? null : (Number(v) || null);
+
+// 공통 SELECT: 프론트에서 바로 쓰기 좋게 별칭
+const SELECT_ALIAS = `
+  id,
+  user_id,
+  photo_id,
+  music_id,
+  music_title_snapshot  AS music_title,
+  music_artist_snapshot AS music_artist,
+  subject,
+  content,
+  diary_at,
+  created_at,
+  updated_at
+`;
 
 // ------------------------------------------------------------------
-// 생성 (또는 업서트: user_id + photo_id 가 있으면 수정, 없으면 생성)
+// 생성(업서트: user_id+photo_id 존재시 업데이트)
 // POST /api/diaries
-// body: { user_id, photo_id?, music_id?, music_title?, music_artist?, subject, content, diary_at? }
 router.post("/", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -29,8 +44,8 @@ router.post("/", async (req, res) => {
       diary_at,
     } = req.body || {};
 
-    user_id = nn(user_id);
-    if (!user_id) return res.status(400).json({ error: "user_id is required" });
+    user_id = toNumOrNull(user_id);
+    if (user_id == null) return res.status(400).json({ error: "user_id must be integer" });
 
     photo_id = toNumOrNull(photo_id);
     music_id = toNumOrNull(music_id);
@@ -38,15 +53,21 @@ router.post("/", async (req, res) => {
     const music_artist_snapshot = nn(music_artist);
     subject = subject ?? "";
     content = content ?? "";
-    diary_at = nn(diary_at);
+
+    const diary_at_iso = (() => {
+      const raw = nn(diary_at);
+      if (!raw) return null;
+      const d = new Date(raw);
+      return isNaN(d.getTime()) ? null : d.toISOString();
+    })();
 
     await client.query("BEGIN");
 
-    // photo_id가 있을 때만 업서트 기준을 적용
+    // 업서트 기준 찾기
     let existing = null;
     if (photo_id != null) {
       const { rows } = await client.query(
-        `SELECT * FROM diaries WHERE user_id=$1 AND photo_id=$2 ORDER BY created_at DESC LIMIT 1`,
+        `SELECT id FROM diaries WHERE user_id=$1 AND photo_id=$2 ORDER BY created_at DESC LIMIT 1`,
         [user_id, photo_id]
       );
       existing = rows[0] || null;
@@ -54,7 +75,6 @@ router.post("/", async (req, res) => {
 
     let row;
     if (existing) {
-      // 업데이트
       const { rows } = await client.query(
         `
         UPDATE diaries SET
@@ -66,38 +86,20 @@ router.post("/", async (req, res) => {
           diary_at = COALESCE($6, diary_at),
           updated_at = NOW()
         WHERE id = $7
-        RETURNING *;
+        RETURNING ${SELECT_ALIAS};
         `,
-        [
-          music_id,
-          music_title_snapshot,
-          music_artist_snapshot,
-          subject,
-          content,
-          diary_at,
-          existing.id,
-        ]
+        [music_id, music_title_snapshot, music_artist_snapshot, subject, content, diary_at_iso, existing.id]
       );
       row = rows[0];
     } else {
-      // 새로 생성
       const { rows } = await client.query(
         `
         INSERT INTO diaries
           (user_id, photo_id, music_id, music_title_snapshot, music_artist_snapshot, subject, content, diary_at)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-        RETURNING *;
+        RETURNING ${SELECT_ALIAS};
         `,
-        [
-          user_id,
-          photo_id,
-          music_id,
-          music_title_snapshot,
-          music_artist_snapshot,
-          subject,
-          content,
-          diary_at,
-        ]
+        [user_id, photo_id, music_id, music_title_snapshot, music_artist_snapshot, subject, content, diary_at_iso]
       );
       row = rows[0];
     }
@@ -106,8 +108,11 @@ router.post("/", async (req, res) => {
     return res.status(existing ? 200 : 201).json(row);
   } catch (e) {
     try { await client.query("ROLLBACK"); } catch {}
-    console.error("[POST /api/diaries]", e);
-    res.status(500).json({ error: "failed to create or update diary" });
+    console.error("[POST /api/diaries] BODY=", req.body);
+    console.error("[POST /api/diaries] ERROR=", e);
+    const msg = e?.detail || e?.message || "failed to create or update diary";
+    const code = (e?.code === "23505" || e?.code === "23503") ? 400 : 500;
+    res.status(code).json({ error: msg, code: e?.code ?? null });
   } finally {
     client.release();
   }
@@ -118,14 +123,14 @@ router.post("/", async (req, res) => {
 // GET /api/diaries?user_id=...&photo_id?=...&limit?=200
 router.get("/", async (req, res) => {
   try {
-    const user_id = nn(req.query.user_id);
-    if (!user_id) return res.status(400).json({ error: "user_id is required" });
+    const user_id = toNumOrNull(req.query.user_id);
+    if (user_id == null) return res.status(400).json({ error: "user_id must be integer" });
 
     const photo_id = toNumOrNull(req.query.photo_id);
     const limit = Math.min(Math.max(parseInt(req.query.limit || "200", 10) || 200, 1), 500);
 
     let q = `
-      SELECT *
+      SELECT ${SELECT_ALIAS}
       FROM diaries
       WHERE user_id = $1
     `;
@@ -147,19 +152,19 @@ router.get("/", async (req, res) => {
 });
 
 // ------------------------------------------------------------------
-// 포토 기준 단건 조회 (포토ID별 1개 정책 지원)
+// 포토 기준 단건 조회
 // GET /api/diaries/by-photo?user_id=...&photo_id=...
 router.get("/by-photo", async (req, res) => {
   try {
-    const user_id = nn(req.query.user_id);
+    const user_id = toNumOrNull(req.query.user_id);
     const photo_id = toNumOrNull(req.query.photo_id);
 
-    if (!user_id) return res.status(400).json({ error: "user_id is required" });
-    if (photo_id == null) return res.status(400).json({ error: "photo_id is required" });
+    if (user_id == null) return res.status(400).json({ error: "user_id must be integer" });
+    if (photo_id == null) return res.status(400).json({ error: "photo_id must be integer" });
 
     const { rows } = await pool.query(
       `
-      SELECT *
+      SELECT ${SELECT_ALIAS}
       FROM diaries
       WHERE user_id = $1 AND photo_id = $2
       ORDER BY created_at DESC
@@ -181,9 +186,9 @@ router.get("/by-photo", async (req, res) => {
 // GET /api/diaries/:id
 router.get("/:id", async (req, res) => {
   try {
-    const id = Number(req.params.id);
-    if (!id) return res.status(400).json({ error: "invalid id" });
-    const { rows } = await pool.query("SELECT * FROM diaries WHERE id=$1", [id]);
+    const id = toNumOrNull(req.params.id);
+    if (id == null) return res.status(400).json({ error: "invalid id" });
+    const { rows } = await pool.query(`SELECT ${SELECT_ALIAS} FROM diaries WHERE id=$1`, [id]);
     if (!rows.length) return res.status(404).json({ error: "not found" });
     res.json(rows[0]);
   } catch (e) {
@@ -197,9 +202,16 @@ router.get("/:id", async (req, res) => {
 // PUT /api/diaries/:id
 router.put("/:id", async (req, res) => {
   try {
-    const id = Number(req.params.id);
-    if (!id) return res.status(400).json({ error: "invalid id" });
+    const id = toNumOrNull(req.params.id);
+    if (id == null) return res.status(400).json({ error: "invalid id" });
     const { subject, content, music_id, music_title, music_artist, diary_at } = req.body || {};
+
+    const diary_at_iso = (() => {
+      const raw = nn(diary_at);
+      if (!raw) return null;
+      const d = new Date(raw);
+      return isNaN(d.getTime()) ? null : d.toISOString();
+    })();
 
     const { rows } = await pool.query(
       `
@@ -212,7 +224,7 @@ router.put("/:id", async (req, res) => {
         diary_at = COALESCE($6, diary_at),
         updated_at = NOW()
       WHERE id = $7
-      RETURNING *;
+      RETURNING ${SELECT_ALIAS};
       `,
       [
         subject ?? null,
@@ -220,7 +232,7 @@ router.put("/:id", async (req, res) => {
         toNumOrNull(music_id),
         nn(music_title),
         nn(music_artist),
-        nn(diary_at),
+        diary_at_iso,
         id,
       ]
     );
@@ -237,8 +249,8 @@ router.put("/:id", async (req, res) => {
 // DELETE /api/diaries/:id
 router.delete("/:id", async (req, res) => {
   try {
-    const id = Number(req.params.id);
-    if (!id) return res.status(400).json({ error: "invalid id" });
+    const id = toNumOrNull(req.params.id);
+    if (id == null) return res.status(400).json({ error: "invalid id" });
     const { rowCount } = await pool.query("DELETE FROM diaries WHERE id=$1", [id]);
     if (!rowCount) return res.status(404).json({ error: "not found" });
     res.json({ ok: true });
