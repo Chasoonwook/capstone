@@ -56,15 +56,14 @@ function useElementSize<T extends HTMLElement>() {
   return { ref, size }
 }
 
+/** 원본 이미지에 밝기 필터만 적용 (회전은 Group에서 처리) */
 function UseImage({
   src,
   brightness,
-  rotation,
   onImgReady,
 }: {
   src: string
   brightness: number
-  rotation: number
   onImgReady?: (node: any) => void
 }) {
   const [img] = useImage(src, "anonymous")
@@ -80,7 +79,7 @@ function UseImage({
     onImgReady?.(node)
   }, [img, brightness, onImgReady])
 
-  return <KImage ref={ref} image={img || undefined} rotation={rotation} listening={false} />
+  return <KImage ref={ref} image={img || undefined} listening={false} />
 }
 
 function useFitSize(naturalW: number | null, naturalH: number | null, maxW: number, maxH: number) {
@@ -169,8 +168,8 @@ export default function EditClient() {
   }, [photoId])
 
   // 컨테이너(box) 크기에 맞춰 최대로 키움(패딩 여유를 위해 약간 감산)
-  const maxW = Math.max(320, box.width - 8)   // 좌우 여유
-  const maxH = Math.max(240, box.height - 8)  // 상하 여유
+  const maxW = Math.max(320, box.width - 8)
+  const maxH = Math.max(240, box.height - 8)
   const fit = useFitSize(natural?.w ?? null, natural?.h ?? null, maxW, maxH)
 
   const fetchStickers = useCallback(async () => {
@@ -224,12 +223,8 @@ export default function EditClient() {
 
   /* ---------------- 드로잉(그리기) 모드 가드 + 핸들러 ---------------- */
   const handleMouseDown = (e: any) => {
-    // 스테이지 빈 영역 클릭 시 스티커 선택 해제
     if (e.target === e.target.getStage()) setSelectedId(null)
-
-    // 드로잉 모드가 아니면 선을 그리지 않음
     if (activeTool !== "draw") return
-
     setIsDrawing(true)
     const pos = e.target.getStage().getPointerPosition()
     if (!pos) return
@@ -255,7 +250,6 @@ export default function EditClient() {
     setIsDrawing(false)
   }
 
-  // 툴 전환 시 드로잉 상태 강제 종료
   useEffect(() => {
     if (activeTool !== "draw" && isDrawing) setIsDrawing(false)
   }, [activeTool, isDrawing])
@@ -284,7 +278,6 @@ export default function EditClient() {
   /* ---------------- 저장(히스토리 기록 + 이미지 업로드) ---------------- */
   const stageToBlob = async (): Promise<Blob> => {
     const stage = stageRef.current as any
-    // 고해상도 저장을 원하면 pixelRatio를 2~3으로 조정 가능
     const dataURL: string = stage.toDataURL({ pixelRatio: 1, mimeType: "image/png" })
     const res = await fetch(dataURL)
     const blob = await res.blob()
@@ -418,13 +411,15 @@ export default function EditClient() {
             onClick={onStageClick}
           >
             <Layer ref={baseLayerRef}>
+              {/* ⬇⬇⬇ 회전을 Group에 적용 + offset을 중앙으로 (이미 설정됨) */}
               <Group
                 x={fit.w / 2}
                 y={fit.h / 2}
                 offset={{ x: natural.w / 2, y: natural.h / 2 }}
                 scale={{ x: fit.scale, y: fit.scale }}
+                rotation={rotation} // ← 회전은 그룹 기준(중앙)으로!
               >
-                <UseImage src={imgUrl} brightness={brightness} rotation={rotation} />
+                <UseImage src={imgUrl} brightness={brightness} />
               </Group>
               {lines.map((l, i) => (
                 <Line
@@ -704,7 +699,6 @@ function StickerNode({
         const node = ref.current
         if (!node) return
         const scaleX = node.scaleX()
-        // 변형 후 스케일 누적 반영 + 스케일 리셋
         node.scaleX(1)
         node.scaleY(1)
         onChange({
