@@ -71,6 +71,8 @@ app.get("/health", async (_req, res) => {
   }
 });
 
+app.use('/api/spotify', spotifyRoutes);
+
 // ---- router loader
 function loadRoute(relPath) {
   try {
@@ -92,8 +94,6 @@ function loadRoute(relPath) {
     return null;
   }
 }
-
-app.use('/api/spotify', spotifyRoutes);
 
 // ---- mount routers (여기에서만 등록)
 const mounts = [
