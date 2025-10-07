@@ -25,7 +25,7 @@ const envAllow = (process.env.CORS_ORIGINS || "")
   .map((s) => trim(s.trim()))
   .filter(Boolean);
 
-// 기본 허용 (env가 비어있을 때만 사용)
+// env가 비었을 때만 쓰는 기본 허용 목록
 const defaultAllow = new Set([
   "http://localhost:3000",
   "http://127.0.0.1:3000",
@@ -58,12 +58,13 @@ const corsMiddleware = cors({
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  // allowedHeaders는 명시하지 않음 → 브라우저가 보낸 헤더를 자동 허용
+  // allowedHeaders를 명시하지 않아 브라우저가 보낸 헤더를 자동 허용
   optionsSuccessStatus: 204,
 });
 
 app.use(corsMiddleware);
-app.options("*", corsMiddleware);
+// Express 5에서는 "*"가 에러를 내므로 정규식 사용
+app.options(/.*/, corsMiddleware);
 
 /* ======================================================================= */
 /* health                                                                  */
@@ -80,10 +81,11 @@ app.get("/health", async (_req, res) => {
 });
 
 /* ======================================================================= */
-/* Spotify 라우터 (가장 먼저, 확실하게 마운트)                              */
+/* Spotify 라우터 (가장 먼저 마운트)                                        */
 /* ======================================================================= */
 let SPOTIFY_MOUNTED = false;
 let SPOTIFY_FILE_EXISTS = false;
+
 try {
   const spotifyPath = path.join(__dirname, "routes/spotify.js");
   SPOTIFY_FILE_EXISTS = fs.existsSync(spotifyPath);
@@ -193,6 +195,7 @@ function collectRoutes(layer, prefix = "") {
   }
   return out;
 }
+
 app.get("/debug/routes", (_req, res) => {
   try {
     const stack = app._router?.stack || [];
