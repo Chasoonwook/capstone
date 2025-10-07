@@ -16,41 +16,58 @@ app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-// ---- CORS
-const normalize = (s) => (s ? s.replace(/\/+$/, "") : s);
+/* ======================================================================= */
+/* CORS (credentials 허용 + 안정화)                                         */
+/* ======================================================================= */
+const trim = (s) => (s ? s.replace(/\/+$/, "") : s);
 const envAllow = (process.env.CORS_ORIGINS || "")
   .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean)
-  .map(normalize);
-const defaultAllow = [
+  .map((s) => trim(s.trim()))
+  .filter(Boolean);
+
+// 기본 허용 (env가 비어있을 때만 사용)
+const defaultAllow = new Set([
   "http://localhost:3000",
   "http://127.0.0.1:3000",
   "https://capstone-front-tau.vercel.app",
-];
-const allowList = envAllow.length ? envAllow : defaultAllow;
-const corsOptions = {
+]);
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true; // 서버-서버 호출 등
+  try {
+    const url = new URL(origin);
+    const norm = trim(origin);
+    if (envAllow.length) return envAllow.includes(norm);
+    if (defaultAllow.has(norm)) return true;
+    if (url.hostname.endsWith(".vercel.app")) return true;
+    if (url.hostname === "localhost" || url.hostname === "127.0.0.1") return true;
+  } catch {}
+  return false;
+}
+
+// 캐시/프록시 안전
+app.use((_, res, next) => {
+  res.header("Vary", "Origin");
+  next();
+});
+
+const corsMiddleware = cors({
   origin(origin, cb) {
-    if (!origin) return cb(null, true);
-    try {
-      const url = new URL(origin);
-      const norm = normalize(origin);
-      if (allowList.includes(norm)) return cb(null, true);
-      if (url.hostname.endsWith(".vercel.app")) return cb(null, true);
-      if (url.hostname === "localhost" || url.hostname === "127.0.0.1")
-        return cb(null, true);
-    } catch {}
+    if (isAllowedOrigin(origin)) return cb(null, true);
     return cb(new Error(`Not allowed by CORS: ${origin}`));
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "x-user-id", "x-preferred-genres"],
+  // allowedHeaders는 명시하지 않음 → 브라우저가 보낸 헤더를 자동 허용
   optionsSuccessStatus: 204,
-};
-app.use(cors(corsOptions));
-app.options(/.*/, cors(corsOptions));
+});
 
-// ---- health
+app.use(corsMiddleware);
+app.options("*", corsMiddleware);
+
+/* ======================================================================= */
+/* health                                                                  */
+/* ======================================================================= */
 app.get("/", (_req, res) => res.send("정상작동"));
 app.get("/health", async (_req, res) => {
   try {
@@ -62,7 +79,9 @@ app.get("/health", async (_req, res) => {
   }
 });
 
-// ===== 🔎 Spotify 라우터 마운트 (가장 먼저, 확실하게)
+/* ======================================================================= */
+/* Spotify 라우터 (가장 먼저, 확실하게 마운트)                              */
+/* ======================================================================= */
 let SPOTIFY_MOUNTED = false;
 let SPOTIFY_FILE_EXISTS = false;
 try {
@@ -73,14 +92,16 @@ try {
   } else {
     const spotifyRoutes = require("./routes/spotify");
     if (typeof spotifyRoutes !== "function") {
-      // Express Router는 함수여야 함
       throw new Error("routes/spotify export가 함수가 아닙니다 (module.exports = router 필요)");
     }
-    // 히트 로깅 미들웨어 + 라우터
-    app.use("/api/spotify", (req, _res, next) => {
-      console.log(`[hit] /api/spotify ${req.method} ${req.originalUrl}`);
-      next();
-    }, spotifyRoutes);
+    app.use(
+      "/api/spotify",
+      (req, _res, next) => {
+        console.log(`[hit] /api/spotify ${req.method} ${req.originalUrl}`);
+        next();
+      },
+      spotifyRoutes
+    );
     SPOTIFY_MOUNTED = true;
     console.log("[router] mounted: /api/spotify (routes/spotify.js)");
   }
@@ -88,7 +109,7 @@ try {
   console.error("[router] FAILED to mount /api/spotify:", e && (e.stack || e.message || e));
 }
 
-// 🔧 즉시 진단용 라우트
+// 즉시 진단용 라우트
 app.get("/debug/spotify", (_req, res) => {
   res.json({
     mounted: SPOTIFY_MOUNTED,
@@ -104,7 +125,9 @@ app.get("/debug/spotify", (_req, res) => {
   });
 });
 
-// ---- router loader (기존 코드)
+/* ======================================================================= */
+/* 기타 라우터 자동 로더                                                    */
+/* ======================================================================= */
 function loadRoute(relPath) {
   try {
     const abs = path.join(__dirname, relPath);
@@ -152,7 +175,9 @@ for (const [base, rel] of mounts) {
 }
 console.log("[router] mounted:", mounted);
 
-// ---- debug routes
+/* ======================================================================= */
+/* debug routes listing                                                     */
+/* ======================================================================= */
 function collectRoutes(layer, prefix = "") {
   const out = [];
   if (layer.route && layer.route.path) {
@@ -186,7 +211,9 @@ app.get("/debug/routes", (_req, res) => {
   }
 });
 
-// ---- debug db
+/* ======================================================================= */
+/* debug db                                                                 */
+/* ======================================================================= */
 app.get("/debug/db", async (_req, res) => {
   try {
     const who = await pool.query(
@@ -199,7 +226,9 @@ app.get("/debug/db", async (_req, res) => {
   }
 });
 
-// ---- 404 & 500
+/* ======================================================================= */
+/* 404 & 500                                                                */
+/* ======================================================================= */
 app.use((req, res, next) => {
   if (res.headersSent) return next();
   res.status(404).json({ error: "not found", path: req.originalUrl });
@@ -209,6 +238,8 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: "internal error" });
 });
 
-// ---- start
+/* ======================================================================= */
+/* start                                                                    */
+/* ======================================================================= */
 const PORT = Number(process.env.PORT || 5000);
 app.listen(PORT, () => console.log(`[server] listening on :${PORT}`));
