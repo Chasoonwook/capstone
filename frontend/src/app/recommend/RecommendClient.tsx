@@ -20,10 +20,10 @@ export default function RecommendClient() {
 
   const [showPlaylist, setShowPlaylist] = useState(false);
 
-  // ✅ Web Playback SDK 훅 (쿠키 기반)
+  // Web Playback SDK (쿠키 기반)
   const { ready, state, activate, transferToThisDevice, playUris, resume, pause, seek } = useSpotifyPlayer();
 
-  // ✅ Spotify 연동 여부(쿠키) 확인
+  // Spotify 연동 여부
   const [spotifyLinked, setSpotifyLinked] = useState(false);
   useEffect(() => {
     let mounted = true;
@@ -32,15 +32,12 @@ export default function RecommendClient() {
         const r = await fetch(`${API_BASE}/api/spotify/me`, { credentials: "include" });
         if (!mounted) return;
         setSpotifyLinked(r.ok);
-      } catch {
-        if (!mounted) return;
-        setSpotifyLinked(false);
-      }
+      } catch { if (!mounted) return; setSpotifyLinked(false); }
     })();
     return () => { mounted = false; };
   }, []);
 
-  // Audio(preview) — 연동 안 된 경우에만 사용
+  // Audio(preview)
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const playReqIdRef = useRef(0);
   const [source, setSource] = useState<"preview" | "spotify" | null>(null);
@@ -49,6 +46,15 @@ export default function RecommendClient() {
   const [duration, setDuration] = useState(180);
   const isPlayingRef = useRef(isPlaying);
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+
+  // 미리듣기 억제(Spotify 시작 직후 잠깐 preview 차단)
+  const suppressPreviewUntilRef = useRef(0);
+  const killPreview = useCallback(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    try { a.pause(); } catch {}
+    try { a.src = ""; a.load(); } catch {}
+  }, []);
 
   // UI/State
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
@@ -80,6 +86,9 @@ export default function RecommendClient() {
   }, []);
 
   const safePlayPreview = useCallback(async (src: string) => {
+    // Spotify 시작 직후 N초 동안은 미리듣기 금지(겹침 방지)
+    if (Date.now() < suppressPreviewUntilRef.current) return;
+
     const a = audioRef.current!;
     const myId = ++playReqIdRef.current;
     try { a.pause(); } catch {}
@@ -112,7 +121,7 @@ export default function RecommendClient() {
     return () => { mounted = false; };
   }, [photoId]);
 
-  // Fetch recommendations
+  // Fetch recommendations (동일)
   const fetchRecommendations = useCallback(
     async (signal?: AbortSignal) => {
       if (!photoId) {
@@ -277,42 +286,57 @@ export default function RecommendClient() {
     if (source !== "spotify") return;
     const posSec = Math.floor((state.position || 0) / 1000);
     const durSec =
-      state.duration
-        ? Math.floor(state.duration / 1000)
-        : parseDurationToSec(currentSong?.duration ?? "3:00");
+      state.duration ? Math.floor(state.duration / 1000)
+                     : parseDurationToSec(currentSong?.duration ?? "3:00");
     setCurrentTime(posSec);
     setDuration(durSec);
     setIsPlaying(!state.paused);
   }, [source, state.position, state.duration, state.paused, currentSong?.duration]);
 
-  // ✅ 자동 재생 (연동 + SDK 준비 완료 시)
+  // ✅ 자동 재생(연동 + SDK 준비)
   useEffect(() => {
     let cancelled = false;
     (async () => {
       if (!spotifyLinked || !ready) return;
       if (!normalizedCurrentUri) return;
       if (source === "spotify" && isPlayingRef.current) return;
+
+      // 미리듣기 완전 종료 + 억제 2.5초
+      killPreview();
+      suppressPreviewUntilRef.current = Date.now() + 2500;
+
       try {
-        audioRef.current?.pause(); // 미리듣기 끔
         await activate();
         await transferToThisDevice();
+        setSource("spotify");              // 먼저 소스 전환
         await playUris([normalizedCurrentUri]);
         if (cancelled) return;
-        setSource("spotify");
         setIsPlaying(true);
       } catch {}
     })();
     return () => { cancelled = true; };
-  }, [spotifyLinked, ready, normalizedCurrentUri, source, activate, transferToThisDevice, playUris]);
+  }, [spotifyLinked, ready, normalizedCurrentUri, source, activate, transferToThisDevice, playUris, killPreview]);
 
-  // Preview timer
+  // ✅ 트랙 종료시 자동 다음 곡
+  const lastTrackUriRef = useRef<string | null>(null);
+  const autoNextLockRef = useRef(false);
   useEffect(() => {
-    if (!isPlaying || source !== "preview") return;
-    const id = setInterval(() => {
-      setCurrentTime((t) => (t + 1 > duration ? duration : t + 1));
-    }, 1000);
-    return () => clearInterval(id);
-  }, [isPlaying, duration, source]);
+    if (source !== "spotify") { autoNextLockRef.current = false; lastTrackUriRef.current = null; return; }
+
+    // 트랙이 바뀌면 락 풀기
+    if (state.trackUri && state.trackUri !== lastTrackUriRef.current) {
+      lastTrackUriRef.current = state.trackUri;
+      autoNextLockRef.current = false;
+    }
+
+    if (!state.duration) return;
+    const timeLeft = state.duration - state.position; // ms
+    if (timeLeft <= 800 && !autoNextLockRef.current) {
+      autoNextLockRef.current = true;
+      // 다음 곡으로
+      void playNextSong();
+    }
+  }, [source, state.position, state.duration, state.trackUri]); // eslint-disable-line
 
   // 단일 곡 재생
   const playSong = async (song: Song) => {
@@ -321,19 +345,23 @@ export default function RecommendClient() {
     setDuration(parseDurationToSec(song.duration));
     const songUri = toSpotifyUri(song.spotify_uri ?? null);
 
-    // ✅ 전체 재생 (연동 + SDK 준비)
+    // 전체 재생 (연동 + SDK 준비)
     if (spotifyLinked && ready && songUri) {
+      // 미리듣기 완전 종료 + 억제 2.5초
+      killPreview();
+      suppressPreviewUntilRef.current = Date.now() + 2500;
+
       try {
         await activate();
         await transferToThisDevice();
+        setSource("spotify");
         await playUris([songUri]);
         setIsPlaying(true);
-        setSource("spotify");
         return;
       } catch {}
     }
 
-    // ⛔ 미연동/실패 시에만 미리듣기
+    // (미연동/실패) 미리듣기
     let preview = song.preview_url ?? null;
     let cover = song.image ?? null;
     let uri = songUri ?? null;
@@ -416,7 +444,7 @@ export default function RecommendClient() {
     } finally { setBusy(false); }
   };
 
-  // ✅ 슬라이더에서 공통 시크 함수
+  // ✅ 슬라이더 Seek (Spotify/preview 공통)
   const handleSeek = async (v: number) => {
     setCurrentTime(v);
     if (source === "preview" && audioRef.current) {
@@ -426,7 +454,7 @@ export default function RecommendClient() {
     }
   };
 
-  // Feedback
+  // Feedback (생략 없이 동일)
   const [feedbackMap, setFeedbackMap] = useState<Record<string | number, 1 | -1 | 0>>({});
   const sendFeedback = useCallback(
     async (musicId: string | number, value: 1 | -1) => {
@@ -509,7 +537,7 @@ export default function RecommendClient() {
 
   return (
     <div className="fixed inset-0 bg-black">
-      {/* Progress bars(상단 작은 바) */}
+      {/* 상단 progress bars */}
       <div className="absolute top-0 left-0 right-0 z-50 flex gap-1 p-2">
         {recommendations.map((_, idx) => (
           <div key={idx} className="flex-1 h-0.5 bg-white/30 rounded-full overflow-hidden">
@@ -561,7 +589,7 @@ export default function RecommendClient() {
               <ChevronUp className={`w-4 h-4 transition-transform ${showPlaylist ? "rotate-180" : ""}`} />
             </button>
 
-            {/* ✅ Progress bar */}
+            {/* Progress bar */}
             <div className="space-y-1">
               <input
                 type="range"
@@ -711,7 +739,6 @@ export default function RecommendClient() {
         </div>
       </div>
 
-      {/* Overlay to close playlist when clicking outside */}
       {showPlaylist && <div className="fixed inset-0 bg-black/20 z-40" onClick={() => setShowPlaylist(false)} />}
     </div>
   );

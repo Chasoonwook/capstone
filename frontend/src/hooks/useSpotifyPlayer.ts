@@ -107,8 +107,7 @@ export function useSpotifyPlayer() {
       const w = window as unknown as SpotifyWindow;
       const PlayerCtor = w.Spotify!.Player;
 
-      // 최초 토큰(없어도 플레이어 생성은 가능)
-      tokenRef.current = await fetchAccessToken();
+      tokenRef.current = await fetchAccessToken(); // 없어도 플레이어 생성은 가능
       if (!tokenRef.current) {
         console.warn("[Spotify] no access token yet (user not linked?)");
       }
