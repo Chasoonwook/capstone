@@ -6,7 +6,14 @@ import { API_BASE } from "@/lib/api";
 /** ===== 최소 타입 정의 ===== */
 type ReadyEvent = { device_id: string };
 type ErrorEvent = { message: string };
-type WebPlaybackState = unknown;
+
+/** Web Playback SDK state(우리가 쓰는 필드만) */
+type WebPlaybackStateLite = {
+  position: number;        // ms
+  duration: number;        // ms
+  paused: boolean;
+  trackUri: string | null; // 현재 트랙 URI
+};
 
 type TokenGetter = (cb: (token: string) => void) => void;
 type PlayerOptions = { name: string; getOAuthToken: TokenGetter; volume?: number };
@@ -25,12 +32,13 @@ type SpotifyPlayer = {
       | "playback_error",
     cb: (ev: ErrorEvent) => void
   ): boolean;
-  addListener(event: "player_state_changed", cb: (state: WebPlaybackState) => void): boolean;
+  addListener(event: "player_state_changed", cb: (state: any) => void): boolean;
   removeListener(event: string): void;
   pause(): Promise<void>;
   resume(): Promise<void>;
   previousTrack(): Promise<void>;
   nextTrack(): Promise<void>;
+  seek(position_ms: number): Promise<void>;
   activateElement?: () => void | Promise<void>;
 };
 
@@ -59,7 +67,7 @@ async function ensureSDK(): Promise<void> {
   });
 }
 
-/** 백엔드에서 access token 얻기 */
+/** 백엔드에서 access token 얻기 (쿠키 기반) */
 async function fetchAccessToken(): Promise<string | null> {
   try {
     const r = await fetch(`${API_BASE}/api/spotify/token`, { credentials: "include" });
@@ -80,6 +88,14 @@ export function useSpotifyPlayer() {
   const [ready, setReady] = useState(false);
   const [deviceId, setDeviceId] = useState<string | null>(null);
 
+  // 재생 상태(진행도/길이/일시정지)
+  const [state, setState] = useState<WebPlaybackStateLite>({
+    position: 0,
+    duration: 0,
+    paused: true,
+    trackUri: null,
+  });
+
   // SDK 로딩 + 플레이어 생성/유지
   useEffect(() => {
     let cancelled = false;
@@ -91,7 +107,7 @@ export function useSpotifyPlayer() {
       const w = window as unknown as SpotifyWindow;
       const PlayerCtor = w.Spotify!.Player;
 
-      // 최초 토큰
+      // 최초 토큰(없어도 플레이어 생성은 가능)
       tokenRef.current = await fetchAccessToken();
       if (!tokenRef.current) {
         console.warn("[Spotify] no access token yet (user not linked?)");
@@ -122,6 +138,17 @@ export function useSpotifyPlayer() {
         player.addListener("account_error", ({ message }) => console.error("account_error:", message));
         player.addListener("playback_error", ({ message }) => console.error("playback_error:", message));
 
+        // ✅ 진행도/길이/일시정지 등 상태 반영
+        player.addListener("player_state_changed", (s: any) => {
+          if (!s) return;
+          setState({
+            position: Number(s.position) || 0,
+            duration: Number(s.duration) || 0,
+            paused: !!s.paused,
+            trackUri: s?.track_window?.current_track?.uri ?? null,
+          });
+        });
+
         try { await player.connect(); } catch (e) { console.warn("player.connect failed:", e); }
         playerRef.current = player as unknown as SpotifyPlayer;
       }
@@ -148,7 +175,7 @@ export function useSpotifyPlayer() {
       body: JSON.stringify({ device_id: deviceIdRef.current, play: true }),
     });
 
-    // 짧게 폴링하여 활성화 확인 (선택적)
+    // 짧게 폴링하여 활성화 확인
     for (let i = 0; i < 6; i++) {
       try {
         const r = await fetch(`${API_BASE}/api/spotify/devices`, { credentials: "include" });
@@ -160,7 +187,7 @@ export function useSpotifyPlayer() {
     }
   }, []);
 
-  /** 특정 트랙(URI들) 전체 재생 – preview_url 사용 금지 */
+  /** 특정 트랙(URI들) 전체 재생 */
   const playUris = useCallback(async (uris: string[]) => {
     if (!ready) throw new Error("player_not_ready");
     if (!deviceIdRef.current) throw new Error("no_device_id");
@@ -197,5 +224,24 @@ export function useSpotifyPlayer() {
     await fetch(`${API_BASE}/api/spotify/previous`, { method: "POST", credentials: "include" });
   }, []);
 
-  return { ready, deviceId, activate, transferToThisDevice: ensureActiveDevice, playUris, resume, pause, next, prev };
+  /** 시크(밀리초) — SDK 직접 호출 */
+  const seek = useCallback(async (positionMs: number) => {
+    const p = playerRef.current;
+    if (!p) return;
+    try { await p.seek(Math.max(0, Math.floor(positionMs))); } catch {}
+  }, []);
+
+  return {
+    ready,
+    deviceId,
+    state,                         // { position, duration, paused, trackUri }
+    activate,
+    transferToThisDevice: ensureActiveDevice,
+    playUris,
+    resume,
+    pause,
+    next,
+    prev,
+    seek,
+  };
 }
