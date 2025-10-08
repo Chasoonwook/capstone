@@ -50,7 +50,7 @@ export default function UserHeader({
     try {
       if (Array.isArray(v)) return v.map(String)
       if (typeof v === "string") {
-        const parsed = JSON.parse(v) // '["kpop","힙합"]' 같은 문자열 지원
+        const parsed = JSON.parse(v) // '["kpop","힙합"]' 문자열도 처리
         return Array.isArray(parsed) ? parsed.map(String) : []
       }
     } catch {}
@@ -58,8 +58,7 @@ export default function UserHeader({
   }
 
   /** 초기값: user.preferred_genres → prop.selectedGenres → localStorage 순서 */
-  const uid =
-    typeof window !== "undefined" ? (localStorage.getItem("uid") || undefined) : undefined
+  const uid = typeof window !== "undefined" ? (localStorage.getItem("uid") || undefined) : undefined
   const localKey = uid ? `preferred_genres::${uid}` : undefined
 
   const initialGenres = useMemo(() => {
@@ -89,7 +88,6 @@ export default function UserHeader({
     if (n.length) {
       setGenres(n)
       setGenresLoaded(true)
-      // 로컬 캐시 갱신
       if (localKey) try { localStorage.setItem(localKey, JSON.stringify(n)) } catch {}
       return
     }
@@ -140,7 +138,6 @@ export default function UserHeader({
         const fromDb = normalize(me?.preferred_genres)
         setGenres(fromDb)
         setGenresLoaded(true)
-        // 성공 시 로컬 캐시
         if (localKey) try { localStorage.setItem(localKey, JSON.stringify(fromDb)) } catch {}
       } catch (e) {
         console.warn("[UserHeader] load preferred_genres error:", e)
@@ -190,23 +187,30 @@ export default function UserHeader({
 
     return (
       <div className="flex items-center gap-2">
-        <DropdownMenu onOpenChange={setMenuOpen}>
+        {/* ▼ 완전 controlled 모드로 전환 */}
+        <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
           <DropdownMenuTrigger asChild>
-            <button
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-full transition-colors ${
-                embedded ? "bg-white/10 hover:bg-white/20" : "bg-primary/10 hover:bg-primary/20"
+            {/* shadcn Button 사용 + type="button" 명시 */}
+            <Button
+              type="button"
+              variant="ghost"
+              className={`h-auto px-3 py-1.5 gap-2 rounded-full ${
+                embedded
+                  ? "text-white hover:bg-white/20"
+                  : "text-primary hover:bg-primary/20"
               }`}
-              aria-label="사용자 메뉴"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
             >
               <User className={`w-4 h-4 ${embedded ? "text-white" : "text-primary"}`} />
               <span
                 className={`text-sm font-medium ${
-                  embedded ? "text-white hidden sm:inline" : "text-primary hidden sm:inline"
+                  embedded ? "hidden sm:inline text-white" : "hidden sm:inline text-primary"
                 }`}
               >
                 {displayName}
               </span>
-            </button>
+            </Button>
           </DropdownMenuTrigger>
 
           <DropdownMenuContent align="end" sideOffset={8} className="w-80">
