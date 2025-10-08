@@ -1,35 +1,158 @@
 "use client"
 
-import { User, LogOut, LogIn } from "lucide-react"
+import React, { useEffect, useMemo, useState } from "react"
+import { User, LogOut, LogIn, CheckCircle2, PlugZap, History, Settings, Heart } from "lucide-react"
 import { useRouter } from "next/navigation"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { API_BASE, authHeaders } from "@/lib/api"
 
 interface UserHeaderProps {
   user: any
   isLoggedIn: boolean
   onLogout: () => void
-  /** 상위 헤더 안에서 함께 쓰는 모드: wrapper header/border 제거 */
   embedded?: boolean
+  isSpotifyConnected?: boolean
+  onSpotifyConnect?: () => void
+  /** 상위에서 내려오면 우선 사용, 없으면 내부 fetch */
+  selectedGenres?: string[] | string | null
 }
 
-export default function UserHeader({ user, isLoggedIn, onLogout, embedded = false }: UserHeaderProps) {
+export default function UserHeader({
+  user,
+  isLoggedIn,
+  onLogout,
+  embedded = false,
+  isSpotifyConnected = false,
+  onSpotifyConnect,
+  selectedGenres = [],
+}: UserHeaderProps) {
   const router = useRouter()
-
-  // embedded 모드에서는 상위에서 색상을 주입(검정 배경 위 글자 흰색)
-  const nameCls = embedded ? "text-white/90" : "text-foreground"
-  const logoutBtnCls = embedded
-    ? "text-white/70 hover:text-white transition"
-    : "w-8 h-8 rounded-full hover:bg-muted flex items-center justify-center transition-colors"
 
   const Wrapper: React.ElementType = embedded ? "div" : "header"
   const wrapperCls = embedded
     ? "max-w-5xl mx-auto flex items-center justify-between px-4 py-3"
     : "sticky top-0 z-40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b border-border"
 
+  const displayName =
+    (user?.name && String(user.name).trim()) || (user?.email && String(user.email).split("@")[0]) || "Guest"
+
+  /** ── 유틸: DB/prop/문자열 모두 배열로 정규화 */
+  const normalize = (v: any): string[] => {
+    try {
+      if (Array.isArray(v)) return v.map(String)
+      if (typeof v === "string") {
+        const parsed = JSON.parse(v) // '["kpop","힙합"]' 같은 문자열 지원
+        return Array.isArray(parsed) ? parsed.map(String) : []
+      }
+    } catch {}
+    return []
+  }
+
+  /** 초기값: user.preferred_genres → prop.selectedGenres → localStorage 순서 */
+  const uid =
+    typeof window !== "undefined" ? (localStorage.getItem("uid") || undefined) : undefined
+  const localKey = uid ? `preferred_genres::${uid}` : undefined
+
+  const initialGenres = useMemo(() => {
+    const fromUser = normalize(user?.preferred_genres)
+    if (fromUser.length) return fromUser
+
+    const fromProp = normalize(selectedGenres)
+    if (fromProp.length) return fromProp
+
+    if (typeof window !== "undefined" && localKey) {
+      try {
+        const v = localStorage.getItem(localKey)
+        const fromLocal = normalize(v)
+        if (fromLocal.length) return fromLocal
+      } catch {}
+    }
+    return []
+  }, [user?.preferred_genres, selectedGenres, localKey])
+
+  const [genres, setGenres] = useState<string[]>(initialGenres)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [genresLoaded, setGenresLoaded] = useState<boolean>(initialGenres.length > 0)
+
+  /** 상위/유저 정보가 나중에 도착해도 동기화 */
+  useEffect(() => {
+    const n = normalize(user?.preferred_genres)
+    if (n.length) {
+      setGenres(n)
+      setGenresLoaded(true)
+      // 로컬 캐시 갱신
+      if (localKey) try { localStorage.setItem(localKey, JSON.stringify(n)) } catch {}
+      return
+    }
+    const p = normalize(selectedGenres)
+    if (p.length) {
+      setGenres(p)
+      setGenresLoaded(true)
+      if (localKey) try { localStorage.setItem(localKey, JSON.stringify(p)) } catch {}
+    }
+  }, [user?.preferred_genres, selectedGenres, localKey])
+
+  /** 드롭다운 열릴 때 lazy-load: localStorage → API (쿠키 포함) */
+  useEffect(() => {
+    if (!menuOpen || genresLoaded || !isLoggedIn) return
+
+    // 1) 로컬 먼저
+    if (localKey) {
+      try {
+        const v = localStorage.getItem(localKey)
+        const fromLocal = normalize(v)
+        if (fromLocal.length) {
+          setGenres(fromLocal)
+          setGenresLoaded(true)
+          return
+        }
+      } catch {}
+    }
+
+    // 2) API (쿠키 포함). uid 없으면 X-User-Id 생략
+    const headers = new Headers(authHeaders?.() as HeadersInit)
+    if (uid) headers.set("X-User-Id", uid)
+
+    ;(async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/users/me`, {
+          headers,
+          cache: "no-store",
+          credentials: "include",
+        })
+
+        if (!r.ok) {
+          console.warn("[UserHeader] /api/users/me not ok:", r.status)
+          setGenresLoaded(true)
+          return
+        }
+
+        const me = await r.json()
+        const fromDb = normalize(me?.preferred_genres)
+        setGenres(fromDb)
+        setGenresLoaded(true)
+        // 성공 시 로컬 캐시
+        if (localKey) try { localStorage.setItem(localKey, JSON.stringify(fromDb)) } catch {}
+      } catch (e) {
+        console.warn("[UserHeader] load preferred_genres error:", e)
+        setGenresLoaded(true)
+      }
+    })()
+  }, [menuOpen, genresLoaded, isLoggedIn, uid, localKey])
+
   return (
     <Wrapper className={wrapperCls}>
       {!embedded && (
         <div className="flex items-center justify-between h-14 px-4 w-full">
-          {/* 아래 div 내용과 동일 */}
           <div className="flex items-center justify-between w-full">
             <h1 className="text-lg font-bold text-foreground">MoodTune</h1>
             <RightPart />
@@ -39,10 +162,7 @@ export default function UserHeader({ user, isLoggedIn, onLogout, embedded = fals
 
       {embedded && (
         <>
-          <h1
-            className="text-xl font-bold leading-none cursor-pointer"
-            onClick={() => router.push("/")}
-          >
+          <h1 className="text-xl font-bold leading-none cursor-pointer" onClick={() => router.push("/")}>
             MoodTune
           </h1>
           <RightPart />
@@ -52,38 +172,136 @@ export default function UserHeader({ user, isLoggedIn, onLogout, embedded = fals
   )
 
   function RightPart() {
+    if (!isLoggedIn) {
+      return (
+        <button
+          onClick={() => router.push("/login")}
+          className={
+            embedded
+              ? "flex items-center gap-2 px-4 py-1.5 rounded-full bg-white text-black hover:bg-white/90 transition-colors"
+              : "flex items-center gap-2 px-4 py-1.5 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+          }
+        >
+          <LogIn className="w-4 h-4" />
+          <span className="text-sm font-medium">로그인</span>
+        </button>
+      )
+    }
+
     return (
       <div className="flex items-center gap-2">
-        {isLoggedIn ? (
-          <>
+        <DropdownMenu onOpenChange={setMenuOpen}>
+          <DropdownMenuTrigger asChild>
             <button
-              onClick={() => router.push("/account")}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-full ${embedded ? "bg-white/10 hover:bg-white/20" : "bg-primary/10 hover:bg-primary/20"} transition-colors`}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-full transition-colors ${
+                embedded ? "bg-white/10 hover:bg-white/20" : "bg-primary/10 hover:bg-primary/20"
+              }`}
+              aria-label="사용자 메뉴"
             >
               <User className={`w-4 h-4 ${embedded ? "text-white" : "text-primary"}`} />
-              <span className={`text-sm font-medium ${embedded ? "text-white hidden sm:inline" : "text-primary hidden sm:inline"}`}>
-                {user?.name || "프로필"}
+              <span
+                className={`text-sm font-medium ${
+                  embedded ? "text-white hidden sm:inline" : "text-primary hidden sm:inline"
+                }`}
+              >
+                {displayName}
               </span>
             </button>
-            <button
-              onClick={onLogout}
-              className={logoutBtnCls}
-              aria-label="로그아웃"
-            >
-              <LogOut className={`w-4 h-4 ${embedded ? "text-white/80" : "text-muted-foreground"}`} />
-            </button>
-          </>
-        ) : (
-          <button
-            onClick={() => router.push("/login")}
-            className={embedded
-              ? "flex items-center gap-2 px-4 py-1.5 rounded-full bg-white text-black hover:bg-white/90 transition-colors"
-              : "flex items-center gap-2 px-4 py-1.5 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"}
-          >
-            <LogIn className="w-4 h-4" />
-            <span className="text-sm font-medium">로그인</span>
-          </button>
-        )}
+          </DropdownMenuTrigger>
+
+          <DropdownMenuContent align="end" sideOffset={8} className="w-80">
+            <DropdownMenuLabel className="text-xs text-muted-foreground font-normal">로그인 계정</DropdownMenuLabel>
+            <div className="px-2 pb-3">
+              <div className="text-sm font-semibold leading-none">{displayName}</div>
+              {user?.email && <div className="text-xs text-muted-foreground mt-1.5">{user.email}</div>}
+            </div>
+
+            <DropdownMenuSeparator />
+
+            <div className="px-2 py-3">
+              <div className="flex items-center gap-2 mb-2">
+                {isSpotifyConnected ? (
+                  <>
+                    <CheckCircle2 className="h-4 w-4 text-green-600" />
+                    <span className="text-sm font-semibold">스포티파이 연동됨</span>
+                  </>
+                ) : (
+                  <>
+                    <PlugZap className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-sm font-semibold">스포티파이 연동</span>
+                  </>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground mb-3 leading-relaxed">
+                {isSpotifyConnected
+                  ? "전체 재생을 바로 이용할 수 있어요."
+                  : "계정을 연결하면 전체 듣기, 재생목록 연동이 가능해요."}
+              </p>
+              {!isSpotifyConnected && (
+                <Button
+                  size="sm"
+                  className="w-full"
+                  onClick={
+                    onSpotifyConnect ??
+                    (() => {
+                      router.push("/account")
+                    })
+                  }
+                >
+                  스포티파이 연결하기
+                </Button>
+              )}
+            </div>
+
+            <DropdownMenuSeparator />
+
+            <div className="px-2 py-3">
+              <div className="flex items-center gap-2 mb-2">
+                <Heart className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-semibold">관심 장르</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {genres.length ? (
+                  genres.map((g) => (
+                    <Badge
+                      key={g}
+                      variant="secondary"
+                      className="text-xs cursor-pointer hover:bg-primary hover:text-primary-foreground transition-colors"
+                      onClick={() => router.push("/onboarding/genres?edit=1")}
+                    >
+                      {g}
+                    </Badge>
+                  ))
+                ) : (
+                  <button
+                    onClick={() => router.push("/onboarding/genres?edit=1")}
+                    className="text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-2"
+                  >
+                    장르를 선택해주세요
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <DropdownMenuSeparator />
+
+            <DropdownMenuItem onClick={() => router.push("/history")} className="cursor-pointer">
+              <History className="mr-2 h-4 w-4" />
+              <span>내 기록 보기</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => router.push("/account")} className="cursor-pointer">
+              <Settings className="mr-2 h-4 w-4" />
+              <span>계정 설정</span>
+            </DropdownMenuItem>
+
+            <DropdownMenuSeparator />
+
+            <DropdownMenuItem onClick={onLogout} className="cursor-pointer text-red-600 focus:text-red-700">
+              <LogOut className="mr-2 h-4 w-4" />
+              <span>로그아웃</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     )
   }
