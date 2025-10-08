@@ -41,7 +41,6 @@ export default function UserHeader({
   const displayName =
     (user?.name && String(user.name).trim()) || (user?.email && String(user.email).split("@")[0]) || "Guest"
 
-  // ▼▼▼▼▼ [수정됨] 스포티파이 연결 상태 확인 로직 변경 ▼▼▼▼▼
   const [isSpotifyConnected, setIsSpotifyConnected] = useState(false)
   const [showSpotifyModal, setShowSpotifyModal] = useState(false)
 
@@ -56,15 +55,12 @@ export default function UserHeader({
       }
     };
     checkConnection();
-    // 다른 탭이나 창에서 상태가 변경될 수 있으므로, 다시 활성화될 때마다 체크
     window.addEventListener('focus', checkConnection);
     return () => {
       window.removeEventListener('focus', checkConnection);
     };
   }, []);
-  // ▲▲▲▲▲ [수정됨] 여기까지 ▲▲▲▲▲
 
-  // --- 장르 관련 로직 (수정 없음) ---
   const normalize = (v: any): string[] => {
     try {
       if (Array.isArray(v)) return v.map(String)
@@ -85,20 +81,23 @@ export default function UserHeader({
     }
     return []
   }, [user?.preferred_genres, selectedGenres, localKey]);
+  
   const [genres, setGenres] = useState<string[]>(initialGenres);
   const [menuOpen, setMenuOpen] = useState(false);
   const [genresLoaded, setGenresLoaded] = useState<boolean>(initialGenres.length > 0);
+
   useEffect(() => {
-    const n = normalize(user?.preferred_genres); if (n.length) { setGenres(n); setGenresLoaded(true); if (localKey) try { localStorage.setItem(localKey, JSON.stringify(n)) } catch {} return; }
+    const n = normalize(user?.preferred_genres); if (n.length) { setGenres(n); setGenresLoaded(true); if (localKey) try { localStorage.setItem(localKey, JSON.stringify(n)) } catch {}; return; }
     const p = normalize(selectedGenres); if (p.length) { setGenres(p); setGenresLoaded(true); if (localKey) try { localStorage.setItem(localKey, JSON.stringify(p)) } catch {} }
   }, [user?.preferred_genres, selectedGenres, localKey]);
+
   useEffect(() => {
     if (!menuOpen || genresLoaded || !isLoggedIn) return;
     if (localKey) { try { const v = localStorage.getItem(localKey); const fromLocal = normalize(v); if (fromLocal.length) { setGenres(fromLocal); setGenresLoaded(true); return; } } catch {} }
-    const headers = new Headers(authHeaders?.() as HeadersInit); if (uid) headers.set("X-User-Id", uid);
+    const headers = new Headers(authHeaders() as HeadersInit); if (uid) headers.set("X-User-Id", uid);
     (async () => {
       try {
-        const r = await fetch(`${API_BASE}/api/users/me`, { headers, cache: "no-store", credentials: "include" });
+        const r = await fetch(`${API_BASE}/api/users/me`, { headers, cache: "no-store" });
         if (!r.ok) { setGenresLoaded(true); return; }
         const me = await r.json();
         const fromDb = normalize(me?.preferred_genres); setGenres(fromDb); setGenresLoaded(true);
@@ -106,43 +105,15 @@ export default function UserHeader({
       } catch (e) { setGenresLoaded(true); }
     })()
   }, [menuOpen, genresLoaded, isLoggedIn, uid, localKey]);
-  // --- 장르 관련 로직 끝 ---
 
   const handleSpotifyConnect = () => {
-    setShowSpotifyModal(false)
-    const returnTo = typeof window !== "undefined" ? `${window.location.pathname}${window.location.search || ""}` : "/"
-    const qs = new URLSearchParams({ return: returnTo }).toString()
-    window.location.href = `${API_BASE}/api/spotify/authorize?${qs}`
-  }
+    setShowSpotifyModal(false);
+    const returnTo = typeof window !== "undefined" ? `${window.location.pathname}${window.location.search || ""}` : "/";
+    const qs = new URLSearchParams({ return: returnTo }).toString();
+    window.location.href = `${API_BASE}/api/spotify/authorize?${qs}`;
+  };
 
-  return (
-    <Wrapper className={wrapperCls}>
-      {!embedded && (
-        <div className="flex items-center justify-between h-14 px-4 w-full">
-          <div className="flex items-center justify-between w-full">
-            <h1 className="text-lg font-bold text-foreground">MoodTune</h1>
-            <RightPart />
-          </div>
-        </div>
-      )}
-
-      {embedded && (
-        <>
-          <h1 className="text-xl font-bold leading-none cursor-pointer" onClick={() => router.push("/")}>
-            MoodTune
-          </h1>
-          <RightPart />
-        </>
-      )}
-
-      <SpotifyConnectModal
-        open={showSpotifyModal}
-        onClose={() => setShowSpotifyModal(false)}
-        onConnect={handleSpotifyConnect}
-      />
-    </Wrapper>
-  )
-
+  // ▼▼▼▼▼ [수정됨] RightPart 함수를 return 문 위로 이동 ▼▼▼▼▼
   function RightPart() {
     if (!isLoggedIn) {
       return (
@@ -231,4 +202,33 @@ export default function UserHeader({
       </div>
     )
   }
+  // ▲▲▲▲▲ [수정됨] 여기까지 이동 ▲▲▲▲▲
+
+  return (
+    <Wrapper className={wrapperCls}>
+      {!embedded && (
+        <div className="flex items-center justify-between h-14 px-4 w-full">
+          <div className="flex items-center justify-between w-full">
+            <h1 className="text-lg font-bold text-foreground">MoodTune</h1>
+            <RightPart />
+          </div>
+        </div>
+      )}
+
+      {embedded && (
+        <>
+          <h1 className="text-xl font-bold leading-none cursor-pointer" onClick={() => router.push("/")}>
+            MoodTune
+          </h1>
+          <RightPart />
+        </>
+      )}
+
+      <SpotifyConnectModal
+        open={showSpotifyModal}
+        onClose={() => setShowSpotifyModal(false)}
+        onConnect={handleSpotifyConnect}
+      />
+    </Wrapper>
+  );
 }
