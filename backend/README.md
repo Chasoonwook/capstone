@@ -122,10 +122,10 @@ _music_ 테이블의 mood 칼럼과 _photo.analysis_ 테이블의 background를 
 
 ### ranking.js 코드 수정 (1008)
 * 호출 URL: ( limit 뒤에있는 숫자 변경하면 랭킹 개수 반환)
-주간: /api/rankings-simple/weekly?limit=50
-월간: /api/rankings-simple/monthly?limit=50 
+주간: /api/rankings/weekly?limit=50
+월간: /api/rankings/monthly?limit=50 
 
 * 랭킹 리프레시 (자동)
-POST /api/rankings-simple/refresh
+POST /api/rankings/refresh
 해당 핸들러로 주간,월간 집계를 재계산 가능or SQL 집계 최신화를 통해 최신화가능
 
