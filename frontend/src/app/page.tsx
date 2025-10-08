@@ -13,8 +13,8 @@ import SpotifyConnectModal from "@/components/modals/SpotifyConnectModal"
 import Header from "@/components/header/Header"
 import HistorySwitch from "@/components/history/HistorySwitch"
 
-import { Camera } from "lucide-react"     // ← Home, Search, User 제거
-import { API_BASE } from "@/lib/api" // 백엔드 베이스 URL
+import { Camera } from "lucide-react"
+import { API_BASE } from "@/lib/api"
 
 export default function Page() {
   const { user, isLoggedIn, logout } = useAuthUser()
@@ -27,18 +27,12 @@ export default function Page() {
   const [showUploadModal, setShowUploadModal] = useState(false)
 
   const accountId = useMemo(() => {
-    const anyUser = (user ?? {}) as {
-      email?: string | null
-      id?: string | null
-      uid?: string | null
-      userId?: string | null
-      name?: string | null
-    }
+    const anyUser = (user ?? {}) as any
     return (
-      (anyUser.email?.trim() || null) ??
-      (anyUser.id?.trim() || null) ??
-      (anyUser.uid?.trim() || null) ??
-      (anyUser.userId?.trim() || null) ??
+      anyUser.email?.trim() ||
+      anyUser.id?.trim() ||
+      anyUser.uid?.trim() ||
+      anyUser.userId?.trim() ||
       "guest"
     )
   }, [user])
@@ -48,63 +42,61 @@ export default function Page() {
   const [isSpotifyConnected, setIsSpotifyConnected] = useState(false)
   const [showSpotifyModal, setShowSpotifyModal] = useState(false)
 
-  // ✅ 쿠키 기반 연결 상태 확인 (localStorage 사용 제거)
+  // ▼▼▼▼▼ [수정됨] 이 useEffect 훅 전체를 교체합니다 ▼▼▼▼▼
   useEffect(() => {
-    let mounted = true
+    let mounted = true;
 
-    const checkConnected = async () => {
+    const checkConnected = () => {
+      // API 호출 대신 localStorage를 직접 확인
       try {
-        // 콜백 리다이렉트 후 ?spotify=connected 있으면 모달 닫아주기
         if (typeof window !== "undefined") {
-          const url = new URL(window.location.href)
+          const url = new URL(window.location.href);
           if (url.searchParams.get("spotify") === "connected") {
-            url.searchParams.delete("spotify")
-            window.history.replaceState({}, "", url.toString())
+            url.searchParams.delete("spotify");
+            window.history.replaceState({}, "", url.toString());
           }
         }
+        
+        const expiresAt = Number(localStorage.getItem("spotify_token_expires_at") || "0");
+        const accessToken = localStorage.getItem("spotify_access_token");
 
-        // 백엔드에 저장된 쿠키로 /me 호출해서 연결 여부 판단
-        const resp = await fetch(`${API_BASE}/api/spotify/me`, {
-          method: "GET",
-          credentials: "include", // ★ 중요: 쿠키 포함
-        })
+        // 토큰이 존재하고, 아직 만료되지 않았다면 '연결됨'으로 간주
+        const connected = !!accessToken && Date.now() < expiresAt;
+        
+        if (!mounted) return;
 
-        const connected = resp.ok
-        if (!mounted) return
-
-        setIsSpotifyConnected(connected)
+        setIsSpotifyConnected(connected);
 
         // 모달 노출 로직
-        try {
-          const dismissedUntil = Number(localStorage.getItem(dismissKey) || "0")
-          const now = Date.now()
-          setShowSpotifyModal(isLoggedIn ? !connected && now > dismissedUntil : false)
-        } catch {
-          setShowSpotifyModal(isLoggedIn && !connected)
-        }
-      } catch {
-        if (!mounted) return
-        setIsSpotifyConnected(false)
-        setShowSpotifyModal(isLoggedIn) // 연결 실패시 노출
-      }
-    }
+        const dismissedUntil = Number(localStorage.getItem(dismissKey) || "0");
+        const now = Date.now();
+        setShowSpotifyModal(isLoggedIn ? !connected && now > dismissedUntil : false);
 
-    checkConnected()
+      } catch {
+        if (!mounted) return;
+        setIsSpotifyConnected(false);
+        setShowSpotifyModal(isLoggedIn);
+      }
+    };
+
+    checkConnected();
+    
+    // spotify-callback 페이지에서 돌아왔을 때 상태를 다시 체크하기 위해 이벤트 리스너 추가
+    window.addEventListener('focus', checkConnected);
+
     return () => {
-      mounted = false
-    }
-  }, [dismissKey, isLoggedIn])
+      mounted = false;
+      window.removeEventListener('focus', checkConnected);
+    };
+  }, [dismissKey, isLoggedIn]);
+  // ▲▲▲▲▲ [수정됨] 여기까지 ▲▲▲▲▲
 
   const toggleGenre = (genre: string) => {
     setSelectedGenres((prev) => (prev.includes(genre) ? prev.filter((g) => g !== genre) : [...prev, genre]))
   }
 
-  // ↓↓↓ 네비에서만 쓰이던 함수 제거
-  // const handleOpenSearch = () => { ... }
-
   return (
     <>
-      {/* pb-20 → pb-6로 축소 (하단 네비 공간 제거) */}
       <div className="min-h-screen bg-background pb-6">
         <Suspense fallback={<div className="h-14" />}>
           <Header
@@ -157,9 +149,6 @@ export default function Page() {
         >
           <Camera className="w-6 h-6" />
         </button>
-
-        {/* ↓↓↓ BottomNav 완전 제거 */}
-        {/* <BottomNav activeTab="home" onOpenSearch={handleOpenSearch} /> */}
       </div>
 
       {showUploadModal && (
