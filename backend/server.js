@@ -165,6 +165,7 @@ const mounts = [
   ["/api", "routes/feedback"],
   ["/api", "routes/stickers"],
   ["/api/diaries", "routes/diaries"],
+  ["/api/rankings", "routes/rankings"],
 ];
 
 const mounted = [];
