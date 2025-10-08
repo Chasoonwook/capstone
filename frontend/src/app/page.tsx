@@ -27,14 +27,8 @@ export default function Page() {
   const [showUploadModal, setShowUploadModal] = useState(false)
 
   const accountId = useMemo(() => {
-    const anyUser = (user ?? {}) as any
-    return (
-      anyUser.email?.trim() ||
-      anyUser.id?.trim() ||
-      anyUser.uid?.trim() ||
-      anyUser.userId?.trim() ||
-      "guest"
-    )
+    const anyUser = (user ?? {}) as any;
+    return anyUser.email?.trim() || anyUser.id?.trim() || anyUser.uid?.trim() || anyUser.userId?.trim() || "guest";
   }, [user])
 
   const dismissKey = useMemo(() => `spotify_connect_modal_dismissed_until::${accountId}`, [accountId])
@@ -47,7 +41,6 @@ export default function Page() {
     let mounted = true;
 
     const checkConnected = () => {
-      // API 호출 대신 localStorage를 직접 확인
       try {
         if (typeof window !== "undefined") {
           const url = new URL(window.location.href);
@@ -60,14 +53,12 @@ export default function Page() {
         const expiresAt = Number(localStorage.getItem("spotify_token_expires_at") || "0");
         const accessToken = localStorage.getItem("spotify_access_token");
 
-        // 토큰이 존재하고, 아직 만료되지 않았다면 '연결됨'으로 간주
         const connected = !!accessToken && Date.now() < expiresAt;
         
         if (!mounted) return;
 
         setIsSpotifyConnected(connected);
 
-        // 모달 노출 로직
         const dismissedUntil = Number(localStorage.getItem(dismissKey) || "0");
         const now = Date.now();
         setShowSpotifyModal(isLoggedIn ? !connected && now > dismissedUntil : false);
@@ -80,8 +71,6 @@ export default function Page() {
     };
 
     checkConnected();
-    
-    // spotify-callback 페이지에서 돌아왔을 때 상태를 다시 체크하기 위해 이벤트 리스너 추가
     window.addEventListener('focus', checkConnected);
 
     return () => {
