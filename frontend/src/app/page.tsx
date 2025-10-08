@@ -13,46 +13,8 @@ import SpotifyConnectModal from "@/components/modals/SpotifyConnectModal"
 import Header from "@/components/header/Header"
 import HistorySwitch from "@/components/history/HistorySwitch"
 
-import { Home, Search, User, Camera } from "lucide-react"
+import { Camera } from "lucide-react"     // ← Home, Search, User 제거
 import { API_BASE } from "@/lib/api" // 백엔드 베이스 URL
-
-/* ───────────────── 하단 탭 ───────────────── */
-function BottomNav({ activeTab, onOpenSearch }: { activeTab: string; onOpenSearch: () => void }) {
-  const router = useRouter()
-
-  const tabs = [
-    { id: "home", label: "홈", icon: Home },
-    { id: "search", label: "검색", icon: Search },
-    { id: "profile", label: "프로필", icon: User },
-  ]
-
-  return (
-    <nav className="fixed bottom-0 left-0 right-0 bg-background border-t border-border z-50 safe-area-inset-bottom">
-      <div className="flex items-center justify-around h-16 max-w-lg mx-auto">
-        {tabs.map((tab) => {
-          const Icon = tab.icon
-          const isActive = activeTab === tab.id
-          return (
-            <button
-              key={tab.id}
-              onClick={() => {
-                if (tab.id === "home") router.push("/")
-                if (tab.id === "profile") router.push("/account")
-                if (tab.id === "search") onOpenSearch()
-              }}
-              className="flex flex-col items-center justify-center gap-1 flex-1 h-full"
-            >
-              <Icon className={`w-5 h-5 ${isActive ? "text-primary" : "text-muted-foreground"}`} />
-              <span className={`text-[10px] ${isActive ? "text-primary font-medium" : "text-muted-foreground"}`}>
-                {tab.label}
-              </span>
-            </button>
-          )
-        })}
-      </div>
-    </nav>
-  )
-}
 
 export default function Page() {
   const { user, isLoggedIn, logout } = useAuthUser()
@@ -137,19 +99,13 @@ export default function Page() {
     setSelectedGenres((prev) => (prev.includes(genre) ? prev.filter((g) => g !== genre) : [...prev, genre]))
   }
 
-  const handleOpenSearch = () => {
-    const el = document.getElementById("global-search-input") as HTMLInputElement | null
-    if (el) {
-      try {
-        el.focus()
-      } catch {}
-    }
-    window.dispatchEvent(new Event("open-search-overlay"))
-  }
+  // ↓↓↓ 네비에서만 쓰이던 함수 제거
+  // const handleOpenSearch = () => { ... }
 
   return (
     <>
-      <div className="min-h-screen bg-background pb-20">
+      {/* pb-20 → pb-6로 축소 (하단 네비 공간 제거) */}
+      <div className="min-h-screen bg-background pb-6">
         <Suspense fallback={<div className="h-14" />}>
           <Header
             user={user}
@@ -196,13 +152,14 @@ export default function Page() {
 
         <button
           onClick={() => setShowUploadModal(true)}
-          className="fixed bottom-20 right-4 w-14 h-14 bg-primary text-primary-foreground rounded-full shadow-lg flex items-center justify-center hover:scale-105 transition-transform z-40"
+          className="fixed bottom-6 right-4 w-14 h-14 bg-primary text-primary-foreground rounded-full shadow-lg flex items-center justify-center hover:scale-105 transition-transform z-40"
           aria-label="사진 업로드"
         >
           <Camera className="w-6 h-6" />
         </button>
 
-        <BottomNav activeTab="home" onOpenSearch={handleOpenSearch} />
+        {/* ↓↓↓ BottomNav 완전 제거 */}
+        {/* <BottomNav activeTab="home" onOpenSearch={handleOpenSearch} /> */}
       </div>
 
       {showUploadModal && (
@@ -229,7 +186,6 @@ export default function Page() {
         </div>
       )}
 
-      {/* Spotify 연결 안내 모달 */}
       <SpotifyConnectModal
         open={isLoggedIn && !isSpotifyConnected && showSpotifyModal}
         onClose={() => {
@@ -241,9 +197,6 @@ export default function Page() {
           setShowSpotifyModal(false)
         }}
         onConnect={() => {
-          // ✅ 백엔드의 권한 라우트로 이동 (PKCE + 콜백 처리)
-          //    Redirect URI: https://capstone-app-back.onrender.com/api/spotify/callback
-          //    콜백 성공 후 FRONT_BASE/?spotify=connected 로 복귀
           window.location.href = `${API_BASE}/api/spotify/authorize?return=/`
         }}
       />

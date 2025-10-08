@@ -16,7 +16,7 @@ type HeaderProps = {
 const TABS = [
   { key: 'history',  label: '추억' },
   { key: 'diary',   label: '일기' },
-  { key: 'yet', label: '추가 예정' },
+  { key: 'chart', label: '인기 차트' },
 ];
 
 export default function Header({
