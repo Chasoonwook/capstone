@@ -1,166 +1,166 @@
-"use client"
+"use client";
 
-import { useEffect, useMemo, useRef, useState, useCallback } from "react"
-import { useSearchParams, useRouter } from "next/navigation"
-import { X, Play, Pause, SkipBack, SkipForward, ThumbsUp, ThumbsDown, Music, ChevronUp } from "lucide-react"
-import { API_BASE } from "@/lib/api"
-import { useSpotifyPlayer } from "@/hooks/useSpotifyPlayer"
-import { Button } from "@/components/ui/button"
-import Image from "next/image"
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
+import { X, Play, Pause, SkipBack, SkipForward, ThumbsUp, ThumbsDown, Music, ChevronUp } from "lucide-react";
+import { API_BASE } from "@/lib/api";
+import { useSpotifyPlayer } from "@/hooks/useSpotifyPlayer"; // state, seek 도 리턴한다고 가정
+import { Button } from "@/components/ui/button";
+import Image from "next/image";
 
-import { parseDurationToSec, toSpotifyUri, resolvePreviewAndCover, formatTime } from "./utils/media"
+import { parseDurationToSec, toSpotifyUri, resolvePreviewAndCover, formatTime } from "./utils/media";
 
-import type { Song, BackendSong, ByPhotoResponse, SelectedFrom } from "./types"
-import { buildAuthHeaderFromLocalStorage, fetchMe } from "./hooks/useAuthMe"
+import type { Song, BackendSong, ByPhotoResponse, SelectedFrom } from "./types";
+import { buildAuthHeaderFromLocalStorage, fetchMe } from "./hooks/useAuthMe";
+
+/** ===== 재생 중복 방지 쿨다운(밀리초) ===== */
+const PLAY_COOLDOWN_MS = 2500;
 
 export default function RecommendClient() {
-  const searchParams = useSearchParams()
-  const router = useRouter()
-  const photoId = searchParams.get("photoId")
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const photoId = searchParams.get("photoId");
 
-  const [showPlaylist, setShowPlaylist] = useState(false)
+  const [showPlaylist, setShowPlaylist] = useState(false);
 
-  // Spotify
-  const [accessToken, setAccessToken] = useState<string | null>(null)
-  
-  // ✅ localStorage에서 토큰을 읽어오는 방식으로 최종 수정
+  // Web Playback SDK
+  const { ready, state, activate, transferToThisDevice, playUris, resume, pause, seek } = useSpotifyPlayer();
+
+  // Spotify 연동 여부
+  const [spotifyLinked, setSpotifyLinked] = useState(false);
   useEffect(() => {
-    const read = () => {
+    let mounted = true;
+    (async () => {
       try {
-        const t = localStorage.getItem("spotify_access_token")
-        setAccessToken(t && t.trim() ? t : null)
+        const r = await fetch(`${API_BASE}/api/spotify/me`, { credentials: "include" });
+        if (!mounted) return;
+        setSpotifyLinked(r.ok);
       } catch {
-        setAccessToken(null)
+        if (!mounted) return;
+        setSpotifyLinked(false);
       }
-    }
-    read();
-    
-    // 다른 탭이나 창에서 로그인이 변경될 경우를 대비해 이벤트를 감지합니다.
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === "spotify_access_token") read()
-    }
-    window.addEventListener("storage", onStorage)
-    return () => window.removeEventListener("storage", onStorage)
+    })();
+    return () => { mounted = false; };
   }, []);
 
-  const isLoggedInSpotify = !!accessToken
-  const { ready, activate, transferToThisDevice, playUris, resume, pause } = useSpotifyPlayer(accessToken)
+  // ===== 미리듣기 오디오 =====
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const playReqIdRef = useRef(0);
+  const previewTimeoutRef = useRef<number | null>(null);
 
-  // Audio(preview)
-  const audioRef = useRef<HTMLAudioElement | null>(null)
-  const playReqIdRef = useRef(0)
-  const [source, setSource] = useState<"preview" | "spotify" | null>(null)
-  const [isPlaying, setIsPlaying] = useState(false)
-  const [currentTime, setCurrentTime] = useState(0)
-  const [duration, setDuration] = useState(180)
-  const isPlayingRef = useRef(isPlaying)
-  useEffect(() => {
-    isPlayingRef.current = isPlaying
-  }, [isPlaying])
+  const clearPreviewTimeout = useCallback(() => {
+    if (previewTimeoutRef.current !== null) {
+      clearTimeout(previewTimeoutRef.current);
+      previewTimeoutRef.current = null;
+    }
+  }, []);
+
+  const killPreview = useCallback(() => {
+    clearPreviewTimeout();
+    const a = audioRef.current;
+    if (!a) return;
+    try { a.pause(); } catch {}
+    try {
+      a.removeAttribute("src");
+      a.src = "";
+      a.load();
+    } catch {}
+  }, [clearPreviewTimeout]);
+
+  const [source, setSource] = useState<"preview" | "spotify" | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(180);
+  const isPlayingRef = useRef(isPlaying);
+  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
 
   // UI/State
-  const [uploadedImage, setUploadedImage] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [uploadedImage, setUploadedImage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Data
-  const [recommendations, setRecommendations] = useState<Song[]>([])
-  const [currentSong, setCurrentSong] = useState<Song | null>(null)
-  const [contextMainMood, setContextMainMood] = useState<string | null>(null)
-  const [contextSubMood, setContextSubMood] = useState<string | null>(null)
-  const [selectedSongId, setSelectedSongId] = useState<string | number | null>(null)
+  const [recommendations, setRecommendations] = useState<Song[]>([]);
+  const [currentSong, setCurrentSong] = useState<Song | null>(null);
+  const [contextMainMood, setContextMainMood] = useState<string | null>(null);
+  const [contextSubMood, setContextSubMood] = useState<string | null>(null);
+  const [selectedSongId, setSelectedSongId] = useState<string | number | null>(null);
 
   // Init audio
   useEffect(() => {
-    if (!audioRef.current) audioRef.current = new Audio()
-    const a = audioRef.current!
-    a.crossOrigin = "anonymous"
-    a.preload = "none"
-    const onTime = () => setCurrentTime(Math.floor(a.currentTime))
-    const onEnd = () => setIsPlaying(false)
-    a.addEventListener("timeupdate", onTime)
-    a.addEventListener("ended", onEnd)
+    if (!audioRef.current) audioRef.current = new Audio();
+    const a = audioRef.current!;
+    a.crossOrigin = "anonymous";
+    a.preload = "none";
+    const onTime = () => setCurrentTime(Math.floor(a.currentTime));
+    const onEnd = () => setIsPlaying(false);
+    a.addEventListener("timeupdate", onTime);
+    a.addEventListener("ended", onEnd);
     return () => {
-      a.removeEventListener("timeupdate", onTime)
-      a.removeEventListener("ended", onEnd)
-      try {
-        a.pause()
-      } catch {}
-    }
-  }, [])
+      a.removeEventListener("timeupdate", onTime);
+      a.removeEventListener("ended", onEnd);
+      try { a.pause(); } catch {}
+    };
+  }, []);
 
   const safePlayPreview = useCallback(async (src: string) => {
-    const a = audioRef.current!
-    const myId = ++playReqIdRef.current
-    try {
-      a.pause()
-    } catch {}
-    a.src = src
-    a.currentTime = 0
+    const a = audioRef.current!;
+    const myId = ++playReqIdRef.current;
+    try { a.pause(); } catch {}
+    a.src = src;
+    a.currentTime = 0;
     await new Promise<void>((res) => {
-      const onCanPlay = () => {
-        a.removeEventListener("canplay", onCanPlay)
-        res()
-      }
-      a.addEventListener("canplay", onCanPlay)
-      a.load()
-    })
-    if (myId !== playReqIdRef.current) return
-    try {
-      await a.play()
-    } catch {}
-  }, [])
+      const onCanPlay = () => { a.removeEventListener("canplay", onCanPlay); res(); };
+      a.addEventListener("canplay", onCanPlay);
+      a.load();
+    });
+    if (myId !== playReqIdRef.current) return;
+    try { await a.play(); } catch {}
+  }, []);
+
+  // 2초 지연 미리듣기 — 연동 안 된 경우만 사용
+  const schedulePreview = useCallback((src: string) => {
+    clearPreviewTimeout();
+    previewTimeoutRef.current = window.setTimeout(async () => {
+      try {
+        await safePlayPreview(src);
+        setSource("preview");
+        setIsPlaying(true);
+      } catch {}
+    }, 2000);
+  }, [clearPreviewTimeout, safePlayPreview]);
 
   // Load image
   useEffect(() => {
-    let mounted = true
-    ;(async () => {
-      if (!photoId) {
-        setUploadedImage(null)
-        return
-      }
-      const candidates = [`${API_BASE}/api/photos/${photoId}/binary`, `${API_BASE}/photos/${photoId}/binary`]
-      let url: string | null = null
+    let mounted = true;
+    (async () => {
+      if (!photoId) { setUploadedImage(null); return; }
+      const candidates = [`${API_BASE}/api/photos/${photoId}/binary`, `${API_BASE}/photos/${photoId}/binary`];
+      let url: string | null = null;
       for (const u of candidates) {
         try {
-          const r = await fetch(u, { method: "GET" })
-          if (r.ok) {
-            url = u
-            break
-          }
+          const r = await fetch(u, { method: "GET" });
+          if (r.ok) { url = u; break; }
         } catch {}
       }
-      if (mounted) setUploadedImage(url ?? "/placeholder.svg")
-    })()
-    return () => {
-      mounted = false
-    }
-  }, [photoId])
+      if (mounted) setUploadedImage(url ?? "/placeholder.svg");
+    })();
+    return () => { mounted = false; };
+  }, [photoId]);
 
-  // Fetch recommendations
+  // ===== 추천 로드 (현재 곡 유지) =====
   const fetchRecommendations = useCallback(
     async (signal?: AbortSignal) => {
       if (!photoId) {
-        setRecommendations([])
-        setCurrentSong(null)
-        setContextMainMood(null)
-        setContextSubMood(null)
-        return
+        setRecommendations([]); setCurrentSong(null); setContextMainMood(null); setContextSubMood(null); return;
       }
       try {
         const r = await fetch(`${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(photoId)}?debug=1`, {
-          signal,
-          credentials: "include",
-        })
-        if (!r.ok) {
-          setRecommendations([])
-          setCurrentSong(null)
-          setContextMainMood(null)
-          setContextSubMood(null)
-          return
-        }
-        const raw = await r.json()
-        const obj = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null
+          signal, credentials: "include",
+        });
+        if (!r.ok) { setRecommendations([]); setCurrentSong(null); setContextMainMood(null); setContextSubMood(null); return; }
+        const raw = await r.json();
+        const obj = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
         const data: ByPhotoResponse = obj
           ? {
               main_mood: obj["main_mood"] as string | null,
@@ -169,51 +169,47 @@ export default function RecommendClient() {
               sub_songs: toBackendSongArray(obj["sub_songs"]),
               preferred_songs: toBackendSongArray(obj["preferred_songs"]),
             }
-          : { main_songs: [], sub_songs: [], preferred_songs: [] }
+          : { main_songs: [], sub_songs: [], preferred_songs: [] };
 
-        setContextMainMood(data.main_mood ?? null)
-        setContextSubMood(data.sub_mood ?? null)
+        setContextMainMood(data.main_mood ?? null);
+        setContextSubMood(data.sub_mood ?? null);
 
         const mark = (arr: BackendSong[], tag: SelectedFrom) =>
-          (arr ?? []).map((s) => ({ ...s, __selected_from__: tag as SelectedFrom }))
+          (arr ?? []).map((s) => ({ ...s, __selected_from__: tag as SelectedFrom }));
 
         const merged: (BackendSong & { __selected_from__?: SelectedFrom })[] = [
           ...mark(data.main_songs ?? [], "main"),
           ...mark(data.preferred_songs ?? [], "preferred"),
           ...mark(data.sub_songs ?? [], "sub"),
-        ]
+        ];
 
-        const seen = new Set<string | number>()
-        const dedup: (BackendSong & { __selected_from__?: SelectedFrom })[] = []
+        const seen = new Set<string | number>();
+        const dedup: (BackendSong & { __selected_from__?: SelectedFrom })[] = [];
         merged.forEach((s, i) => {
-          const id = (s.music_id ?? s.id ?? i) as string | number
-          if (!seen.has(id)) {
-            seen.add(id)
-            dedup.push(s)
-          }
-        })
+          const id = (s.music_id ?? s.id ?? i) as string | number;
+          if (!seen.has(id)) { seen.add(id); dedup.push(s); }
+        });
 
         const mapped: Song[] = await Promise.all(
           dedup.map(async (it, idx) => {
-            const sec =
-              typeof it.duration === "number"
-                ? it.duration
-                : typeof it.duration_sec === "number"
-                  ? it.duration_sec
-                  : 180
-            const mm = Math.floor(sec / 60)
-            const ss = String(sec % 60).padStart(2, "0")
+            const sec = typeof it.duration === "number"
+              ? it.duration
+              : typeof it.duration_sec === "number"
+                ? it.duration_sec
+                : 180;
+            const mm = Math.floor(sec / 60);
+            const ss = String(sec % 60).padStart(2, "0");
 
-            let image: string | null = null
-            let uri = toSpotifyUri((it as any).spotify_uri ?? null)
-            let preview = (it as any).preview_url ?? null
+            let image: string | null = null;
+            let uri = toSpotifyUri((it as any).spotify_uri ?? null);
+            let preview = (it as any).preview_url ?? null;
 
             try {
               if (!uri || !preview || !image) {
-                const info = await resolvePreviewAndCover(it.title as any, it.artist as any)
-                uri = uri ?? toSpotifyUri(info.uri)
-                preview = preview ?? info.preview
-                image = image ?? info.cover
+                const info = await resolvePreviewAndCover(it.title as any, it.artist as any);
+                uri = uri ?? toSpotifyUri(info.uri);
+                preview = preview ?? info.preview;
+                image = image ?? info.cover;
               }
             } catch {}
 
@@ -227,274 +223,286 @@ export default function RecommendClient() {
               spotify_uri: uri,
               preview_url: preview,
               selected_from: it.__selected_from__ ?? null,
-            }
-          }),
-        )
+            };
+          })
+        );
 
-        setRecommendations(mapped)
-        const first = mapped[0] ?? null
-        setCurrentSong(first)
-        setCurrentTime(0)
-        setIsPlaying(false)
-        setDuration(parseDurationToSec(first?.duration ?? "3:00"))
-        setSource(null)
-        setFeedbackMap({})
-        setSelectedSongId(null)
+        setRecommendations(mapped);
+
+        // === 현재 곡 유지 (id 또는 URI로 매칭)
+        setCurrentSong(prev => {
+          if (!prev) return mapped[0] ?? null;
+          const byId  = mapped.find(s => String(s.id) === String(prev.id));
+          const byUri = mapped.find(s => toSpotifyUri(s.spotify_uri ?? null) === toSpotifyUri(prev.spotify_uri ?? null));
+          const keep = byId ?? byUri;
+          return keep ? { ...prev, ...keep } : (mapped[0] ?? null);
+        });
+
+        const next = mapped[0] ?? null;
+        const d = parseDurationToSec((next ? next.duration : (currentSong?.duration ?? "3:00")));
+        setDuration(d);
+        if (!next && !currentSong) {
+          setCurrentTime(0);
+          setIsPlaying(false);
+          setSource(null);
+        }
       } catch {
-        setRecommendations([])
-        setCurrentSong(null)
-        setContextMainMood(null)
-        setContextSubMood(null)
-        setFeedbackMap({})
-        setSelectedSongId(null)
+        setRecommendations([]); setCurrentSong(null); setContextMainMood(null); setContextSubMood(null);
       }
     },
-    [photoId],
-  )
+    [photoId, currentSong?.duration]
+  );
 
   useEffect(() => {
-    const ctrl = new AbortController()
-    fetchRecommendations(ctrl.signal)
-    return () => ctrl.abort()
-  }, [fetchRecommendations])
+    const ctrl = new AbortController();
+    fetchRecommendations(ctrl.signal);
+    return () => ctrl.abort();
+  }, [fetchRecommendations]);
 
+  const normalizedCurrentUri = useMemo(
+    () => toSpotifyUri(currentSong?.spotify_uri ?? null),
+    [currentSong?.spotify_uri],
+  );
+
+  const preferSpotify = spotifyLinked && ready;
+
+  // ===== Spotify 상태 → 진행바 동기화 (전체듣기일 때만)
   useEffect(() => {
-    if (!recommendations.length) return
-    let cancelled = false
-    ;(async () => {
-      const tasks = recommendations.map(async (s, idx) => {
-        if (s.image && s.preview_url && s.spotify_uri) return null
+    if (source !== "spotify") return;
+    const posSec = Math.floor((state.position || 0) / 1000);
+    const durSec =
+      state.duration ? Math.floor(state.duration / 1000)
+                     : parseDurationToSec(currentSong?.duration ?? "3:00");
+    setCurrentTime(posSec);
+    setDuration(durSec);
+    setIsPlaying(!state.paused);
+  }, [source, state.position, state.duration, state.paused, currentSong?.duration]);
+
+  // ===== Spotify 실제 트랙 → UI 동기화 (전체듣기일 때만)
+  useEffect(() => {
+    if (source !== "spotify") return;
+    if (!state.trackUri) return;
+    const hit = recommendations.find(s => toSpotifyUri(s.spotify_uri ?? null) === toSpotifyUri(state.trackUri));
+    if (hit && String(hit.id) !== String(currentSong?.id)) {
+      setCurrentSong(hit);
+      setSelectedSongId(hit.id);
+      setDuration(parseDurationToSec(hit.duration));
+    }
+  }, [source, state.trackUri, recommendations, currentSong?.id]);
+
+  /** ====== 중복 재생 방지 컨트롤러 ====== */
+  const lastPlayKeyRef = useRef<string | null>(null); // `${photoId}|${uri}`
+  const playCooldownRef = useRef(0);
+  const playInFlightRef = useRef<Promise<void> | null>(null);
+
+  const dedupPlaySpotify = useCallback(async (uri: string) => {
+    const key = `${photoId || ""}|${uri}`;
+    const now = Date.now();
+
+    // 같은 키에 대해 쿨다운 내면 무시
+    if (lastPlayKeyRef.current === key && now - playCooldownRef.current < PLAY_COOLDOWN_MS) return;
+    // 진행 중이면 추가 호출 금지
+    if (playInFlightRef.current) return;
+
+    playInFlightRef.current = (async () => {
+      await activate();
+      await transferToThisDevice();
+      await playUris([uri]);
+    })()
+      .catch(() => {})
+      .finally(() => {
+        lastPlayKeyRef.current = key;
+        playCooldownRef.current = Date.now();
+        playInFlightRef.current = null;
+      });
+  }, [activate, transferToThisDevice, playUris, photoId]);
+
+  // ===== 자동 재생: “연동되면 Spotify만”, “아니면 미리듣기만(2초 지연)”
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!currentSong) return;
+
+      // 항상 이전 미리듣기 예약 취소
+      clearPreviewTimeout();
+
+      if (preferSpotify) {
+        // 미리듣기 금지
+        killPreview();
+
+        const uri = normalizedCurrentUri;
+        if (!uri) {
+          // URI가 없으면 아무것도 하지 않음 (자동 전환 금지)
+          setSource(null);
+          setIsPlaying(false);
+          return;
+        }
+
+        setSource("spotify");
+        await dedupPlaySpotify(uri);
+        if (cancelled) return;
+        // isPlaying 은 state.paused 로 동기화됨
+        return;
+      }
+
+      // ===== 연동 안 됨 → 미리듣기만 (2초 지연)
+      killPreview();
+      let preview = currentSong.preview_url ?? null;
+      let cover = currentSong.image ?? null;
+
+      if (!preview || !cover) {
         try {
-          const info = await resolvePreviewAndCover(s.title, s.artist)
-          const next = {
-            image: s.image ?? info.cover ?? null,
-            preview_url: s.preview_url ?? info.preview ?? null,
-            spotify_uri: s.spotify_uri ?? toSpotifyUri(info.uri) ?? null,
-          }
-          if (next.image === s.image && next.preview_url === s.preview_url && next.spotify_uri === s.spotify_uri) {
-            return null
-          }
-          if (next.image && typeof window !== "undefined") {
-            await new Promise<void>((res) => {
-              const img = new window.Image()
-              img.onload = () => res()
-              img.onerror = () => res()
-              img.src = next.image!
-            })
-          }
-          return { idx, next }
-        } catch {
-          return null
-        }
-      })
+          const info = await resolvePreviewAndCover(currentSong.title, currentSong.artist);
+          preview = preview ?? info.preview;
+          cover = cover ?? info.cover;
 
-      const results = await Promise.allSettled(tasks)
-      if (cancelled) return
-      const updates: Array<{ idx: number; next: Partial<Song> }> = []
-      for (const r of results) if (r.status === "fulfilled" && r.value) updates.push(r.value)
+          setRecommendations(prev => prev.map(s =>
+            s.id === currentSong.id ? { ...s, preview_url: preview ?? s.preview_url, image: cover ?? s.image } : s
+          ));
+          setCurrentSong(prev => prev ? { ...prev, preview_url: preview ?? prev.preview_url, image: cover ?? prev.image } : prev);
+        } catch {}
+      }
 
-      if (!updates.length) return
-      setRecommendations((prev) => {
-        const copy = [...prev]
-        for (const u of updates) {
-          const cur = copy[u.idx]
-          if (cur) copy[u.idx] = { ...cur, ...u.next }
-        }
-        return copy
-      })
-      setCurrentSong((cur) => {
-        if (!cur) return cur
-        const hit = updates.find((u) => recommendations[u.idx]?.id === cur.id)
-        return hit ? { ...cur, ...hit.next } : cur
-      })
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [recommendations.map((s) => s.id).join(",")])
+      if (preview) schedulePreview(preview);
+      else { setSource(null); setIsPlaying(false); }
+    })();
+    return () => { cancelled = true; };
+  // 의존성은 “URI 문자열”과 preferSpotify, photoId만 (객체 변동으로 인한 재실행 방지)
+  }, [preferSpotify, normalizedCurrentUri, photoId, currentSong?.id, clearPreviewTimeout, killPreview, schedulePreview, dedupPlaySpotify]);
 
-  const normalizedCurrentUri = useMemo(() => toSpotifyUri(currentSong?.spotify_uri ?? null), [currentSong?.spotify_uri])
-
-  // Auto play Spotify
+  // ===== 트랙 종료시 자동 다음 곡 (전체듣기일 때만)
+  const lastTrackUriRef = useRef<string | null>(null);
+  const autoNextLockRef = useRef(false);
   useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      if (!isLoggedInSpotify || !accessToken || !ready) return
-      if (!normalizedCurrentUri) return
-      if (source === "spotify" && isPlayingRef.current) return
-      try {
-        audioRef.current?.pause()
-        await activate()
-        await transferToThisDevice()
-        await playUris([normalizedCurrentUri])
-        if (cancelled) return
-        setSource("spotify")
-        setIsPlaying(true)
-      } catch {}
-    })()
-    return () => {
-      cancelled = true
+    if (source !== "spotify") { autoNextLockRef.current = false; lastTrackUriRef.current = null; return; }
+
+    if (state.trackUri && state.trackUri !== lastTrackUriRef.current) {
+      lastTrackUriRef.current = state.trackUri;
+      autoNextLockRef.current = false;
     }
-  }, [isLoggedInSpotify, accessToken, ready, normalizedCurrentUri, source, activate, transferToThisDevice, playUris])
 
-  // Preview timer
-  useEffect(() => {
-    if (!isPlaying || source !== "preview") return
-    const id = setInterval(() => {
-      setCurrentTime((t) => (t + 1 > duration ? duration : t + 1))
-    }, 1000)
-    return () => clearInterval(id)
-  }, [isPlaying, duration, source])
+    if (!state.duration) return;
+    const timeLeft = state.duration - state.position; // ms
+    if (timeLeft <= 800 && !autoNextLockRef.current) {
+      autoNextLockRef.current = true;
+      void playNextSong();
+    }
+  }, [source, state.position, state.duration, state.trackUri]); // eslint-disable-line
 
-  // Play logic
+  // ===== 단일 곡 재생 (버튼/리스트 클릭 시)
   const playSong = async (song: Song) => {
-    setCurrentSong(song)
-    setCurrentTime(0)
-    setDuration(parseDurationToSec(song.duration))
-    const songUri = toSpotifyUri(song.spotify_uri ?? null)
+    setCurrentSong(song);
+    setSelectedSongId(song.id);
+    setCurrentTime(0);
+    setDuration(parseDurationToSec(song.duration));
+    clearPreviewTimeout();
 
-    if (isLoggedInSpotify && accessToken && ready && songUri) {
-      try {
-        await activate()
-        await transferToThisDevice()
-        await playUris([songUri])
-        setIsPlaying(true)
-        setSource("spotify")
-        return
-      } catch {}
+    const songUri = toSpotifyUri(song.spotify_uri ?? null);
+
+    if (preferSpotify) {
+      killPreview();
+      if (songUri) {
+        setSource("spotify");
+        await dedupPlaySpotify(songUri);
+        return;
+      } else {
+        // URI 없으면 자동 전환 금지(미리듣기 안 틀음)
+        setSource(null);
+        setIsPlaying(false);
+      }
+      return;
     }
 
-    let preview = song.preview_url ?? null
-    let cover = song.image ?? null
-    let uri = songUri ?? null
+    // ===== 연동 안 됨 → 미리듣기만 (2초 지연)
+    killPreview();
+    let preview = song.preview_url ?? null;
+    let cover = song.image ?? null;
 
-    if (!preview || !cover || !uri) {
-      const info = await resolvePreviewAndCover(song.title, song.artist)
-      preview = preview ?? info.preview
-      cover = cover ?? info.cover
-      uri = uri ?? toSpotifyUri(info.uri)
+    if (!preview || !cover) {
+      const info = await resolvePreviewAndCover(song.title, song.artist);
+      preview = preview ?? info.preview;
+      cover = cover ?? info.cover;
 
       setRecommendations((prev) =>
         prev.map((s) =>
-          s.id === song.id
-            ? {
-                ...s,
-                preview_url: preview ?? s.preview_url,
-                image: cover ?? s.image,
-                spotify_uri: uri ?? s.spotify_uri,
-              }
-            : s,
+          s.id === song.id ? { ...s, preview_url: preview ?? s.preview_url, image: cover ?? s.image } : s
         ),
-      )
-      setCurrentSong((prev) =>
-        prev
-          ? {
-              ...prev,
-              preview_url: preview ?? prev.preview_url,
-              image: cover ?? prev.image,
-              spotify_uri: uri ?? prev.spotify_uri,
-            }
-          : prev,
-      )
+      );
+      setCurrentSong((prev) => (prev ? { ...prev, preview_url: preview ?? prev.preview_url, image: cover ?? prev.image } : prev));
     }
 
-    if (preview) {
-      try {
-        await safePlayPreview(preview)
-        setSource("preview")
-        setIsPlaying(true)
-      } catch {
-        setIsPlaying(false)
-      }
-    } else {
-      alert("이 곡은 미리듣기 음원이 없습니다. 전체 듣기는 상단 사용자 메뉴에서 Spotify 연동 후 이용하세요.")
-      setIsPlaying(false)
+    if (preview) schedulePreview(preview);
+    else {
+      alert("이 곡은 미리듣기 음원이 없습니다. 전체 듣기는 상단 사용자 메뉴에서 Spotify 연동 후 이용하세요.");
+      setIsPlaying(false);
     }
-  }
+  };
 
   const togglePlay = async () => {
     if (!currentSong) {
-      if (recommendations.length === 0) return
-      await playSong(recommendations[0])
-      return
+      if (recommendations.length === 0) return;
+      await playSong(recommendations[0]);
+      return;
     }
     if (source === "spotify") {
       try {
-        if (isPlaying) {
-          await pause()
-          setIsPlaying(false)
-        } else {
-          await resume()
-          setIsPlaying(true)
-        }
+        if (isPlaying) { await pause(); setIsPlaying(false); }
+        else { await resume(); setIsPlaying(true); }
       } catch {}
-      return
+      return;
     }
-    const tryUri = normalizedCurrentUri
-    if (isLoggedInSpotify && accessToken && ready && tryUri) {
-      try {
-        await activate()
-        await transferToThisDevice()
-        await playUris([tryUri])
-        setSource("spotify")
-        setIsPlaying(true)
-        return
-      } catch {}
-    }
-    const a = audioRef.current!
+    // 미리듣기 재생/정지
+    clearPreviewTimeout();
+    const a = audioRef.current!;
     try {
-      if (isPlaying) {
-        a.pause()
-        setIsPlaying(false)
-      } else {
-        await a.play()
-        setIsPlaying(true)
-      }
+      if (isPlaying) { a.pause(); setIsPlaying(false); }
+      else { await a.play(); setIsPlaying(true); }
     } catch {}
-  }
+  };
 
   const playNextSong = async () => {
-    if (busy || recommendations.length === 0) return
-    setBusy(true)
+    if (busy || recommendations.length === 0) return;
+    setBusy(true);
     try {
-      const curIdx = currentSong ? recommendations.findIndex((s) => s.id === currentSong.id) : -1
-      const nextIdx = curIdx < 0 ? 0 : (curIdx + 1) % recommendations.length
-      const nextSong = recommendations[nextIdx]
-      setSelectedSongId(nextSong.id)
-      await playSong(nextSong)
-    } finally {
-      setBusy(false)
-    }
-  }
+      const curIdx = currentSong ? recommendations.findIndex((s) => String(s.id) === String(currentSong.id)) : -1;
+      const nextIdx = curIdx < 0 ? 0 : (curIdx + 1) % recommendations.length;
+      const nextSong = recommendations[nextIdx];
+      await playSong(nextSong);
+    } finally { setBusy(false); }
+  };
 
   const onClickSong = async (song: Song) => {
-    if (busy) return
-    setBusy(true)
+    if (busy) return;
+    setBusy(true);
     try {
-      setSelectedSongId(song.id)
-      await playSong(song)
-      setShowPlaylist(false)
-    } finally {
-      setBusy(false)
-    }
-  }
+      await playSong(song);
+      setShowPlaylist(false);
+    } finally { setBusy(false); }
+  };
 
   const playPreviousSong = async () => {
-    if (busy || recommendations.length === 0) return
-    setBusy(true)
+    if (busy || recommendations.length === 0) return;
+    setBusy(true);
     try {
-      const curIdx = currentSong ? recommendations.findIndex((s) => s.id === currentSong.id) : 0
-      const prevIdx = curIdx <= 0 ? recommendations.length - 1 : curIdx - 1
-      const prevSong = recommendations[prevIdx]
-      setSelectedSongId(prevSong.id)
-      await playSong(prevSong)
-    } finally {
-      setBusy(false)
-    }
-  }
+      const curIdx = currentSong ? recommendations.findIndex((s) => String(s.id) === String(currentSong.id)) : 0;
+      const prevIdx = curIdx <= 0 ? recommendations.length - 1 : curIdx - 1;
+      const prevSong = recommendations[prevIdx];
+      await playSong(prevSong);
+    } finally { setBusy(false); }
+  };
 
-  // Feedback
-  const [feedbackMap, setFeedbackMap] = useState<Record<string | number, 1 | -1 | 0>>({})
+  // ===== 슬라이더 Seek (과도 호출 방지: 사용자가 드래그 완료했을 때만 onChange로 1회 호출)
+  const handleSeek = async (v: number) => {
+    setCurrentTime(v);
+    if (source === "preview" && audioRef.current) {
+      audioRef.current.currentTime = v;
+    } else if (source === "spotify") {
+      try { await seek(v * 1000); } catch {}
+    }
+  };
+
+  // ===== Feedback (그대로)
+  const [feedbackMap, setFeedbackMap] = useState<Record<string | number, 1 | -1 | 0>>({});
   const sendFeedback = useCallback(
     async (musicId: string | number, value: 1 | -1) => {
       const payload = {
@@ -503,100 +511,73 @@ export default function RecommendClient() {
         photo_id: photoId ?? null,
         context_main_mood: contextMainMood ?? null,
         context_sub_mood: contextSubMood ?? null,
-      }
+      };
       try {
         const r = await fetch(`${API_BASE}/api/feedback`, {
-          method: "POST",
-          credentials: "include",
+          method: "POST", credentials: "include",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
-        })
-        if (r.ok) return true
-        if (r.status !== 401) {
-          alert("피드백 전송에 실패했습니다.")
-          return false
-        }
+        });
+        if (r.ok) return true;
+        if (r.status !== 401) { alert("피드백 전송에 실패했습니다."); return false; }
       } catch {}
-      const authHeader = buildAuthHeaderFromLocalStorage()
+      const authHeader = buildAuthHeaderFromLocalStorage();
       if (!authHeader.Authorization) {
-        const me = await fetchMe()
-        if (!me) {
-          alert("로그인이 필요합니다.")
-          return false
-        }
+        const me = await fetchMe();
+        if (!me) { alert("로그인이 필요합니다."); return false; }
       }
       try {
         const r2 = await fetch(`${API_BASE}/api/feedback`, {
-          method: "POST",
-          credentials: "include",
+          method: "POST", credentials: "include",
           headers: { "Content-Type": "application/json", ...authHeader },
           body: JSON.stringify(payload),
-        })
-        if (r2.ok) return true
-        if (r2.status === 401) alert("로그인이 필요합니다.")
-        else alert("피드백 전송에 실패했습니다.")
-        return false
-      } catch {
-        alert("네트워크 오류로 피드백 전송 실패")
-        return false
-      }
+        });
+        if (r2.ok) return true;
+        if (r2.status === 401) alert("로그인이 필요합니다.");
+        else alert("피드백 전송에 실패했습니다.");
+        return false;
+      } catch { alert("네트워크 오류로 피드백 전송 실패"); return false; }
     },
     [photoId, contextMainMood, contextSubMood],
-  )
+  );
 
   const handleFeedback = useCallback(
     async (value: 1 | -1) => {
-      if (!currentSong) return
-      const key = currentSong.id
-      const prev = feedbackMap[key] ?? 0
-      const nextVal: 1 | -1 | 0 = prev === value ? 0 : value
-      setFeedbackMap((m) => ({ ...m, [key]: nextVal }))
-      if (nextVal === 0) return
-      const ok = await sendFeedback(key, nextVal)
-      if (!ok) setFeedbackMap((m) => ({ ...m, [key]: prev }))
+      if (!currentSong) return;
+      const key = currentSong.id;
+      const prev = feedbackMap[key] ?? 0;
+      const nextVal: 1 | -1 | 0 = prev === value ? 0 : value;
+      setFeedbackMap((m) => ({ ...m, [key]: nextVal }));
+      if (nextVal === 0) return;
+      const ok = await sendFeedback(key, nextVal);
+      if (!ok) setFeedbackMap((m) => ({ ...m, [key]: prev }));
     },
     [currentSong, feedbackMap, sendFeedback],
-  )
+  );
 
   const goEditOnly = useCallback(async () => {
-    if (!photoId) {
-      alert("photoId가 없습니다.")
-      return
-    }
-    if (!selectedSongId) {
-      alert("편집할 곡을 먼저 선택해 주세요.")
-      return
-    }
-    const q = new URLSearchParams()
-    q.set("photoId", String(photoId))
-    q.set("musicId", String(selectedSongId))
-    router.push(`/editor?${q.toString()}`)
-  }, [photoId, selectedSongId, router])
+    if (!photoId) { alert("photoId가 없습니다."); return; }
+    if (!selectedSongId) { alert("편집할 곡을 먼저 선택해 주세요."); return; }
+    const q = new URLSearchParams();
+    q.set("photoId", String(photoId));
+    q.set("musicId", String(selectedSongId));
+    router.push(`/editor?${q.toString()}`);
+  }, [photoId, selectedSongId, router]);
 
   const handleRefresh = async () => {
-    if (isRefreshing) return
+    if (isRefreshing) return;
     try {
-      setIsRefreshing(true)
-      audioRef.current?.pause()
-      setIsPlaying(false)
-      setCurrentTime(0)
-      await fetchRecommendations()
-    } finally {
-      setIsRefreshing(false)
-    }
-  }
+      setIsRefreshing(true);
+      await fetchRecommendations();
+    } finally { setIsRefreshing(false); }
+  };
 
   const handleClose = () => {
-    try {
-      router.replace("/")
-    } catch {
-      ;(window as unknown as { location: Location }).location.href = "/"
-    }
-  }
+    try { router.replace("/"); } catch { (window as unknown as { location: Location }).location.href = "/"; }
+  };
 
-  const safeImageSrc = uploadedImage || "/placeholder.svg"
-
-  const currentSongIndex = currentSong ? recommendations.findIndex((s) => s.id === currentSong.id) : 0
+  const safeImageSrc = uploadedImage || "/placeholder.svg";
+  const currentSongIndex = currentSong ? recommendations.findIndex((s) => String(s.id) === String(currentSong.id)) : 0;
 
   return (
     <div className="fixed inset-0 bg-black">
@@ -659,12 +640,11 @@ export default function RecommendClient() {
                 min={0}
                 max={duration}
                 value={currentTime}
-                onChange={(e) => {
-                  const v = Number(e.target.value)
-                  setCurrentTime(v)
-                  if (source === "preview" && audioRef.current) audioRef.current.currentTime = v
-                }}
-                className="w-full h-1 bg-white/20 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
+                onChange={(e) => handleSeek(Number(e.target.value))}
+                className="w-full h-1 bg-white/20 rounded-lg appearance-none cursor-pointer
+                           [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3
+                           [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full
+                           [&::-webkit-slider-thumb]:bg-white"
               />
               <div className="flex justify-between text-xs text-white/70">
                 <span>{formatTime(currentTime)}</span>
@@ -762,13 +742,13 @@ export default function RecommendClient() {
           </div>
           <div className="overflow-y-auto" style={{ maxHeight: "calc(70vh - 100px)" }}>
             <div className="space-y-2">
-              {recommendations.map((song, idx) => (
+              {recommendations.map((song) => (
                 <button
                   key={song.id}
                   onClick={() => onClickSong(song)}
                   disabled={busy}
                   className={`w-full flex items-center gap-3 p-3 rounded-xl transition-colors ${
-                    currentSong?.id === song.id ? "bg-white/20" : "bg-white/5 hover:bg-white/10 active:bg-white/15"
+                    String(currentSong?.id) === String(song.id) ? "bg-white/20" : "bg-white/5 hover:bg-white/10 active:bg-white/15"
                   }`}
                 >
                   <div className="relative w-12 h-12 rounded-lg overflow-hidden flex-shrink-0 bg-white/10">
@@ -785,7 +765,7 @@ export default function RecommendClient() {
                         <Music className="w-6 h-6 text-white/40" />
                       </div>
                     )}
-                    {currentSong?.id === song.id && (
+                    {String(currentSong?.id) === String(song.id) && (
                       <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
                         {isPlaying ? <Pause className="w-5 h-5 text-white" /> : <Play className="w-5 h-5 text-white" />}
                       </div>
@@ -803,13 +783,12 @@ export default function RecommendClient() {
         </div>
       </div>
 
-      {/* Overlay to close playlist when clicking outside */}
       {showPlaylist && <div className="fixed inset-0 bg-black/20 z-40" onClick={() => setShowPlaylist(false)} />}
     </div>
-  )
+  );
 }
 
 function toBackendSongArray(val: unknown): BackendSong[] {
-  if (!Array.isArray(val)) return []
-  return val.filter((x) => x && typeof x === "object") as BackendSong[]
+  if (!Array.isArray(val)) return [];
+  return val.filter((x) => x && typeof x === "object") as BackendSong[];
 }
