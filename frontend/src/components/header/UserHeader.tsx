@@ -14,6 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { API_BASE, authHeaders } from "@/lib/api"
+import SpotifyConnectModal from "@/components/modals/SpotifyConnectModal"
 
 interface UserHeaderProps {
   user: any
@@ -45,106 +46,119 @@ export default function UserHeader({
   const displayName =
     (user?.name && String(user.name).trim()) || (user?.email && String(user.email).split("@")[0]) || "Guest"
 
-  /** ── 유틸: DB/prop/문자열 모두 배열로 정규화 */
+  // ── 스포티파이 모달 상태
+  const [showSpotifyModal, setShowSpotifyModal] = useState(false)
+
+  // ── 유틸: DB/prop/문자열 모두 배열로 정규화
   const normalize = (v: any): string[] => {
     try {
       if (Array.isArray(v)) return v.map(String)
       if (typeof v === "string") {
-        const parsed = JSON.parse(v) // '["kpop","힙합"]' 문자열도 처리
+        const parsed = JSON.parse(v)
         return Array.isArray(parsed) ? parsed.map(String) : []
+      }
+      // pg jsonb가 이미 객체/배열로 오는 경우
+      if (v && typeof v === "object" && Array.isArray((v as any).value)) {
+        return (v as any).value.map(String)
+      }
+      if (v && typeof v === "object" && Array.isArray(v)) {
+        return (v as any).map(String)
       }
     } catch {}
     return []
   }
 
-  /** 초기값: user.preferred_genres → prop.selectedGenres → localStorage 순서 */
-  const uid = typeof window !== "undefined" ? (localStorage.getItem("uid") || undefined) : undefined
-  const localKey = uid ? `preferred_genres::${uid}` : undefined
+  /** 프론트에서 식별자 강제 세팅: user.user_id → user.id → localStorage('uid') */
+  const userIdFromProp = user?.user_id ?? user?.id
+  const userIdFromLS = typeof window !== "undefined" ? localStorage.getItem("uid") : null
+  const userId: string | undefined = (userIdFromProp ?? userIdFromLS ?? undefined)
+    ? String(userIdFromProp ?? userIdFromLS)
+    : undefined
 
-  const initialGenres = useMemo(() => {
-    const fromUser = normalize(user?.preferred_genres)
-    if (fromUser.length) return fromUser
+  /** 로컬 캐시 키 (캐시만; 표시 값은 항상 DB가 우선) */
+  const localKey = userId ? `preferred_genres::${userId}` : undefined
 
-    const fromProp = normalize(selectedGenres)
-    if (fromProp.length) return fromProp
+  /** 초기값: 임시 프롭은 보여만 주고, 곧바로 DB로 덮어쓰기 */
+  const initialGenres = useMemo(() => normalize(selectedGenres), [selectedGenres])
 
-    if (typeof window !== "undefined" && localKey) {
-      try {
-        const v = localStorage.getItem(localKey)
-        const fromLocal = normalize(v)
-        if (fromLocal.length) return fromLocal
-      } catch {}
-    }
-    return []
-  }, [user?.preferred_genres, selectedGenres, localKey])
-
-  const [genres, setGenres] = useState<string[]>(initialGenres)
+  const [genres, setGenres] = useState<string[]>(initialGenres ?? [])
   const [menuOpen, setMenuOpen] = useState(false)
-  const [genresLoaded, setGenresLoaded] = useState<boolean>(initialGenres.length > 0)
+  const [loadingFromDB, setLoadingFromDB] = useState<boolean>(false)
 
-  /** 상위/유저 정보가 나중에 도착해도 동기화 */
+  /** 로그인/유저 식별자 바뀌면 DB에서 선제 로딩 */
   useEffect(() => {
-    const n = normalize(user?.preferred_genres)
-    if (n.length) {
-      setGenres(n)
-      setGenresLoaded(true)
-      if (localKey) try { localStorage.setItem(localKey, JSON.stringify(n)) } catch {}
+    if (!isLoggedIn || !userId) {
+      setGenres([])
       return
     }
-    const p = normalize(selectedGenres)
-    if (p.length) {
-      setGenres(p)
-      setGenresLoaded(true)
-      if (localKey) try { localStorage.setItem(localKey, JSON.stringify(p)) } catch {}
-    }
-  }, [user?.preferred_genres, selectedGenres, localKey])
 
-  /** 드롭다운 열릴 때 lazy-load: localStorage → API (쿠키 포함) */
-  useEffect(() => {
-    if (!menuOpen || genresLoaded || !isLoggedIn) return
-
-    // 1) 로컬 먼저
-    if (localKey) {
+    const fetchFromDB = async () => {
+      setLoadingFromDB(true)
       try {
-        const v = localStorage.getItem(localKey)
-        const fromLocal = normalize(v)
-        if (fromLocal.length) {
-          setGenres(fromLocal)
-          setGenresLoaded(true)
-          return
-        }
-      } catch {}
-    }
+        // URL + 쿼리(user_id) + 헤더(X-User-Id) 모두 전송 → 어떤 백엔드 케이스든 안전
+        const url = new URL(`${API_BASE}/api/users/me`)
+        url.searchParams.set("user_id", userId)
 
-    // 2) API (쿠키 포함). uid 없으면 X-User-Id 생략
-    const headers = new Headers(authHeaders?.() as HeadersInit)
-    if (uid) headers.set("X-User-Id", uid)
+        const headers = new Headers(authHeaders?.() as HeadersInit)
+        headers.set("X-User-Id", userId)
 
-    ;(async () => {
-      try {
-        const r = await fetch(`${API_BASE}/api/users/me`, {
+        const r = await fetch(url.toString(), {
           headers,
-          cache: "no-store",
+          // 쿠키 세션 사용하는 경우 대비 (동일/서로 다른 도메인 환경)
           credentials: "include",
+          cache: "no-store",
         })
 
         if (!r.ok) {
-          console.warn("[UserHeader] /api/users/me not ok:", r.status)
-          setGenresLoaded(true)
+          const text = await r.text().catch(() => "")
+          console.warn("[UserHeader] /api/users/me not ok:", r.status, text)
+          // 로컬 캐시라도 보여주자 (있을 경우)
+          if (localKey) {
+            try {
+              const cached = localStorage.getItem(localKey)
+              const fromLocal = normalize(cached)
+              if (fromLocal.length) setGenres(fromLocal)
+            } catch {}
+          }
           return
         }
 
         const me = await r.json()
         const fromDb = normalize(me?.preferred_genres)
         setGenres(fromDb)
-        setGenresLoaded(true)
-        if (localKey) try { localStorage.setItem(localKey, JSON.stringify(fromDb)) } catch {}
+
+        // 캐시 저장 (표시는 DB우선)
+        if (localKey) {
+          try {
+            localStorage.setItem(localKey, JSON.stringify(fromDb))
+          } catch {}
+        }
       } catch (e) {
-        console.warn("[UserHeader] load preferred_genres error:", e)
-        setGenresLoaded(true)
+        console.warn("[UserHeader] load preferred_genres (DB) error:", e)
+        // 에러 시에도 캐시 폴백
+        if (localKey) {
+          try {
+            const cached = localStorage.getItem(localKey)
+            const fromLocal = normalize(cached)
+            if (fromLocal.length) setGenres(fromLocal)
+          } catch {}
+        }
+      } finally {
+        setLoadingFromDB(false)
       }
-    })()
-  }, [menuOpen, genresLoaded, isLoggedIn, uid, localKey])
+    }
+
+    fetchFromDB()
+  }, [isLoggedIn, userId])
+
+  // ── 모달의 "지금 연동" 이동
+  const handleSpotifyConnect = () => {
+    try {
+      setShowSpotifyModal(false)
+      if (onSpotifyConnect) onSpotifyConnect()
+      else router.push("/account?connect=spotify")
+    } catch {}
+  }
 
   return (
     <Wrapper className={wrapperCls}>
@@ -165,6 +179,12 @@ export default function UserHeader({
           <RightPart />
         </>
       )}
+
+      <SpotifyConnectModal
+        open={showSpotifyModal}
+        onClose={() => setShowSpotifyModal(false)}
+        onConnect={handleSpotifyConnect}
+      />
     </Wrapper>
   )
 
@@ -187,17 +207,13 @@ export default function UserHeader({
 
     return (
       <div className="flex items-center gap-2">
-        {/* ▼ 완전 controlled 모드로 전환 */}
         <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
           <DropdownMenuTrigger asChild>
-            {/* shadcn Button 사용 + type="button" 명시 */}
             <Button
               type="button"
               variant="ghost"
               className={`h-auto px-3 py-1.5 gap-2 rounded-full ${
-                embedded
-                  ? "text-white hover:bg-white/20"
-                  : "text-primary hover:bg-primary/20"
+                embedded ? "text-white hover:bg-white/20" : "text-primary hover:bg-primary/20"
               }`}
               aria-haspopup="menu"
               aria-expanded={menuOpen}
@@ -245,12 +261,10 @@ export default function UserHeader({
                 <Button
                   size="sm"
                   className="w-full"
-                  onClick={
-                    onSpotifyConnect ??
-                    (() => {
-                      router.push("/account")
-                    })
-                  }
+                  onClick={() => {
+                    setMenuOpen(false)
+                    setShowSpotifyModal(true)
+                  }}
                 >
                   스포티파이 연결하기
                 </Button>
@@ -264,8 +278,11 @@ export default function UserHeader({
                 <Heart className="h-4 w-4 text-muted-foreground" />
                 <span className="text-sm font-semibold">관심 장르</span>
               </div>
+
+              {loadingFromDB && <div className="text-xs text-muted-foreground">불러오는 중…</div>}
+
               <div className="flex flex-wrap gap-1.5">
-                {genres.length ? (
+                {!loadingFromDB && genres.length > 0 ? (
                   genres.map((g) => (
                     <Badge
                       key={g}
@@ -277,12 +294,14 @@ export default function UserHeader({
                     </Badge>
                   ))
                 ) : (
-                  <button
-                    onClick={() => router.push("/onboarding/genres?edit=1")}
-                    className="text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-2"
-                  >
-                    장르를 선택해주세요
-                  </button>
+                  !loadingFromDB && (
+                    <button
+                      onClick={() => router.push("/onboarding/genres?edit=1")}
+                      className="text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-2"
+                    >
+                      장르를 선택해주세요
+                    </button>
+                  )
                 )}
               </div>
             </div>
