@@ -7,10 +7,10 @@ const router = express.Router();
 
 const CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;
 const CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
-const REDIRECT_URI = process.env.SPOTIFY_REDIRECT_URI; // ex) https://capstone-app-back.onrender.com/api/spotify/callback
-const FRONT_BASE  = process.env.FRONT_BASE || "https://capstone-front-tau.vercel.app";
+const REDIRECT_URI = process.env.SPOTIFY_REDIRECT_URI;
+const FRONT_BASE = process.env.FRONT_BASE || "https://capstone-front-tau.vercel.app";
 
-const CK_ACCESS  = "sp_access";
+const CK_ACCESS = "sp_access";
 const CK_REFRESH = "sp_refresh";
 
 const SCOPE = [
@@ -22,7 +22,7 @@ const SCOPE = [
 ].join(" ");
 
 // ─────────────── helpers ───────────────
-const b64url = (buf) => buf.toString("base64").replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+const b64url = (buf) => buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 const makeVerifier = () => b64url(crypto.randomBytes(32));
 const makeChallenge = (v) => b64url(crypto.createHash("sha256").update(v).digest());
 
@@ -59,6 +59,7 @@ router.get("/authorize", (req, res) => {
     code_challenge: challenge,
   });
 
+  // ✅ [수정] 스포티파이 인증 페이지 주소로 변경
   res.redirect(`https://accounts.spotify.com/authorize?${p.toString()}`);
 });
 
@@ -74,7 +75,7 @@ router.get("/callback", async (req, res) => {
         const parsed = JSON.parse(Buffer.from(String(state), "base64url").toString("utf8"));
         if (parsed?.r) returnTo = parsed.r;
       }
-    } catch {}
+    } catch { }
 
     const verifier = req.cookies?.sp_pkce;
     if (!verifier) return res.status(400).send("Missing PKCE verifier");
@@ -87,6 +88,7 @@ router.get("/callback", async (req, res) => {
       code_verifier: verifier,
     });
 
+    // ✅ [수정] 스포티파이 토큰 발급 API 주소로 변경
     const tokenRes = await axios.post("https://accounts.spotify.com/api/token", body.toString(), {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
     });
@@ -120,6 +122,7 @@ router.get("/refresh", async (req, res) => {
       client_secret: String(CLIENT_SECRET),
     });
 
+    // ✅ [수정] 스포티파이 토큰 발급 API 주소로 변경
     const tokenRes = await axios.post("https://accounts.spotify.com/api/token", body.toString(), {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
     });
@@ -141,6 +144,7 @@ router.get("/me", async (req, res) => {
   try {
     const access = getAccessFromCookie(req, res); if (!access) return;
 
+    // ✅ [수정] 스포티파이 사용자 정보 API 주소로 변경
     const r = await axios.get("https://api.spotify.com/v1/me", {
       headers: { Authorization: `Bearer ${access}` },
     });
@@ -152,20 +156,19 @@ router.get("/me", async (req, res) => {
 });
 
 /* =====================================================
-   🎵 Web Playback SDK / Spotify Connect 보조 엔드포인트
+    🎵 Web Playback SDK / Spotify Connect 보조 엔드포인트
    ===================================================== */
 
-// SDK 초기화용: 현재 access token 반환
 router.get("/token", (req, res) => {
   const access = req.cookies?.[CK_ACCESS];
   if (!access) return res.status(401).json({ error: "NO_ACCESS_TOKEN" });
   res.json({ access_token: access });
 });
 
-// 연결된 디바이스 조회
 router.get("/devices", async (req, res) => {
   const access = getAccessFromCookie(req, res); if (!access) return;
   try {
+    // ✅ [수정] 스포티파이 재생 기기 목록 API 주소로 변경
     const r = await axios.get("https://api.spotify.com/v1/me/player/devices", {
       headers: { Authorization: `Bearer ${access}` },
     });
@@ -176,12 +179,12 @@ router.get("/devices", async (req, res) => {
   }
 });
 
-// 이 웹 플레이어로 전환
 router.put("/transfer", async (req, res) => {
   const access = getAccessFromCookie(req, res); if (!access) return;
   const { device_id, play } = req.body || {};
   if (!device_id) return res.status(400).json({ error: "MISSING_DEVICE_ID" });
   try {
+    // ✅ [수정] 스포티파이 재생 기기 변경 API 주소로 변경
     await axios.put("https://api.spotify.com/v1/me/player",
       { device_ids: [device_id], play: !!play },
       { headers: { Authorization: `Bearer ${access}` } }
@@ -193,12 +196,11 @@ router.put("/transfer", async (req, res) => {
   }
 });
 
-// 재생 시작 (uris or context_uri)
 router.put("/play", async (req, res) => {
   const access = getAccessFromCookie(req, res); if (!access) return;
-
   const { device_id, uris, context_uri, offset, position_ms } = req.body || {};
   try {
+    // ✅ [수정] 스포티파이 재생 API 주소로 변경
     const url = new URL("https://api.spotify.com/v1/me/player/play");
     if (device_id) url.searchParams.set("device_id", String(device_id));
 
@@ -218,10 +220,10 @@ router.put("/play", async (req, res) => {
   }
 });
 
-// 일시정지
 router.put("/pause", async (req, res) => {
   const access = getAccessFromCookie(req, res); if (!access) return;
   try {
+    // ✅ [수정] 스포티파이 일시정지 API 주소로 변경
     await axios.put("https://api.spotify.com/v1/me/player/pause", {}, {
       headers: { Authorization: `Bearer ${access}` },
     });
@@ -232,10 +234,10 @@ router.put("/pause", async (req, res) => {
   }
 });
 
-// 다음/이전 트랙
 router.post("/next", async (req, res) => {
   const access = getAccessFromCookie(req, res); if (!access) return;
   try {
+    // ✅ [수정] 스포티파이 다음 곡 재생 API 주소로 변경
     await axios.post("https://api.spotify.com/v1/me/player/next", {}, {
       headers: { Authorization: `Bearer ${access}` },
     });
@@ -249,6 +251,7 @@ router.post("/next", async (req, res) => {
 router.post("/previous", async (req, res) => {
   const access = getAccessFromCookie(req, res); if (!access) return;
   try {
+    // ✅ [수정] 스포티파이 이전 곡 재생 API 주소로 변경
     await axios.post("https://api.spotify.com/v1/me/player/previous", {}, {
       headers: { Authorization: `Bearer ${access}` },
     });
