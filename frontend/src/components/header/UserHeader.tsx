@@ -46,118 +46,131 @@ export default function UserHeader({
   const displayName =
     (user?.name && String(user.name).trim()) || (user?.email && String(user.email).split("@")[0]) || "Guest"
 
-  // ── 스포티파이 모달 상태
+  // ───────────────── Spotify 모달 상태
   const [showSpotifyModal, setShowSpotifyModal] = useState(false)
 
-  // ── 유틸: DB/prop/문자열 모두 배열로 정규화
+  // ───────────────── 유틸: DB/prop/문자열 모두 배열로 정규화
   const normalize = (v: any): string[] => {
     try {
       if (Array.isArray(v)) return v.map(String)
       if (typeof v === "string") {
-        const parsed = JSON.parse(v)
+        const parsed = JSON.parse(v) // '["kpop","힙합"]' 같은 문자열 처리
         return Array.isArray(parsed) ? parsed.map(String) : []
-      }
-      // pg jsonb가 이미 객체/배열로 오는 경우
-      if (v && typeof v === "object" && Array.isArray((v as any).value)) {
-        return (v as any).value.map(String)
-      }
-      if (v && typeof v === "object" && Array.isArray(v)) {
-        return (v as any).map(String)
       }
     } catch {}
     return []
   }
 
-  /** 프론트에서 식별자 강제 세팅: user.user_id → user.id → localStorage('uid') */
-  const userIdFromProp = user?.user_id ?? user?.id
-  const userIdFromLS = typeof window !== "undefined" ? localStorage.getItem("uid") : null
-  const userId: string | undefined = (userIdFromProp ?? userIdFromLS ?? undefined)
-    ? String(userIdFromProp ?? userIdFromLS)
-    : undefined
+  /** 초기값: user.preferred_genres → prop.selectedGenres → localStorage 순서 */
+  const uid = typeof window !== "undefined" ? (localStorage.getItem("uid") || undefined) : undefined
+  const localKey = uid ? `preferred_genres::${uid}` : undefined
 
-  /** 로컬 캐시 키 (캐시만; 표시 값은 항상 DB가 우선) */
-  const localKey = userId ? `preferred_genres::${userId}` : undefined
+  const initialGenres = useMemo(() => {
+    const fromUser = normalize(user?.preferred_genres)
+    if (fromUser.length) return fromUser
 
-  /** 초기값: 임시 프롭은 보여만 주고, 곧바로 DB로 덮어쓰기 */
-  const initialGenres = useMemo(() => normalize(selectedGenres), [selectedGenres])
+    const fromProp = normalize(selectedGenres)
+    if (fromProp.length) return fromProp
 
-  const [genres, setGenres] = useState<string[]>(initialGenres ?? [])
+    if (typeof window !== "undefined" && localKey) {
+      try {
+        const v = localStorage.getItem(localKey)
+        const fromLocal = normalize(v)
+        if (fromLocal.length) return fromLocal
+      } catch {}
+    }
+    return []
+  }, [user?.preferred_genres, selectedGenres, localKey])
+
+  const [genres, setGenres] = useState<string[]>(initialGenres)
   const [menuOpen, setMenuOpen] = useState(false)
-  const [loadingFromDB, setLoadingFromDB] = useState<boolean>(false)
+  const [genresLoaded, setGenresLoaded] = useState<boolean>(initialGenres.length > 0)
 
-  /** 로그인/유저 식별자 바뀌면 DB에서 선제 로딩 */
+  /** 상위/유저 정보가 나중에 도착해도 동기화 */
   useEffect(() => {
-    if (!isLoggedIn || !userId) {
-      setGenres([])
+    const n = normalize(user?.preferred_genres)
+    if (n.length) {
+      setGenres(n)
+      setGenresLoaded(true)
+      if (localKey) try { localStorage.setItem(localKey, JSON.stringify(n)) } catch {}
       return
     }
+    const p = normalize(selectedGenres)
+    if (p.length) {
+      setGenres(p)
+      setGenresLoaded(true)
+      if (localKey) try { localStorage.setItem(localKey, JSON.stringify(p)) } catch {}
+    }
+  }, [user?.preferred_genres, selectedGenres, localKey])
 
-    const fetchFromDB = async () => {
-      setLoadingFromDB(true)
+  /** 드롭다운 열릴 때 lazy-load: localStorage → API (쿠키 포함) */
+  useEffect(() => {
+    if (!menuOpen || genresLoaded || !isLoggedIn) return
+
+    // 1) 로컬 먼저
+    if (localKey) {
       try {
-        // URL + 쿼리(user_id) + 헤더(X-User-Id) 모두 전송 → 어떤 백엔드 케이스든 안전
-        const url = new URL(`${API_BASE}/api/users/me`)
-        url.searchParams.set("user_id", userId)
+        const v = localStorage.getItem(localKey)
+        const fromLocal = normalize(v)
+        if (fromLocal.length) {
+          setGenres(fromLocal)
+          setGenresLoaded(true)
+          return
+        }
+      } catch {}
+    }
 
-        const headers = new Headers(authHeaders?.() as HeadersInit)
-        headers.set("X-User-Id", userId)
+    // 2) API (쿠키 포함). uid 없으면 X-User-Id 생략
+    const headers = new Headers(authHeaders?.() as HeadersInit)
+    if (uid) headers.set("X-User-Id", uid)
 
-        const r = await fetch(url.toString(), {
+    ;(async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/users/me`, {
           headers,
-          // 쿠키 세션 사용하는 경우 대비 (동일/서로 다른 도메인 환경)
-          credentials: "include",
           cache: "no-store",
+          credentials: "include",
         })
 
         if (!r.ok) {
-          const text = await r.text().catch(() => "")
-          console.warn("[UserHeader] /api/users/me not ok:", r.status, text)
-          // 로컬 캐시라도 보여주자 (있을 경우)
-          if (localKey) {
-            try {
-              const cached = localStorage.getItem(localKey)
-              const fromLocal = normalize(cached)
-              if (fromLocal.length) setGenres(fromLocal)
-            } catch {}
-          }
+          console.warn("[UserHeader] /api/users/me not ok:", r.status)
+          setGenresLoaded(true)
           return
         }
 
         const me = await r.json()
         const fromDb = normalize(me?.preferred_genres)
         setGenres(fromDb)
-
-        // 캐시 저장 (표시는 DB우선)
-        if (localKey) {
-          try {
-            localStorage.setItem(localKey, JSON.stringify(fromDb))
-          } catch {}
-        }
+        setGenresLoaded(true)
+        if (localKey) try { localStorage.setItem(localKey, JSON.stringify(fromDb)) } catch {}
       } catch (e) {
-        console.warn("[UserHeader] load preferred_genres (DB) error:", e)
-        // 에러 시에도 캐시 폴백
-        if (localKey) {
-          try {
-            const cached = localStorage.getItem(localKey)
-            const fromLocal = normalize(cached)
-            if (fromLocal.length) setGenres(fromLocal)
-          } catch {}
-        }
-      } finally {
-        setLoadingFromDB(false)
+        console.warn("[UserHeader] load preferred_genres error:", e)
+        setGenresLoaded(true)
       }
+    })()
+  }, [menuOpen, genresLoaded, isLoggedIn, uid, localKey])
+
+  // ───────────────── Spotify 연결 시작 (백엔드 authorize로 리다이렉트)
+  const handleSpotifyConnect = () => {
+    setShowSpotifyModal(false)
+
+    // 상위에서 별도 핸들러를 내려준 경우 그대로 사용
+    if (onSpotifyConnect) {
+      onSpotifyConnect()
+      return
     }
 
-    fetchFromDB()
-  }, [isLoggedIn, userId])
+    // 돌아올 목적지(현재 페이지) 지정
+    const returnTo =
+      typeof window !== "undefined"
+        ? `${window.location.pathname}${window.location.search || ""}`
+        : "/"
 
-  // ── 모달의 "지금 연동" 이동
-  const handleSpotifyConnect = () => {
-    try {
-      setShowSpotifyModal(false)
-      if (onSpotifyConnect) onSpotifyConnect()
-      else router.push("/account?connect=spotify")
-    } catch {}
+    const qs = new URLSearchParams({ return: returnTo }).toString()
+    const authorizeUrl = `${API_BASE}/api/spotify/authorize?${qs}`
+
+    // 전체 페이지 이동 (백엔드가 쿠키 설정 후 FRONT_BASE + returnTo로 돌려보냄)
+    window.location.href = authorizeUrl
   }
 
   return (
@@ -180,6 +193,7 @@ export default function UserHeader({
         </>
       )}
 
+      {/* Spotify 연결 모달 */}
       <SpotifyConnectModal
         open={showSpotifyModal}
         onClose={() => setShowSpotifyModal(false)}
@@ -262,6 +276,7 @@ export default function UserHeader({
                   size="sm"
                   className="w-full"
                   onClick={() => {
+                    // 드롭다운 닫고 모달 오픈 → 모달의 "지금 연동"이 실제 이동 처리
                     setMenuOpen(false)
                     setShowSpotifyModal(true)
                   }}
@@ -278,11 +293,8 @@ export default function UserHeader({
                 <Heart className="h-4 w-4 text-muted-foreground" />
                 <span className="text-sm font-semibold">관심 장르</span>
               </div>
-
-              {loadingFromDB && <div className="text-xs text-muted-foreground">불러오는 중…</div>}
-
               <div className="flex flex-wrap gap-1.5">
-                {!loadingFromDB && genres.length > 0 ? (
+                {genres.length ? (
                   genres.map((g) => (
                     <Badge
                       key={g}
@@ -294,14 +306,12 @@ export default function UserHeader({
                     </Badge>
                   ))
                 ) : (
-                  !loadingFromDB && (
-                    <button
-                      onClick={() => router.push("/onboarding/genres?edit=1")}
-                      className="text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-2"
-                    >
-                      장르를 선택해주세요
-                    </button>
-                  )
+                  <button
+                    onClick={() => router.push("/onboarding/genres?edit=1")}
+                    className="text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-2"
+                  >
+                    장르를 선택해주세요
+                  </button>
                 )}
               </div>
             </div>
