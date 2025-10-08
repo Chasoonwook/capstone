@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { API_BASE, authHeaders } from "@/lib/api";
@@ -8,18 +8,19 @@ import { Check } from "lucide-react";
 import Image from "next/image";
 
 const GENRES = [
-  { id: "BGM",   name: "BGM",     image: "/genres/BGM.png",                 description: "배경음악, 카페음악" },
-  { id: "클래식", name: "클래식",  image: "/genres/Classical.png",           description: "오케스트라, 피아노" },
-  { id: "밴드",  name: "밴드",    image: "/genres/Band.png",                description: "록, 인디, 밴드음악" },
-  { id: "힙합",  name: "힙합",    image: "/genres/Hip-hop.png",             description: "랩, 힙합, R&B" },
-  { id: "pop",   name: "Pop",     image: "/genres/POP.png",                 description: "팝송, 댄스팝" },
-  { id: "jpop",  name: "J-Pop",   image: "/genres/J-POP.png",               description: "일본 팝, 애니송" },
-  { id: "트로트", name: "트로트",  image: "/genres/Trot.png",                description: "한국 전통가요" },
-  { id: "동요",  name: "동요",    image: "/genres/Children's song.png",     description: "어린이 음악" },
-  { id: "kpop",  name: "K-Pop",   image: "/genres/K-POP.png",               description: "한국 아이돌, 케이팝" },
+  { id: "BGM",    name: "BGM",    image: "/genres/BGM.png",                 description: "배경음악, 카페음악" },
+  { id: "클래식",  name: "클래식",  image: "/genres/Classical.png",           description: "오케스트라, 피아노" },
+  { id: "밴드",   name: "밴드",   image: "/genres/Band.png",                description: "록, 인디, 밴드음악" },
+  { id: "힙합",   name: "힙합",   image: "/genres/Hip-hop.png",             description: "랩, 힙합, R&B" },
+  { id: "pop",    name: "Pop",    image: "/genres/POP.png",                 description: "팝송, 댄스팝" },
+  { id: "jpop",   name: "J-Pop",  image: "/genres/J-POP.png",               description: "일본 팝, 애니송" },
+  { id: "트로트",  name: "트로트",  image: "/genres/Trot.png",                description: "한국 전통가요" },
+  { id: "동요",   name: "동요",   image: "/genres/Children's song.png",     description: "어린이 음악" },
+  { id: "kpop",   name: "K-Pop",  image: "/genres/K-POP.png",               description: "한국 아이돌, 케이팝" },
 ];
 
-export default function OnboardingGenresPage() {
+// 내부 클라이언트 컴포넌트: useSearchParams 등 훅 사용
+function Inner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const editMode = useMemo(() => searchParams.get("edit") === "1", [searchParams]);
@@ -44,7 +45,7 @@ export default function OnboardingGenresPage() {
         const r = await fetch(`${API_BASE}/api/users/me`, {
           headers: { "X-User-Id": uid, ...(authHeaders?.() as HeadersInit) },
           cache: "no-store",
-          credentials: "include", // ★ 추가
+          credentials: "include",
         });
 
         if (r.status === 401) {
@@ -65,8 +66,9 @@ export default function OnboardingGenresPage() {
           // 저장된 선호장르 프리필
           if (Array.isArray(me?.preferred_genres)) {
             setSelected(me.preferred_genres);
-            // 로컬 캐시 갱신
-            try { localStorage.setItem(localKey, JSON.stringify(me.preferred_genres)) } catch {}
+            try {
+              localStorage.setItem(localKey, JSON.stringify(me.preferred_genres));
+            } catch {}
           }
         } else {
           // 2) API 실패 시 로컬 캐시 폴백
@@ -82,7 +84,7 @@ export default function OnboardingGenresPage() {
         console.error("load me error", e);
         // 3) 에러여도 로컬 캐시 폴백
         try {
-          const cached = localStorage.getItem(`preferred_genres::${uid}`);
+          const cached = localStorage.getItem(localKey);
           if (cached) {
             const arr = JSON.parse(cached);
             if (Array.isArray(arr)) setSelected(arr);
@@ -109,12 +111,16 @@ export default function OnboardingGenresPage() {
       const uid = localStorage.getItem("uid") || "";
       const localKey = `preferred_genres::${uid}`;
 
-      // 1) 장르 업데이트 (DB의 users.preferred_genres 갱신)
+      // 1) 장르 업데이트
       const r1 = await fetch(`${API_BASE}/api/users/me/genres`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json", "X-User-Id": uid, ...(authHeaders?.() as HeadersInit) },
+        headers: {
+          "Content-Type": "application/json",
+          "X-User-Id": uid,
+          ...(authHeaders?.() as HeadersInit),
+        },
         body: JSON.stringify({ genres: selected }),
-        credentials: "include", // ★ 추가
+        credentials: "include",
       });
       if (r1.status === 401) {
         router.replace("/login");
@@ -125,13 +131,17 @@ export default function OnboardingGenresPage() {
         return;
       }
 
-      // 2) 온보딩 완료 플래그는 첫 설정 때만 필요 (편집 모드에서는 생략 가능)
+      // 2) 온보딩 완료 플래그 (편집 모드가 아닐 때만)
       if (!editMode) {
         const r2 = await fetch(`${API_BASE}/api/users/me/onboarding`, {
           method: "PUT",
-          headers: { "Content-Type": "application/json", "X-User-Id": uid, ...(authHeaders?.() as HeadersInit) },
+          headers: {
+            "Content-Type": "application/json",
+            "X-User-Id": uid,
+            ...(authHeaders?.() as HeadersInit),
+          },
           body: JSON.stringify({ genre_setup_complete: true }),
-          credentials: "include", // ★ 추가
+          credentials: "include",
         });
         if (!r2.ok) {
           alert((await r2.text().catch(() => "")) || "온보딩 완료 처리 실패");
@@ -140,11 +150,12 @@ export default function OnboardingGenresPage() {
         document.cookie = "onboardingDone=1; path=/; max-age=31536000";
       }
 
-      // 저장 성공 시 로컬 캐시도 갱신
-      try { localStorage.setItem(localKey, JSON.stringify(selected)) } catch {}
+      // 로컬 캐시 갱신
+      try {
+        localStorage.setItem(localKey, JSON.stringify(selected));
+      } catch {}
 
       alert(editMode ? "선호 장르가 업데이트되었습니다!" : "선호 장르가 저장되었습니다!");
-      // 편집 모드는 이전 페이지로, 아니면 홈으로
       if (editMode && window.history.length > 1) {
         router.back();
       } else {
@@ -176,7 +187,9 @@ export default function OnboardingGenresPage() {
           <p className="text-lg text-gray-600 mb-2">
             {editMode ? "선호 장르를 변경해 보세요" : "당신만의 음악 경험을 위해 선호하는 장르를 선택해주세요"}
           </p>
-          <p className="text-sm text-purple-600 font-medium">2~3개의 장르를 선택하세요 ({selected.length}/3)</p>
+          <p className="text-sm text-purple-600 font-medium">
+            2~3개의 장르를 선택하세요 ({selected.length}/3)
+          </p>
         </div>
 
         <div className="grid grid-cols-3 gap-6 mb-12 max-w-4xl mx-auto">
@@ -228,5 +241,14 @@ export default function OnboardingGenresPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+// 페이지 컴포넌트: Suspense 경계로 감싸서 CSR bailout 오류 방지
+export default function OnboardingGenresPage() {
+  return (
+    <Suspense fallback={null}>
+      <Inner />
+    </Suspense>
   );
 }
