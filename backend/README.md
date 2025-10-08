@@ -116,3 +116,6 @@ _music_ 테이블의 mood 칼럼과 _photo.analysis_ 테이블의 background를 
 ### photo.js 편집본 저장 수정 (0923)
 
 ### diaries.js 기능 추가 (1002)
+
+### users.js 코드 수정 (1008)
+/me 엔드포인트 추가 해서 항상 DB에서 preferred_genres 읽어 오도록 수정
