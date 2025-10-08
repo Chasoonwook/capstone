@@ -12,18 +12,18 @@ const nextConfig: NextConfig = {
       { protocol: "https", hostname: "image-cdn-ak.spotifycdn.com", pathname: "/**" },
 
       // --- Apple (iTunes) cover CDNs ---
-      // next/image는 hostname 와일드카드가 안 되므로 1~5 모두 명시
+      // Next/Image는 hostname 와일드카드 미지원 → 1~5 명시
       { protocol: "https", hostname: "is1-ssl.mzstatic.com", pathname: "/**" },
       { protocol: "https", hostname: "is2-ssl.mzstatic.com", pathname: "/**" },
       { protocol: "https", hostname: "is3-ssl.mzstatic.com", pathname: "/**" },
       { protocol: "https", hostname: "is4-ssl.mzstatic.com", pathname: "/**" },
       { protocol: "https", hostname: "is5-ssl.mzstatic.com", pathname: "/**" },
-      { protocol: "https", hostname: "is*.mzstatic.com", pathname: "**" }, // 와일드카드 허용
-      { protocol: "https", hostname: "audio-ssl.itunes.apple.com", pathname: "**" },
+      // 음원 프리뷰/리소스
+      { protocol: "https", hostname: "audio-ssl.itunes.apple.com", pathname: "/**" },
 
-      // --- Deezer cover CDN ---
+      // --- Deezer cover CDNs ---
       { protocol: "https", hostname: "e-cdns-images.dzcdn.net", pathname: "/**" },
-      { protocol: "https", hostname: "cdn-images.dzcdn.net", pathname: "**" },
+      { protocol: "https", hostname: "cdn-images.dzcdn.net", pathname: "/**" },
 
       // --- 우리 백엔드(로컬)에서 이미지 바이너리 프록시할 때 ---
       { protocol: "http", hostname: "localhost", port: "5000", pathname: "/api/**" },
@@ -39,7 +39,6 @@ const nextConfig: NextConfig = {
       { protocol: "http", hostname: "116.89.186.151", port: "31645", pathname: "/api/**" },
       { protocol: "http", hostname: "116.89.186.151", port: "31645", pathname: "/photos/**" },
     ],
-    // (선택) 이미지 포맷 최적화
     formats: ["image/avif", "image/webp"],
   },
 };

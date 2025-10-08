@@ -1,3 +1,4 @@
+// src/components/search/SearchAndRequest.tsx
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
@@ -20,13 +21,11 @@ import {
 
 /** Spotify 응답 (요약 타입) */
 type SpotifyImage = { url: string; height: number; width: number }
-type SpotifyTrackItem = {
-  id: string
-  name: string
-  album: { id?: string; name?: string; images: SpotifyImage[] }
-}
-type SpotifySearchResponse = { items: SpotifyTrackItem[]; total: number }
+type SpotifySearchItem =
+  | { id?: string; name?: string; album?: { id?: string; name?: string; images?: SpotifyImage[] } } // Spotify 원형
+  | { trackId?: string; title?: string; artist?: string; albumImage?: string | null }               // 너의 백엔드 형태
 
+type SpotifySearchResponse = { items: SpotifySearchItem[]; total?: number }
 type ArtCache = Record<string, string | null>
 
 type Props = {
@@ -49,6 +48,10 @@ const useIsNarrow = () => {
   }, [])
   return narrow
 }
+
+/** 캐시 키: 제목/가수 소문자+trim 정규화 */
+const keyOf = (m: MusicItem) =>
+  `${(m.title ?? "").trim().toLowerCase()} - ${(m.artist ?? "").trim().toLowerCase()}`
 
 export default function SearchAndRequest({
   musics,
@@ -76,7 +79,7 @@ export default function SearchAndRequest({
     window.addEventListener("open-search-overlay", handler as EventListener)
     return () => window.removeEventListener("open-search-overlay", handler as EventListener)
   }, [])
-  
+
   const results = useMemo(() => {
     const list: MusicItem[] = Array.isArray(musics) ? musics : []
     const s = q.trim().toLowerCase()
@@ -94,14 +97,15 @@ export default function SearchAndRequest({
   const [artCache, setArtCache] = useState<ArtCache>({})
   const [artLoading, setArtLoading] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
-  const keyOf = (m: MusicItem) => `${(m.title ?? "").trim()} - ${(m.artist ?? "").trim()}`
 
   useEffect(() => {
     if (results.length === 0) return
 
-    const needKeys = results.map(keyOf).filter((k) => !(k in artCache))
-    if (needKeys.length === 0) return
+    // 아직 캐시에 없는 키만 추출
+    const needMusics = results.filter((m) => !(keyOf(m) in artCache))
+    if (needMusics.length === 0) return
 
+    // 이전 요청 중단
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
@@ -109,29 +113,39 @@ export default function SearchAndRequest({
     async function loadArts() {
       setArtLoading(true)
       try {
-        const targets = results.slice(0, 10)
+        // 과도한 호출 방지: 상위 n개만 시도(필요 시 숫자 조정)
+        const targets = needMusics.slice(0, 12)
         const tasks = targets.map(async (m) => {
           const key = keyOf(m)
+          // 방어: 캐시 재확인
           if (key in artCache) return { key, url: artCache[key] }
 
-          const term = [m.title ?? "", m.artist ?? ""].join(" ").trim()
-          if (!term) return { key, url: null }
+          const title = (m.title ?? "").trim()
+          const artist = (m.artist ?? "").trim()
+          if (!title && !artist) return { key, url: null }
 
-          const url = `${API_BASE}/api/spotify/search?query=${encodeURIComponent(term)}&limit=1`
-          const r = await fetch(url, { signal: controller.signal })
-          if (!r.ok) return { key, url: null }
+          // ✅ 프론트 라우트 강제 (API_BASE 사용 안 함)
+          const url = `/api/spotify/search?title=${encodeURIComponent(m.title ?? "")}&artist=${encodeURIComponent(m.artist ?? "")}&limit=1`
 
-          const json = (await r.json()) as SpotifySearchResponse | { error?: unknown }
-          if ("error" in json) return { key, url: null }
+          try {
+            const r = await fetch(url, { signal: controller.signal, cache: "no-store" })
+            if (!r.ok) return { key, url: null }
 
-          const item = (json as SpotifySearchResponse).items?.[0]
-          const img =
-            item?.album?.images?.[1]?.url ??
-            item?.album?.images?.[0]?.url ??
-            item?.album?.images?.[2]?.url ??
-            null
+            const json = (await r.json()) as SpotifySearchResponse | { error?: unknown }
+            if ("error" in json) return { key, url: null }
 
-          return { key, url: img }
+            const item = (json as SpotifySearchResponse).items?.[0] as any
+            const img: string | null =
+              item?.albumImage ??
+              item?.album?.images?.[1]?.url ??
+              item?.album?.images?.[0]?.url ??
+              item?.album?.images?.[2]?.url ??
+              null
+
+            return { key, url: img }
+          } catch {
+            return { key, url: null }
+          }
         })
 
         const arr = await Promise.all(tasks)
@@ -140,8 +154,6 @@ export default function SearchAndRequest({
           for (const { key, url } of arr) next[key] = url
           return next
         })
-      } catch {
-        /* noop */
       } finally {
         setArtLoading(false)
       }
@@ -191,8 +203,8 @@ export default function SearchAndRequest({
 
   /* ── 오버레이 열기/닫기 ─────────────────────────────────── */
   const openOverlay = () => {
-    inlineInputRef.current?.blur()            // 인라인 포커스 제거
-    setOverlayOpen(true)                      // ✅ 항상 오버레이로
+    inlineInputRef.current?.blur() // 인라인 포커스 제거
+    setOverlayOpen(true) // ✅ 항상 오버레이로
     setTimeout(() => overlayInputRef.current?.focus(), 0)
   }
 
@@ -215,7 +227,7 @@ export default function SearchAndRequest({
   /* ── UI ─────────────────────────────────────────────────── */
 
   const containerMax = size === "wide" ? "max-w-5xl" : "max-w-xl"
-  const resultsMax   = size === "wide" ? "max-w-4xl" : "max-w-2xl"
+  const resultsMax = size === "wide" ? "max-w-4xl" : "max-w-2xl"
 
   // 메인(인라인) — 검색창만 보여줌
   const InlineBlock = (
@@ -259,9 +271,7 @@ export default function SearchAndRequest({
         </div>
       ) : results.length === 0 ? (
         <div className="max-w-xl mx-auto bg-white/80 rounded-2xl border p-6 text-center">
-          <p className="text-sm text-gray-700">
-            검색 결과가 없습니다. 원하시는 노래를 요청해 주세요.
-          </p>
+          <p className="text-sm text-gray-700">검색 결과가 없습니다. 원하시는 노래를 요청해 주세요.</p>
         </div>
       ) : (
         <ul className="mt-2 space-y-2">
@@ -281,6 +291,11 @@ export default function SearchAndRequest({
                       width={48}
                       height={48}
                       className="rounded-md flex-shrink-0"
+                      // 이미지 로드 실패 시 회색박스로 대체
+                      onError={(e) => {
+                        const el = e.currentTarget as HTMLImageElement
+                        el.style.display = "none"
+                      }}
                     />
                   ) : (
                     <div className="w-12 h-12 bg-gray-200 rounded-md flex-shrink-0" aria-hidden />
@@ -380,7 +395,7 @@ export default function SearchAndRequest({
             <DialogDescription>추가하고 싶은 노래의 제목과 가수를 입력해 주세요.</DialogDescription>
           </DialogHeader>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
             <Input
               placeholder="노래 제목"
               value={title}
@@ -414,9 +429,6 @@ export default function SearchAndRequest({
               <span>제목과 가수를 입력하면 현재 요청 수를 보여드려요.</span>
             )}
           </div>
-
-          {doneMsg && <div className="text-sm text-green-600 mt-2">{doneMsg}</div>}
-          {errMsg && <div className="text-sm text-red-600 mt-2">{errMsg}</div>}
 
           <DialogFooter className="mt-4">
             <Button variant="outline" onClick={() => setOpen(false)}>
