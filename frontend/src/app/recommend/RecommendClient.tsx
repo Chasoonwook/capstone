@@ -1,14 +1,23 @@
 "use client"
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react"
-import { useSearchParams } from "next/navigation"
+import { useSearchParams, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
-import { Play, Pause, SkipBack, SkipForward, ChevronDown, MoreVertical, Heart, ThumbsDown, ListMusic } from "lucide-react"
+import {
+  Play,
+  Pause,
+  SkipBack,
+  SkipForward,
+  ChevronDown,
+  MoreVertical,
+  Heart,
+  ThumbsDown,
+  ListMusic,
+  Upload, // ⬅ 업로드 아이콘
+} from "lucide-react"
 import { cn } from "@/lib/utils"
 import { API_BASE } from "@/lib/api"
-// 프로젝트에 있다면 사용, 없으면 아래 userNameFallback 로만 동작
-// import { useAuthUser } from "@/hooks/useAuthUser"
 
 type Track = {
   id: number
@@ -17,7 +26,7 @@ type Track = {
   album?: string
   coverUrl?: string
   audioUrl: string
-  duration?: number // 초 단위 (없으면 loadedmetadata로 보정)
+  duration?: number
 }
 
 const demoPlaylist: Track[] = [
@@ -47,7 +56,7 @@ const demoPlaylist: Track[] = [
   },
 ]
 
-// 추천 사진 URL 빌더 (photoId 쿼리 사용)
+// 추천에 사용된 사진(built from photoId)
 const buildPhotoSrc = (photoId?: string | null) => {
   if (!photoId) return null
   const id = encodeURIComponent(String(photoId))
@@ -55,12 +64,14 @@ const buildPhotoSrc = (photoId?: string | null) => {
 }
 
 export default function RecommendClient() {
+  const router = useRouter()
   const searchParams = useSearchParams()
   const photoId = searchParams.get("photoId") || searchParams.get("photoID") || searchParams.get("id")
   const analyzedPhotoUrl = useMemo(() => buildPhotoSrc(photoId), [photoId])
 
-  // const { user } = useAuthUser() // 있으면 사용
-  const userNameFallback = typeof window !== "undefined" ? localStorage.getItem("user_name") || localStorage.getItem("name") : null
+  // 사용자 이름: 프로젝트 훅이 있으면 대체(useAuthUser 등)
+  const userNameFallback =
+    typeof window !== "undefined" ? localStorage.getItem("user_name") || localStorage.getItem("name") : null
   const playlistTitle = `${(userNameFallback || "내")} 플레이리스트`
 
   const [playlist] = useState<Track[]>(demoPlaylist)
@@ -73,38 +84,41 @@ export default function RecommendClient() {
   const [dislikedTracks, setDislikedTracks] = useState<Set<number>>(new Set())
 
   const audioRef = useRef<HTMLAudioElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null) // ⬅ 업로드 트리거
   const currentTrack = playlist[currentTrackIndex]
 
   // 트랙 로드
-  const loadCurrentTrack = useCallback(async (autoplay = false) => {
-    const audio = audioRef.current
-    if (!audio) return
-    setCurrentTime(0)
-    audio.src = currentTrack.audioUrl
-    audio.load()
+  const loadCurrentTrack = useCallback(
+    async (autoplay = false) => {
+      const audio = audioRef.current
+      if (!audio) return
+      setCurrentTime(0)
+      audio.src = currentTrack.audioUrl
+      audio.load()
 
-    const onLoaded = () => {
-      const d = Math.floor(audio.duration || 0)
-      setDuration(currentTrack.duration ?? d)
-    }
-    audio.addEventListener("loadedmetadata", onLoaded, { once: true })
-
-    if (autoplay) {
-      try {
-        await audio.play()
-        setIsPlaying(true)
-      } catch {
-        setIsPlaying(false)
+      const onLoaded = () => {
+        const d = Math.floor(audio.duration || 0)
+        setDuration(currentTrack.duration ?? d)
       }
-    }
-  }, [currentTrack])
+      audio.addEventListener("loadedmetadata", onLoaded, { once: true })
 
-  // 트랙 변경 시 로드
+      if (autoplay) {
+        try {
+          await audio.play()
+          setIsPlaying(true)
+        } catch {
+          setIsPlaying(false)
+        }
+      }
+    },
+    [currentTrack],
+  )
+
   useEffect(() => {
     void loadCurrentTrack(isPlaying)
   }, [currentTrackIndex, loadCurrentTrack]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 진행도/종료 처리 (반복 버튼 제거에 따라 자연스러운 다음곡 재생만)
+  // 진행/종료
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
@@ -116,7 +130,7 @@ export default function RecommendClient() {
       audio.removeEventListener("timeupdate", onTime)
       audio.removeEventListener("ended", onEnded)
     }
-  }, [])
+  }, []) // 반복 기능 제거
 
   const togglePlay = async () => {
     const audio = audioRef.current
@@ -146,11 +160,8 @@ export default function RecommendClient() {
   }
 
   const handleNext = () => {
-    if (currentTrackIndex < playlist.length - 1) {
-      setCurrentTrackIndex(currentTrackIndex + 1)
-    } else {
-      setIsPlaying(false) // 마지막 곡에서 정지
-    }
+    if (currentTrackIndex < playlist.length - 1) setCurrentTrackIndex(currentTrackIndex + 1)
+    else setIsPlaying(false)
   }
 
   const handleSeek = (value: number[]) => {
@@ -162,15 +173,15 @@ export default function RecommendClient() {
   }
 
   const formatTime = (s: number) => {
-    const mins = Math.floor(s / 60)
-    const secs = Math.floor(s % 60)
-    return `${mins}:${secs.toString().padStart(2, "0")}`
+    const m = Math.floor(s / 60)
+    const t = Math.floor(s % 60)
+    return `${m}:${t.toString().padStart(2, "0")}`
   }
   const formatRemain = (s: number) => {
-    const remain = Math.max((duration || 0) - s, 0)
-    const mins = Math.floor(remain / 60)
-    const secs = Math.floor(remain % 60)
-    return `-${mins}:${secs.toString().padStart(2, "0")}`
+    const r = Math.max((duration || 0) - s, 0)
+    const m = Math.floor(r / 60)
+    const t = Math.floor(r % 60)
+    return `-${m}:${t.toString().padStart(2, "0")}`
   }
 
   const toggleLike = () => {
@@ -206,39 +217,47 @@ export default function RecommendClient() {
     setShowPlaylist(false)
   }
 
-  // 앨범 아트(분석 이미지 우선, 없으면 곡 cover)
+  // 업로드 클릭 → 파일선택
+  const handleUploadClick = () => fileInputRef.current?.click()
+  const handleFileChange: React.ChangeEventHandler<HTMLInputElement> = (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    // TODO: 여기서 업로드/분석 로직 연결
+    console.log("selected file:", file)
+  }
+
+  // 아트워크(분석 이미지 우선)
   const artUrl = analyzedPhotoUrl || currentTrack.coverUrl || "/placeholder.svg"
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-black via-neutral-900 to-black flex items-center justify-center p-4">
       <div className="w-full max-w-md mx-auto">
-        {/* 헤더 */}
-        <div className="flex items-center justify-between mb-6 text-white">
-          <div className="flex items-center gap-3">
-            <Button variant="ghost" size="icon" className="text-white hover:bg-white/10">
-              <ChevronDown className="w-6 h-6" />
-            </Button>
-            <div>
-              <p className="text-sm font-medium">{playlistTitle}</p>
-            </div>
+        {/* 헤더: 좌측 뒤로가기, 중앙 타이틀, 우측 더보기 */}
+        <div className="relative flex items-center mb-6 text-white">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="text-white hover:bg-white/10"
+            onClick={() => router.push("/")} // ⬅ 메인으로 이동
+            title="메인으로"
+          >
+            <ChevronDown className="w-6 h-6" />
+          </Button>
+
+          {/* 중앙 타이틀 */}
+          <div className="absolute left-1/2 -translate-x-1/2">
+            <p className="text-sm font-medium text-center">{playlistTitle}</p>
           </div>
-          <div className="flex gap-2">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setShowPlaylist(true)}
-              className="text-white hover:bg-white/10"
-              title="재생목록 열기"
-            >
-              <ListMusic className="w-6 h-6" />
-            </Button>
+
+          {/* 우측 더보기만 유지 (리스트 버튼은 하단으로 이동) */}
+          <div className="ml-auto">
             <Button variant="ghost" size="icon" className="text-white hover:bg-white/10">
               <MoreVertical className="w-6 h-6" />
             </Button>
           </div>
         </div>
 
-        {/* 아트워크 (분석 이미지) */}
+        {/* 아트워크 */}
         <div className="mb-8">
           <div
             className="relative w-full aspect-square rounded-lg overflow-hidden shadow-2xl mb-6 bg-neutral-800"
@@ -246,9 +265,7 @@ export default function RecommendClient() {
             role="button"
             aria-label="재생목록 열기"
           >
-            {/* Next <Image> 대신 <img> 사용 (도메인 설정 없이 바로 표시) */}
             <img src={artUrl} alt="analyzed" className="w-full h-full object-cover" />
-            {/* 상단 그라데이션 살짝 */}
             <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-black/10" />
           </div>
 
@@ -289,8 +306,19 @@ export default function RecommendClient() {
             </div>
           </div>
 
-          {/* 컨트롤: 이전 / 재생 / 다음 (반복 버튼 없음) */}
+          {/* 하단 컨트롤: 업로드 · 이전 · 재생 · 다음 · 재생목록 */}
           <div className="flex items-center justify-center gap-6 mb-6">
+            {/* 업로드(좌측) */}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handleUploadClick}
+              className="text-white hover:bg-white/10 w-12 h-12"
+              title="업로드"
+            >
+              <Upload className="w-6 h-6" />
+            </Button>
+
             <Button variant="ghost" size="icon" onClick={handlePrevious} className="text-white hover:bg-white/10 w-12 h-12">
               <SkipBack className="w-7 h-7 fill-white" />
             </Button>
@@ -299,6 +327,7 @@ export default function RecommendClient() {
               size="lg"
               onClick={togglePlay}
               className="w-16 h-16 rounded-full bg-white hover:bg-white/90 text-black shadow-lg"
+              title={isPlaying ? "일시정지" : "재생"}
             >
               {isPlaying ? <Pause className="w-8 h-8 fill-black" /> : <Play className="w-8 h-8 ml-1 fill-black" />}
             </Button>
@@ -306,8 +335,22 @@ export default function RecommendClient() {
             <Button variant="ghost" size="icon" onClick={handleNext} className="text-white hover:bg-white/10 w-12 h-12">
               <SkipForward className="w-7 h-7 fill-white" />
             </Button>
+
+            {/* 재생목록(우측) */}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setShowPlaylist(true)}
+              className="text-white hover:bg-white/10 w-12 h-12"
+              title="재생목록"
+            >
+              <ListMusic className="w-6 h-6" />
+            </Button>
           </div>
         </div>
+
+        {/* 숨겨진 파일 입력 */}
+        <input ref={fileInputRef} type="file" accept="image/*" onChange={handleFileChange} className="hidden" />
 
         <audio ref={audioRef} preload="metadata" />
       </div>
