@@ -1,7 +1,7 @@
 "use client"
 
 import { Suspense, useEffect, useMemo, useState } from "react"
-import { useRouter, useSearchParams } from "next/navigation"
+import { useRouter } from "next/navigation"
 
 import PhotoUpload from "@/components/upload/PhotoUpload"
 import MoodBadges from "@/components/mood/MoodBadges"
@@ -19,7 +19,6 @@ import { API_BASE } from "@/lib/api"
 export default function Page() {
   const { user, isLoggedIn, logout } = useAuthUser()
   const router = useRouter()
-  const searchParams = useSearchParams()
 
   const { musics, loading: musicsLoading, error: musicsError } = useMusics()
   const { history, loading: historyLoading, error: historyError } = useHistory(isLoggedIn)
@@ -46,11 +45,10 @@ export default function Page() {
   const [isSpotifyConnected, setIsSpotifyConnected] = useState(false)
   const [showSpotifyModal, setShowSpotifyModal] = useState(false)
 
-  // 🔔 추천 화면에서 내려왔는지(내비 표시 신호)
-  const fromPlayerQuery = searchParams.get("from") === "player"
+  // ✅ 추천 화면에서 내려왔을 때만 하단 내비를 보이게 하는 플래그
   const [showNav, setShowNav] = useState(false)
 
-  // 중앙 '플레이어' 버튼: 최근 플레이어 경로로 복귀
+  // ▶ 중앙 '플레이어' 버튼: 최근 플레이어 경로로 복귀
   const openPlayer = () => {
     const last =
       (typeof window !== "undefined" &&
@@ -59,19 +57,19 @@ export default function Page() {
     router.push(last)
   }
 
-  // 추천에서 내려왔을 때만 하단 내비 표시, 그리고 URL에서 from 제거
+  // ✅ useSearchParams 대신 client-side에서만 URL 쿼리 확인
   useEffect(() => {
-    if (fromPlayerQuery) {
+    if (typeof window === "undefined") return
+    const url = new URL(window.location.href)
+    if (url.searchParams.get("from") === "player") {
       setShowNav(true)
-      if (typeof window !== "undefined") {
-        const url = new URL(window.location.href)
-        url.searchParams.delete("from")
-        window.history.replaceState({}, "", url.toString())
-      }
+      // URL 정리: from 제거
+      url.searchParams.delete("from")
+      window.history.replaceState({}, "", url.toString())
     } else {
       setShowNav(false)
     }
-  }, [fromPlayerQuery])
+  }, [])
 
   useEffect(() => {
     let mounted = true
@@ -175,7 +173,7 @@ export default function Page() {
           </section>
         </main>
 
-        {/* 기존 떠있는 업로드 버튼은 내비와 겹치지 않도록 showNav=false일 때만 표시 */}
+        {/* 떠있는 업로드 버튼: 내비 보일 때는 숨김 */}
         {!showNav && (
           <button
             onClick={() => setShowUploadModal(true)}

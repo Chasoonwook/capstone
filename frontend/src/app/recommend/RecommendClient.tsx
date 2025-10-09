@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react"
-import { useSearchParams, useRouter } from "next/navigation"
+import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 import {
@@ -49,11 +49,16 @@ const normalizeTrack = (raw: any, idx: number): Track | null => {
 
 export default function RecommendClient() {
   const router = useRouter()
-  const searchParams = useSearchParams()
-  const photoId =
-    searchParams.get("photoId") ||
-    searchParams.get("photoID") ||
-    searchParams.get("id")
+
+  // ✅ useSearchParams 대신 window.location에서 photoId 읽기
+  const [photoId, setPhotoId] = useState<string | null>(null)
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const sp = new URLSearchParams(window.location.search)
+    const id = sp.get("photoId") || sp.get("photoID") || sp.get("id")
+    setPhotoId(id)
+  }, [])
+
   const analyzedPhotoUrl = useMemo(() => buildPhotoSrc(photoId), [photoId])
 
   // 사용자 이름(훅이 있다면 교체)
@@ -94,10 +99,11 @@ export default function RecommendClient() {
       setLoading(true)
       setError(null)
       try {
+        const pid = photoId || ""
         const candidates = [
-          `${API_BASE}/api/recommendations?photo_id=${encodeURIComponent(String(photoId || ""))}`,
-          `${API_BASE}/api/recommendations/${encodeURIComponent(String(photoId || ""))}`,
-          `${API_BASE}/api/recommend?photoId=${encodeURIComponent(String(photoId || ""))}`,
+          `${API_BASE}/api/recommendations?photo_id=${encodeURIComponent(pid)}`,
+          `${API_BASE}/api/recommendations/${encodeURIComponent(pid)}`,
+          `${API_BASE}/api/recommend?photoId=${encodeURIComponent(pid)}`,
         ]
         let data: any = null
         for (const url of candidates) {
@@ -144,7 +150,10 @@ export default function RecommendClient() {
         setLoading(false)
       }
     }
-    void fetchPlaylist()
+    // photoId가 파싱된 뒤에 호출
+    if (photoId !== null) {
+      void fetchPlaylist()
+    }
   }, [photoId])
 
   // 트랙 로드
@@ -305,7 +314,7 @@ export default function RecommendClient() {
             <ChevronDown className="w-6 h-6" />
           </Button>
 
-          <div className="absolute left-1/2 -translate-x-1/2">
+        <div className="absolute left-1/2 -translate-x-1/2">
             <p className="text-sm font-medium text-center">{playlistTitle}</p>
           </div>
 
