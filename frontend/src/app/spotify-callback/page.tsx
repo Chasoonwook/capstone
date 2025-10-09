@@ -1,21 +1,20 @@
 "use client";
 
-import { useEffect } from "react";
+import { Suspense, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense } from "react";
 
-// 프리렌더하지 말고 동적으로 처리
-export const dynamic = "force-dynamic";
+export const dynamic = "force-dynamic"; // 프리렌더 방지
 
-function CallbackInner() {
+function Inner() {
   const router = useRouter();
   const sp = useSearchParams();
 
   useEffect(() => {
-    // 백엔드가 ?ok=1/0 으로 결과만 넘김. 쿠키는 이미 설정됨.
-    const ok = sp.get("ok");
-    // 필요하면 ok 값으로 토스트 띄우고…
-    router.replace("/recommend"); // 이동 경로는 원하는 곳으로
+    // 서버에서 전달된 목적지(r)로 복귀. 없으면 "/"
+    const dest = sp.get("r") || "/"; 
+    // 안전장치: 외부 URL 방지(반드시 슬래시로 시작하는 내부 경로만)
+    const safe = dest.startsWith("/") && !dest.startsWith("//") ? dest : "/";
+    router.replace(safe);
   }, [router, sp]);
 
   return (
@@ -27,12 +26,14 @@ function CallbackInner() {
 
 export default function SpotifyCallbackPage() {
   return (
-    <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center">
-        연동 정보를 읽는 중…
-      </div>
-    }>
-      <CallbackInner />
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center">
+          연동 정보를 확인하는 중…
+        </div>
+      }
+    >
+      <Inner />
     </Suspense>
   );
 }

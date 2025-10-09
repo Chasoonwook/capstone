@@ -165,11 +165,12 @@ export default function UserHeader({
   // ─────────────────────────────────────────────────────────
   const handleSpotifyConnect = () => {
     setShowSpotifyModal(false);
-    const returnTo =
-      typeof window !== "undefined"
-        ? `${window.location.pathname}${window.location.search || ""}`
-        : "/";
+    if (typeof window === "undefined") return;
+
+    const { pathname, search, hash } = window.location;
+    const returnTo = `${pathname}${search || ""}${hash || ""}`; // 해시까지 보존
     const qs = new URLSearchParams({ return: returnTo }).toString();
+    
     // prefer /login (cookie 버전), alias로 /authorize도 동작하도록 서버 구현됨
     window.location.href = `${API_BASE}/api/spotify/login?${qs}`;
   };
