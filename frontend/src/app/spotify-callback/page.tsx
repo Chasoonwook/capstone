@@ -1,27 +1,39 @@
-// src/app/spotify-callback/page.tsx
 "use client";
 
 import { useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 
-// 필요하면 유지해도 무방
+// 프리렌더하지 말고 동적으로 처리
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
-export default function SpotifyCallbackPage() {
+function CallbackInner() {
   const router = useRouter();
   const sp = useSearchParams();
 
   useEffect(() => {
-    // 백엔드에서 ?ok=1/0 로 결과만 알려줌
+    // 백엔드가 ?ok=1/0 으로 결과만 넘김. 쿠키는 이미 설정됨.
     const ok = sp.get("ok");
-    // 성공/실패 여부에 따라 토스트를 띄우고 싶다면 여기에 처리
-    // 쿠키는 이미 백엔드에서 설정됨
-    router.replace("/recommend"); // 원하는 이동 경로로 변경
+    // 필요하면 ok 값으로 토스트 띄우고…
+    router.replace("/recommend"); // 이동 경로는 원하는 곳으로
   }, [router, sp]);
 
   return (
     <div className="min-h-screen flex items-center justify-center">
       스포티파이 연동을 마무리하는 중입니다…
     </div>
+  );
+}
+
+export default function SpotifyCallbackPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center">
+        연동 정보를 읽는 중…
+      </div>
+    }>
+      <CallbackInner />
+    </Suspense>
   );
 }
