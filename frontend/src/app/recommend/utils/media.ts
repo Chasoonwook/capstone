@@ -1,12 +1,15 @@
-// src/app/recommend/utils/media.ts
 import { API_BASE } from "@/lib/api";
 
-// 트랙/커버/미리듣기 찾기
+/** Spotify 검색: 제목+아티스트로 uri/preview/cover 추출 */
 export async function resolvePreviewAndCover(title: string, artist: string) {
   const q = `${title} ${artist}`.trim();
   const url = `${API_BASE}/api/spotify/search?q=${encodeURIComponent(q)}&type=track&limit=1`;
 
-  const r = await fetch(url, { method: "GET", credentials: "include", cache: "no-store" });
+  const r = await fetch(url, {
+    method: "GET",
+    credentials: "include", // 쿠키 동봉 필수
+    cache: "no-store",
+  });
   if (!r.ok) throw new Error("spotify search failed");
 
   const data = await r.json();
@@ -23,7 +26,7 @@ export async function resolvePreviewAndCover(title: string, artist: string) {
   return { uri, preview, cover };
 }
 
-// 헬퍼: Spotify URI 통일
+/** 다양한 입력을 spotify:track:ID 형태로 정규화 */
 export function toSpotifyUri(v: string | null | undefined): string | null {
   if (!v) return null;
   if (v.startsWith("spotify:track:")) return v;
@@ -33,4 +36,27 @@ export function toSpotifyUri(v: string | null | undefined): string | null {
   }
   if (/^[0-9A-Za-z]{22}$/.test(v)) return `spotify:track:${v}`;
   return null;
+}
+
+/** "mm:ss" 혹은 number(초)를 안전하게 초단위 number로 변환 */
+export function parseDurationToSec(input: string | number | null | undefined): number {
+  if (typeof input === "number" && Number.isFinite(input)) return Math.max(0, Math.floor(input));
+  const s = String(input ?? "").trim();
+  // "m:ss" 또는 "mm:ss"
+  const m = /^(\d{1,2}):([0-5]\d)$/.exec(s);
+  if (m) {
+    const mm = parseInt(m[1], 10);
+    const ss = parseInt(m[2], 10);
+    return mm * 60 + ss;
+  }
+  // 실패 시 기본 180초(3분)
+  return 180;
+}
+
+/** 초 → "m:ss" 포맷 */
+export function formatTime(sec: number): string {
+  const s = Math.max(0, Math.floor(sec));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}:${String(r).padStart(2, "0")}`;
 }
