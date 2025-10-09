@@ -5,7 +5,7 @@ const fs = require("fs");
 const express = require("express");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
-const axios = require("axios"); // ★ 추가
+const axios = require("axios"); // ★ MOD: SDK 토큰용 refresh 호출에 사용
 require("dotenv").config({ debug: true });
 const pool = require("./db");
 
@@ -31,16 +31,37 @@ const defaultAllow = new Set([
   "http://localhost:3000",
   "http://127.0.0.1:3000",
   "https://capstone-front-tau.vercel.app",
+  "https://capstone-app-back.onrender.com", // ★ MOD: 백엔드 자신 허용
 ]);
+
+// ★ MOD: Render가 제공하는 자기 자신의 퍼블릭 URL/호스트도 자동 허용
+const selfOrigin =
+  process.env.RENDER_EXTERNAL_URL ||
+  (process.env.RENDER_EXTERNAL_HOSTNAME
+    ? `https://${process.env.RENDER_EXTERNAL_HOSTNAME}`
+    : null);
+if (selfOrigin) defaultAllow.add(trim(selfOrigin));
 
 function isAllowedOrigin(origin) {
   if (!origin) return true; // 서버-서버 호출 등
   try {
     const url = new URL(origin);
     const norm = trim(origin);
-    if (envAllow.length) return envAllow.includes(norm);
+
+    // 환경변수로 지정된 목록이 있으면 우선적으로 허용
+    if (envAllow.length) {
+      if (envAllow.includes(norm)) return true;
+      // ★ MOD: 인프라 기본 호스트는 방해하지 않도록 예외 허용
+      if (url.hostname.endsWith(".vercel.app")) return true;
+      if (url.hostname.endsWith(".onrender.com")) return true;
+      if (url.hostname === "localhost" || url.hostname === "127.0.0.1") return true;
+      return false;
+    }
+
+    // 기본 허용 목록
     if (defaultAllow.has(norm)) return true;
-    if (url.hostname.endsWith(".vercel.app")) return true;
+    if (url.hostname.endsWith(".vercel.app")) return true;   // ★ MOD
+    if (url.hostname.endsWith(".onrender.com")) return true; // ★ MOD
     if (url.hostname === "localhost" || url.hostname === "127.0.0.1") return true;
   } catch {}
   return false;
@@ -95,7 +116,9 @@ try {
   } else {
     const spotifyRoutes = require("./routes/spotify");
     if (typeof spotifyRoutes !== "function") {
-      throw new Error("routes/spotify export가 함수가 아닙니다 (module.exports = router 필요)");
+      throw new Error(
+        "routes/spotify export가 함수가 아닙니다 (module.exports = router 필요)"
+      );
     }
     app.use(
       "/api/spotify",
@@ -109,12 +132,15 @@ try {
     console.log("[router] mounted: /api/spotify (routes/spotify.js)");
   }
 } catch (e) {
-  console.error("[router] FAILED to mount /api/spotify:", e && (e.stack || e.message || e));
+  console.error(
+    "[router] FAILED to mount /api/spotify:",
+    (e && (e.stack || e.message)) || e
+  );
 }
 
 /* ======================================================================= */
-/*  ★ SDK용 토큰 엔드포인트 (쿠키→유효 access_token 반환)                    */
-/*     - routes/spotify.js에 같은 라우트가 있다면 둘 중 하나만 사용하세요.   */
+/* ★ MOD: SDK용 토큰 엔드포인트 (쿠키→유효 access_token 반환)                */
+/*     - routes/spotify.js에도 /token이 있다면, 한쪽만 남겨 사용하세요.      */
 /* ======================================================================= */
 const CK_ACCESS = "sp_access";
 const CK_REFRESH = "sp_refresh";
@@ -129,9 +155,11 @@ async function refreshAccessToken(refreshToken) {
       client_id: String(SPOTIFY_CLIENT_ID),
       client_secret: String(SPOTIFY_CLIENT_SECRET),
     });
-    const resp = await axios.post("https://accounts.spotify.com/api/token", body.toString(), {
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    });
+    const resp = await axios.post(
+      "https://accounts.spotify.com/api/token",
+      body.toString(),
+      { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+    );
     return resp.data; // { access_token, expires_in, ... }
   } catch (e) {
     console.error("[spotify] refreshAccessToken error:", e?.response?.data || e.message);
@@ -139,19 +167,17 @@ async function refreshAccessToken(refreshToken) {
   }
 }
 
-// SDK에서 짧게 쓰기 위한 access_token 제공
 app.get("/api/spotify/token", async (req, res) => {
   try {
     let access = req.cookies?.[CK_ACCESS] || null;
     const refresh = req.cookies?.[CK_REFRESH] || null;
 
-    // 현재 access 유효성 검사 (간단히 /v1/me 호출)
     const tryMe = async (token) =>
       axios.get("https://api.spotify.com/v1/me", {
         headers: { Authorization: `Bearer ${token}` },
       });
 
-    let expiresIn = 300; // 기본 TTL 힌트(메모리 캐시용)
+    let expiresIn = 300; // 기본 TTL 힌트(클라이언트 메모리 캐시용)
 
     if (access) {
       try {
@@ -159,7 +185,7 @@ app.get("/api/spotify/token", async (req, res) => {
         res.set("Cache-Control", "no-store");
         return res.json({ access_token: access, expires_in: expiresIn });
       } catch {
-        // access 만료 → 계속 진행해 refresh 시도
+        // access 만료 → 아래에서 refresh 시도
       }
     }
 
@@ -172,9 +198,10 @@ app.get("/api/spotify/token", async (req, res) => {
       return res.status(401).json({ error: "refresh_failed" });
     }
 
-    // 새 access를 쿠키로 갱신
     const newAccess = refreshed.access_token;
     const newTtl = Number(refreshed.expires_in || 300);
+
+    // 새 access 쿠키 갱신
     res.cookie(CK_ACCESS, newAccess, {
       httpOnly: true,
       secure: true,
