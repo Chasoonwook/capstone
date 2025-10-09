@@ -1,794 +1,429 @@
-"use client";
-
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
-import { X, Play, Pause, SkipBack, SkipForward, ThumbsUp, ThumbsDown, Music, ChevronUp } from "lucide-react";
-import { API_BASE } from "@/lib/api";
-import { useSpotifyPlayer } from "@/hooks/useSpotifyPlayer"; // state, seek 도 리턴한다고 가정
-import { Button } from "@/components/ui/button";
-import Image from "next/image";
-
-import { parseDurationToSec, toSpotifyUri, resolvePreviewAndCover, formatTime } from "./utils/media";
-
-import type { Song, BackendSong, ByPhotoResponse, SelectedFrom } from "./types";
-import { buildAuthHeaderFromLocalStorage, fetchMe } from "./hooks/useAuthMe";
-
-/** ===== 재생 중복 방지 쿨다운(밀리초) ===== */
-const PLAY_COOLDOWN_MS = 2500;
-
-export default function RecommendClient() {
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const photoId = searchParams.get("photoId");
-
-  const [showPlaylist, setShowPlaylist] = useState(false);
-
-  // Web Playback SDK
-  const { ready, state, activate, transferToThisDevice, playUris, resume, pause, seek } = useSpotifyPlayer();
-
-  // Spotify 연동 여부
-  const [spotifyLinked, setSpotifyLinked] = useState(false);
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const r = await fetch(`${API_BASE}/api/spotify/me`, { credentials: "include" });
-        if (!mounted) return;
-        setSpotifyLinked(r.ok);
-      } catch {
-        if (!mounted) return;
-        setSpotifyLinked(false);
-      }
-    })();
-    return () => { mounted = false; };
-  }, []);
-
-  // ===== 미리듣기 오디오 =====
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const playReqIdRef = useRef(0);
-  const previewTimeoutRef = useRef<number | null>(null);
-
-  const clearPreviewTimeout = useCallback(() => {
-    if (previewTimeoutRef.current !== null) {
-      clearTimeout(previewTimeoutRef.current);
-      previewTimeoutRef.current = null;
-    }
-  }, []);
-
-  const killPreview = useCallback(() => {
-    clearPreviewTimeout();
-    const a = audioRef.current;
-    if (!a) return;
-    try { a.pause(); } catch {}
-    try {
-      a.removeAttribute("src");
-      a.src = "";
-      a.load();
-    } catch {}
-  }, [clearPreviewTimeout]);
-
-  const [source, setSource] = useState<"preview" | "spotify" | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(180);
-  const isPlayingRef = useRef(isPlaying);
-  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
-
-  // UI/State
-  const [uploadedImage, setUploadedImage] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-
-  // Data
-  const [recommendations, setRecommendations] = useState<Song[]>([]);
-  const [currentSong, setCurrentSong] = useState<Song | null>(null);
-  const [contextMainMood, setContextMainMood] = useState<string | null>(null);
-  const [contextSubMood, setContextSubMood] = useState<string | null>(null);
-  const [selectedSongId, setSelectedSongId] = useState<string | number | null>(null);
-
-  // Init audio
-  useEffect(() => {
-    if (!audioRef.current) audioRef.current = new Audio();
-    const a = audioRef.current!;
-    a.crossOrigin = "anonymous";
-    a.preload = "none";
-    const onTime = () => setCurrentTime(Math.floor(a.currentTime));
-    const onEnd = () => setIsPlaying(false);
-    a.addEventListener("timeupdate", onTime);
-    a.addEventListener("ended", onEnd);
-    return () => {
-      a.removeEventListener("timeupdate", onTime);
-      a.removeEventListener("ended", onEnd);
-      try { a.pause(); } catch {}
-    };
-  }, []);
-
-  const safePlayPreview = useCallback(async (src: string) => {
-    const a = audioRef.current!;
-    const myId = ++playReqIdRef.current;
-    try { a.pause(); } catch {}
-    a.src = src;
-    a.currentTime = 0;
-    await new Promise<void>((res) => {
-      const onCanPlay = () => { a.removeEventListener("canplay", onCanPlay); res(); };
-      a.addEventListener("canplay", onCanPlay);
-      a.load();
-    });
-    if (myId !== playReqIdRef.current) return;
-    try { await a.play(); } catch {}
-  }, []);
-
-  // 2초 지연 미리듣기 — 연동 안 된 경우만 사용
-  const schedulePreview = useCallback((src: string) => {
-    clearPreviewTimeout();
-    previewTimeoutRef.current = window.setTimeout(async () => {
-      try {
-        await safePlayPreview(src);
-        setSource("preview");
-        setIsPlaying(true);
-      } catch {}
-    }, 2000);
-  }, [clearPreviewTimeout, safePlayPreview]);
-
-  // Load image
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      if (!photoId) { setUploadedImage(null); return; }
-      const candidates = [`${API_BASE}/api/photos/${photoId}/binary`, `${API_BASE}/photos/${photoId}/binary`];
-      let url: string | null = null;
-      for (const u of candidates) {
-        try {
-          const r = await fetch(u, { method: "GET" });
-          if (r.ok) { url = u; break; }
-        } catch {}
-      }
-      if (mounted) setUploadedImage(url ?? "/placeholder.svg");
-    })();
-    return () => { mounted = false; };
-  }, [photoId]);
-
-  // ===== 추천 로드 (현재 곡 유지) =====
-  const fetchRecommendations = useCallback(
-    async (signal?: AbortSignal) => {
-      if (!photoId) {
-        setRecommendations([]); setCurrentSong(null); setContextMainMood(null); setContextSubMood(null); return;
-      }
-      try {
-        const r = await fetch(`${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(photoId)}?debug=1`, {
-          signal, credentials: "include",
-        });
-        if (!r.ok) { setRecommendations([]); setCurrentSong(null); setContextMainMood(null); setContextSubMood(null); return; }
-        const raw = await r.json();
-        const obj = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
-        const data: ByPhotoResponse = obj
-          ? {
-              main_mood: obj["main_mood"] as string | null,
-              sub_mood: obj["sub_mood"] as string | null,
-              main_songs: toBackendSongArray(obj["main_songs"]),
-              sub_songs: toBackendSongArray(obj["sub_songs"]),
-              preferred_songs: toBackendSongArray(obj["preferred_songs"]),
-            }
-          : { main_songs: [], sub_songs: [], preferred_songs: [] };
-
-        setContextMainMood(data.main_mood ?? null);
-        setContextSubMood(data.sub_mood ?? null);
-
-        const mark = (arr: BackendSong[], tag: SelectedFrom) =>
-          (arr ?? []).map((s) => ({ ...s, __selected_from__: tag as SelectedFrom }));
-
-        const merged: (BackendSong & { __selected_from__?: SelectedFrom })[] = [
-          ...mark(data.main_songs ?? [], "main"),
-          ...mark(data.preferred_songs ?? [], "preferred"),
-          ...mark(data.sub_songs ?? [], "sub"),
-        ];
-
-        const seen = new Set<string | number>();
-        const dedup: (BackendSong & { __selected_from__?: SelectedFrom })[] = [];
-        merged.forEach((s, i) => {
-          const id = (s.music_id ?? s.id ?? i) as string | number;
-          if (!seen.has(id)) { seen.add(id); dedup.push(s); }
-        });
-
-        const mapped: Song[] = await Promise.all(
-          dedup.map(async (it, idx) => {
-            const sec = typeof it.duration === "number"
-              ? it.duration
-              : typeof it.duration_sec === "number"
-                ? it.duration_sec
-                : 180;
-            const mm = Math.floor(sec / 60);
-            const ss = String(sec % 60).padStart(2, "0");
-
-            let image: string | null = null;
-            let uri = toSpotifyUri((it as any).spotify_uri ?? null);
-            let preview = (it as any).preview_url ?? null;
-
-            try {
-              if (!uri || !preview || !image) {
-                const info = await resolvePreviewAndCover(it.title as any, it.artist as any);
-                uri = uri ?? toSpotifyUri(info.uri);
-                preview = preview ?? info.preview;
-                image = image ?? info.cover;
-              }
-            } catch {}
-
-            return {
-              id: (it as any).music_id ?? (it as any).id ?? idx,
-              title: (it as any).title ?? "Unknown Title",
-              artist: (it as any).artist ?? "Unknown Artist",
-              genre: (it as any).genre ?? (it as any).label ?? "UNKNOWN",
-              duration: `${mm}:${ss}`,
-              image,
-              spotify_uri: uri,
-              preview_url: preview,
-              selected_from: it.__selected_from__ ?? null,
-            };
-          })
-        );
-
-        setRecommendations(mapped);
-
-        // === 현재 곡 유지 (id 또는 URI로 매칭)
-        setCurrentSong(prev => {
-          if (!prev) return mapped[0] ?? null;
-          const byId  = mapped.find(s => String(s.id) === String(prev.id));
-          const byUri = mapped.find(s => toSpotifyUri(s.spotify_uri ?? null) === toSpotifyUri(prev.spotify_uri ?? null));
-          const keep = byId ?? byUri;
-          return keep ? { ...prev, ...keep } : (mapped[0] ?? null);
-        });
-
-        const next = mapped[0] ?? null;
-        const d = parseDurationToSec((next ? next.duration : (currentSong?.duration ?? "3:00")));
-        setDuration(d);
-        if (!next && !currentSong) {
-          setCurrentTime(0);
-          setIsPlaying(false);
-          setSource(null);
-        }
-      } catch {
-        setRecommendations([]); setCurrentSong(null); setContextMainMood(null); setContextSubMood(null);
-      }
-    },
-    [photoId, currentSong?.duration]
-  );
-
-  useEffect(() => {
-    const ctrl = new AbortController();
-    fetchRecommendations(ctrl.signal);
-    return () => ctrl.abort();
-  }, [fetchRecommendations]);
-
-  const normalizedCurrentUri = useMemo(
-    () => toSpotifyUri(currentSong?.spotify_uri ?? null),
-    [currentSong?.spotify_uri],
-  );
-
-  const preferSpotify = spotifyLinked && ready;
-
-  // ===== Spotify 상태 → 진행바 동기화 (전체듣기일 때만)
-  useEffect(() => {
-    if (source !== "spotify") return;
-    const posSec = Math.floor((state.position || 0) / 1000);
-    const durSec =
-      state.duration ? Math.floor(state.duration / 1000)
-                     : parseDurationToSec(currentSong?.duration ?? "3:00");
-    setCurrentTime(posSec);
-    setDuration(durSec);
-    setIsPlaying(!state.paused);
-  }, [source, state.position, state.duration, state.paused, currentSong?.duration]);
-
-  // ===== Spotify 실제 트랙 → UI 동기화 (전체듣기일 때만)
-  useEffect(() => {
-    if (source !== "spotify") return;
-    if (!state.trackUri) return;
-    const hit = recommendations.find(s => toSpotifyUri(s.spotify_uri ?? null) === toSpotifyUri(state.trackUri));
-    if (hit && String(hit.id) !== String(currentSong?.id)) {
-      setCurrentSong(hit);
-      setSelectedSongId(hit.id);
-      setDuration(parseDurationToSec(hit.duration));
-    }
-  }, [source, state.trackUri, recommendations, currentSong?.id]);
-
-  /** ====== 중복 재생 방지 컨트롤러 ====== */
-  const lastPlayKeyRef = useRef<string | null>(null); // `${photoId}|${uri}`
-  const playCooldownRef = useRef(0);
-  const playInFlightRef = useRef<Promise<void> | null>(null);
-
-  const dedupPlaySpotify = useCallback(async (uri: string) => {
-    const key = `${photoId || ""}|${uri}`;
-    const now = Date.now();
-
-    // 같은 키에 대해 쿨다운 내면 무시
-    if (lastPlayKeyRef.current === key && now - playCooldownRef.current < PLAY_COOLDOWN_MS) return;
-    // 진행 중이면 추가 호출 금지
-    if (playInFlightRef.current) return;
-
-    playInFlightRef.current = (async () => {
-      await activate();
-      await transferToThisDevice();
-      await playUris([uri]);
-    })()
-      .catch(() => {})
-      .finally(() => {
-        lastPlayKeyRef.current = key;
-        playCooldownRef.current = Date.now();
-        playInFlightRef.current = null;
-      });
-  }, [activate, transferToThisDevice, playUris, photoId]);
-
-  // ===== 자동 재생: “연동되면 Spotify만”, “아니면 미리듣기만(2초 지연)”
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (!currentSong) return;
-
-      // 항상 이전 미리듣기 예약 취소
-      clearPreviewTimeout();
-
-      if (preferSpotify) {
-        // 미리듣기 금지
-        killPreview();
-
-        const uri = normalizedCurrentUri;
-        if (!uri) {
-          // URI가 없으면 아무것도 하지 않음 (자동 전환 금지)
-          setSource(null);
-          setIsPlaying(false);
-          return;
-        }
-
-        setSource("spotify");
-        await dedupPlaySpotify(uri);
-        if (cancelled) return;
-        // isPlaying 은 state.paused 로 동기화됨
-        return;
-      }
-
-      // ===== 연동 안 됨 → 미리듣기만 (2초 지연)
-      killPreview();
-      let preview = currentSong.preview_url ?? null;
-      let cover = currentSong.image ?? null;
-
-      if (!preview || !cover) {
-        try {
-          const info = await resolvePreviewAndCover(currentSong.title, currentSong.artist);
-          preview = preview ?? info.preview;
-          cover = cover ?? info.cover;
-
-          setRecommendations(prev => prev.map(s =>
-            s.id === currentSong.id ? { ...s, preview_url: preview ?? s.preview_url, image: cover ?? s.image } : s
-          ));
-          setCurrentSong(prev => prev ? { ...prev, preview_url: preview ?? prev.preview_url, image: cover ?? prev.image } : prev);
-        } catch {}
-      }
-
-      if (preview) schedulePreview(preview);
-      else { setSource(null); setIsPlaying(false); }
-    })();
-    return () => { cancelled = true; };
-  // 의존성은 “URI 문자열”과 preferSpotify, photoId만 (객체 변동으로 인한 재실행 방지)
-  }, [preferSpotify, normalizedCurrentUri, photoId, currentSong?.id, clearPreviewTimeout, killPreview, schedulePreview, dedupPlaySpotify]);
-
-  // ===== 트랙 종료시 자동 다음 곡 (전체듣기일 때만)
-  const lastTrackUriRef = useRef<string | null>(null);
-  const autoNextLockRef = useRef(false);
-  useEffect(() => {
-    if (source !== "spotify") { autoNextLockRef.current = false; lastTrackUriRef.current = null; return; }
-
-    if (state.trackUri && state.trackUri !== lastTrackUriRef.current) {
-      lastTrackUriRef.current = state.trackUri;
-      autoNextLockRef.current = false;
-    }
-
-    if (!state.duration) return;
-    const timeLeft = state.duration - state.position; // ms
-    if (timeLeft <= 800 && !autoNextLockRef.current) {
-      autoNextLockRef.current = true;
-      void playNextSong();
-    }
-  }, [source, state.position, state.duration, state.trackUri]); // eslint-disable-line
-
-  // ===== 단일 곡 재생 (버튼/리스트 클릭 시)
-  const playSong = async (song: Song) => {
-    setCurrentSong(song);
-    setSelectedSongId(song.id);
-    setCurrentTime(0);
-    setDuration(parseDurationToSec(song.duration));
-    clearPreviewTimeout();
-
-    const songUri = toSpotifyUri(song.spotify_uri ?? null);
-
-    if (preferSpotify) {
-      killPreview();
-      if (songUri) {
-        setSource("spotify");
-        await dedupPlaySpotify(songUri);
-        return;
-      } else {
-        // URI 없으면 자동 전환 금지(미리듣기 안 틀음)
-        setSource(null);
-        setIsPlaying(false);
-      }
-      return;
-    }
-
-    // ===== 연동 안 됨 → 미리듣기만 (2초 지연)
-    killPreview();
-    let preview = song.preview_url ?? null;
-    let cover = song.image ?? null;
-
-    if (!preview || !cover) {
-      const info = await resolvePreviewAndCover(song.title, song.artist);
-      preview = preview ?? info.preview;
-      cover = cover ?? info.cover;
-
-      setRecommendations((prev) =>
-        prev.map((s) =>
-          s.id === song.id ? { ...s, preview_url: preview ?? s.preview_url, image: cover ?? s.image } : s
-        ),
-      );
-      setCurrentSong((prev) => (prev ? { ...prev, preview_url: preview ?? prev.preview_url, image: cover ?? prev.image } : prev));
-    }
-
-    if (preview) schedulePreview(preview);
-    else {
-      alert("이 곡은 미리듣기 음원이 없습니다. 전체 듣기는 상단 사용자 메뉴에서 Spotify 연동 후 이용하세요.");
-      setIsPlaying(false);
-    }
-  };
-
-  const togglePlay = async () => {
-    if (!currentSong) {
-      if (recommendations.length === 0) return;
-      await playSong(recommendations[0]);
-      return;
-    }
-    if (source === "spotify") {
-      try {
-        if (isPlaying) { await pause(); setIsPlaying(false); }
-        else { await resume(); setIsPlaying(true); }
-      } catch {}
-      return;
-    }
-    // 미리듣기 재생/정지
-    clearPreviewTimeout();
-    const a = audioRef.current!;
-    try {
-      if (isPlaying) { a.pause(); setIsPlaying(false); }
-      else { await a.play(); setIsPlaying(true); }
-    } catch {}
-  };
-
-  const playNextSong = async () => {
-    if (busy || recommendations.length === 0) return;
-    setBusy(true);
-    try {
-      const curIdx = currentSong ? recommendations.findIndex((s) => String(s.id) === String(currentSong.id)) : -1;
-      const nextIdx = curIdx < 0 ? 0 : (curIdx + 1) % recommendations.length;
-      const nextSong = recommendations[nextIdx];
-      await playSong(nextSong);
-    } finally { setBusy(false); }
-  };
-
-  const onClickSong = async (song: Song) => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      await playSong(song);
-      setShowPlaylist(false);
-    } finally { setBusy(false); }
-  };
-
-  const playPreviousSong = async () => {
-    if (busy || recommendations.length === 0) return;
-    setBusy(true);
-    try {
-      const curIdx = currentSong ? recommendations.findIndex((s) => String(s.id) === String(currentSong.id)) : 0;
-      const prevIdx = curIdx <= 0 ? recommendations.length - 1 : curIdx - 1;
-      const prevSong = recommendations[prevIdx];
-      await playSong(prevSong);
-    } finally { setBusy(false); }
-  };
-
-  // ===== 슬라이더 Seek (과도 호출 방지: 사용자가 드래그 완료했을 때만 onChange로 1회 호출)
-  const handleSeek = async (v: number) => {
-    setCurrentTime(v);
-    if (source === "preview" && audioRef.current) {
-      audioRef.current.currentTime = v;
-    } else if (source === "spotify") {
-      try { await seek(v * 1000); } catch {}
-    }
-  };
-
-  // ===== Feedback (그대로)
-  const [feedbackMap, setFeedbackMap] = useState<Record<string | number, 1 | -1 | 0>>({});
-  const sendFeedback = useCallback(
-    async (musicId: string | number, value: 1 | -1) => {
-      const payload = {
-        music_id: Number(musicId),
-        feedback: value,
-        photo_id: photoId ?? null,
-        context_main_mood: contextMainMood ?? null,
-        context_sub_mood: contextSubMood ?? null,
-      };
-      try {
-        const r = await fetch(`${API_BASE}/api/feedback`, {
-          method: "POST", credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        if (r.ok) return true;
-        if (r.status !== 401) { alert("피드백 전송에 실패했습니다."); return false; }
-      } catch {}
-      const authHeader = buildAuthHeaderFromLocalStorage();
-      if (!authHeader.Authorization) {
-        const me = await fetchMe();
-        if (!me) { alert("로그인이 필요합니다."); return false; }
-      }
-      try {
-        const r2 = await fetch(`${API_BASE}/api/feedback`, {
-          method: "POST", credentials: "include",
-          headers: { "Content-Type": "application/json", ...authHeader },
-          body: JSON.stringify(payload),
-        });
-        if (r2.ok) return true;
-        if (r2.status === 401) alert("로그인이 필요합니다.");
-        else alert("피드백 전송에 실패했습니다.");
-        return false;
-      } catch { alert("네트워크 오류로 피드백 전송 실패"); return false; }
-    },
-    [photoId, contextMainMood, contextSubMood],
-  );
-
-  const handleFeedback = useCallback(
-    async (value: 1 | -1) => {
-      if (!currentSong) return;
-      const key = currentSong.id;
-      const prev = feedbackMap[key] ?? 0;
-      const nextVal: 1 | -1 | 0 = prev === value ? 0 : value;
-      setFeedbackMap((m) => ({ ...m, [key]: nextVal }));
-      if (nextVal === 0) return;
-      const ok = await sendFeedback(key, nextVal);
-      if (!ok) setFeedbackMap((m) => ({ ...m, [key]: prev }));
-    },
-    [currentSong, feedbackMap, sendFeedback],
-  );
-
-  const goEditOnly = useCallback(async () => {
-    if (!photoId) { alert("photoId가 없습니다."); return; }
-    if (!selectedSongId) { alert("편집할 곡을 먼저 선택해 주세요."); return; }
-    const q = new URLSearchParams();
-    q.set("photoId", String(photoId));
-    q.set("musicId", String(selectedSongId));
-    router.push(`/editor?${q.toString()}`);
-  }, [photoId, selectedSongId, router]);
-
-  const handleRefresh = async () => {
-    if (isRefreshing) return;
-    try {
-      setIsRefreshing(true);
-      await fetchRecommendations();
-    } finally { setIsRefreshing(false); }
-  };
-
-  const handleClose = () => {
-    try { router.replace("/"); } catch { (window as unknown as { location: Location }).location.href = "/"; }
-  };
-
-  const safeImageSrc = uploadedImage || "/placeholder.svg";
-  const currentSongIndex = currentSong ? recommendations.findIndex((s) => String(s.id) === String(currentSong.id)) : 0;
-
-  return (
-    <div className="fixed inset-0 bg-black">
-      {/* Progress bars */}
-      <div className="absolute top-0 left-0 right-0 z-50 flex gap-1 p-2">
-        {recommendations.map((_, idx) => (
-          <div key={idx} className="flex-1 h-0.5 bg-white/30 rounded-full overflow-hidden">
-            <div
-              className={`h-full bg-white transition-all duration-300 ${
-                idx < currentSongIndex ? "w-full" : idx === currentSongIndex ? "w-1/2" : "w-0"
-              }`}
-            />
-          </div>
-        ))}
-      </div>
-
-      {/* Top header */}
-      <div className="absolute top-0 left-0 right-0 z-40 bg-gradient-to-b from-black/80 to-transparent pt-10 px-4 pb-6">
-        <div className="flex items-center justify-between mb-3">
-          <button
-            onClick={handleClose}
-            className="w-8 h-8 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center"
-          >
-            <X className="w-5 h-5 text-white" />
-          </button>
-          <div className="flex-1 mx-3">
-            {currentSong && (
-              <div className="text-white">
-                <p className="text-sm font-semibold truncate">{currentSong.title}</p>
-                <p className="text-xs text-white/80 truncate">{currentSong.artist}</p>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Background image */}
-      <div className="absolute inset-0">
-        <Image src={safeImageSrc || "/placeholder.svg"} alt="Photo" fill className="object-cover" unoptimized />
-        <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-black/60" />
-      </div>
-
-      {/* Bottom controls */}
-      <div className="absolute bottom-0 left-0 right-0 z-40 bg-gradient-to-t from-black/90 to-transparent px-4 pb-8 pt-12">
-        {currentSong && (
-          <div className="space-y-4">
-            <button
-              onClick={() => setShowPlaylist(!showPlaylist)}
-              className="w-full flex items-center justify-center gap-2 py-2 text-white/80 hover:text-white transition-colors"
-            >
-              <Music className="w-4 h-4" />
-              <span className="text-sm font-medium truncate">추천{recommendations.length}곡 리스트</span>
-              <ChevronUp className={`w-4 h-4 transition-transform ${showPlaylist ? "rotate-180" : ""}`} />
-            </button>
-
-            {/* Progress bar */}
-            <div className="space-y-1">
-              <input
-                type="range"
-                min={0}
-                max={duration}
-                value={currentTime}
-                onChange={(e) => handleSeek(Number(e.target.value))}
-                className="w-full h-1 bg-white/20 rounded-lg appearance-none cursor-pointer
-                           [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3
-                           [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full
-                           [&::-webkit-slider-thumb]:bg-white"
-              />
-              <div className="flex justify-between text-xs text-white/70">
-                <span>{formatTime(currentTime)}</span>
-                <span>{formatTime(duration)}</span>
-              </div>
-            </div>
-
-            {/* Player controls */}
-            <div className="flex items-center justify-center gap-6">
-              <Button
-                size="icon"
-                variant="ghost"
-                disabled={busy}
-                onClick={playPreviousSong}
-                className="w-12 h-12 rounded-full bg-white/10 hover:bg-white/20 text-white"
-              >
-                <SkipBack className="w-5 h-5" />
-              </Button>
-
-              <Button
-                size="icon"
-                disabled={busy}
-                onClick={togglePlay}
-                className="w-16 h-16 rounded-full bg-white hover:bg-white/90 text-black"
-              >
-                {isPlaying ? <Pause className="w-7 h-7" /> : <Play className="w-7 h-7 ml-0.5" />}
-              </Button>
-
-              <Button
-                size="icon"
-                variant="ghost"
-                disabled={busy}
-                onClick={playNextSong}
-                className="w-12 h-12 rounded-full bg-white/10 hover:bg-white/20 text-white"
-              >
-                <SkipForward className="w-5 h-5" />
-              </Button>
-            </div>
-
-            {/* Feedback buttons */}
-            <div className="flex gap-3">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => handleFeedback(1)}
-                className={`flex-1 h-11 rounded-full backdrop-blur-sm ${
-                  feedbackMap[currentSong.id] === 1 ? "bg-white text-black" : "bg-white/10 text-white hover:bg-white/20"
-                }`}
-              >
-                <ThumbsUp className="w-4 h-4 mr-2" />
-                좋아요
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => handleFeedback(-1)}
-                className={`flex-1 h-11 rounded-full backdrop-blur-sm ${
-                  feedbackMap[currentSong.id] === -1
-                    ? "bg-white text-black"
-                    : "bg-white/10 text-white hover:bg-white/20"
-                }`}
-              >
-                <ThumbsDown className="w-4 h-4 mr-2" />
-                별로예요
-              </Button>
-            </div>
-
-            {/* Save button */}
-            {selectedSongId && photoId && (
-              <Button
-                onClick={goEditOnly}
-                className="w-full h-12 rounded-full bg-white text-black hover:bg-white/90 font-medium"
-              >
-                저장 및 편집하기
-              </Button>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Playlist drawer */}
-      <div
-        className={`fixed inset-x-0 bottom-0 z-50 bg-black/95 backdrop-blur-xl rounded-t-3xl transition-transform duration-300 ${
-          showPlaylist ? "translate-y-0" : "translate-y-full"
-        }`}
-        style={{ maxHeight: "70vh" }}
-      >
-        <div className="p-4">
-          <div className="w-12 h-1 bg-white/30 rounded-full mx-auto mb-4" />
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-white font-semibold text-lg">플레이리스트</h3>
-            <button onClick={() => setShowPlaylist(false)} className="text-white/60 hover:text-white">
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-          <div className="overflow-y-auto" style={{ maxHeight: "calc(70vh - 100px)" }}>
-            <div className="space-y-2">
-              {recommendations.map((song) => (
-                <button
-                  key={song.id}
-                  onClick={() => onClickSong(song)}
-                  disabled={busy}
-                  className={`w-full flex items-center gap-3 p-3 rounded-xl transition-colors ${
-                    String(currentSong?.id) === String(song.id) ? "bg-white/20" : "bg-white/5 hover:bg-white/10 active:bg-white/15"
-                  }`}
-                >
-                  <div className="relative w-12 h-12 rounded-lg overflow-hidden flex-shrink-0 bg-white/10">
-                    {song.image ? (
-                      <Image
-                        src={song.image || "/placeholder.svg"}
-                        alt={song.title}
-                        fill
-                        className="object-cover"
-                        unoptimized
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center">
-                        <Music className="w-6 h-6 text-white/40" />
-                      </div>
-                    )}
-                    {String(currentSong?.id) === String(song.id) && (
-                      <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                        {isPlaying ? <Pause className="w-5 h-5 text-white" /> : <Play className="w-5 h-5 text-white" />}
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex-1 text-left min-w-0">
-                    <p className="text-white font-medium text-sm truncate">{song.title}</p>
-                    <p className="text-white/60 text-xs truncate">{song.artist}</p>
-                  </div>
-                  <span className="text-white/40 text-xs flex-shrink-0">{song.duration}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {showPlaylist && <div className="fixed inset-0 bg-black/20 z-40" onClick={() => setShowPlaylist(false)} />}
-    </div>
-  );
+"use client"
+
+import { useState, useRef, useEffect, useCallback } from "react"
+import { Button } from "@/components/ui/button"
+import { Slider } from "@/components/ui/slider"
+import {
+  Play,
+  Pause,
+  SkipBack,
+  SkipForward,
+  Repeat,
+  ChevronDown,
+  MoreVertical,
+  Heart,
+  ThumbsDown,
+  Wand2,
+  X,
+  ListMusic,
+  Shuffle,
+} from "lucide-react"
+import { cn } from "@/lib/utils"
+
+interface Track {
+  id: number
+  title: string
+  artist: string
+  album: string
+  /** 초 단위(선택). 없으면 loadedmetadata로 보정 */
+  duration?: number
+  coverUrl: string
+  /** 실제 오디오 파일 경로(필수!) */
+  audioUrl: string
+  playlist: string
 }
 
-function toBackendSongArray(val: unknown): BackendSong[] {
-  if (!Array.isArray(val)) return [];
-  return val.filter((x) => x && typeof x === "object") as BackendSong[];
+const playlist: Track[] = [
+  {
+    id: 1,
+    title: "TOO BAD",
+    artist: "G-DRAGON, Anderson.Paak",
+    album: "Übermensch",
+    duration: 153,
+    coverUrl: "/album-cover.png",
+    audioUrl: "/audio/track1.mp3", // 👉 public/audio/track1.mp3 에 파일 배치
+    playlist: "009 실시간 멜론 차트 TOP 100 MELON",
+  },
+  {
+    id: 2,
+    title: "Electric Pulse",
+    artist: "Neon Waves",
+    album: "Synthetic Hearts",
+    duration: 198,
+    coverUrl: "/abstract-music-album-cover-electric-purple.jpg",
+    audioUrl: "/audio/track2.mp3",
+    playlist: "009 실시간 멜론 차트 TOP 100 MELON",
+  },
+  {
+    id: 3,
+    title: "Golden Hour",
+    artist: "Sunset Boulevard",
+    album: "Summer Memories",
+    duration: 223,
+    coverUrl: "/abstract-music-album-cover-golden-sunset.jpg",
+    audioUrl: "/audio/track3.mp3",
+    playlist: "009 실시간 멜론 차트 TOP 100 MELON",
+  },
+]
+
+export default function RecommendClient() {
+  const [currentTrackIndex, setCurrentTrackIndex] = useState(0)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [currentTime, setCurrentTime] = useState(0)
+  const [repeatMode, setRepeatMode] = useState<"off" | "all" | "one">("off")
+  const [isShuffled, setIsShuffled] = useState(false)
+  const [showPlaylist, setShowPlaylist] = useState(false)
+  const [likedTracks, setLikedTracks] = useState<Set<number>>(new Set())
+  const [dislikedTracks, setDislikedTracks] = useState<Set<number>>(new Set())
+  const [duration, setDuration] = useState<number>(playlist[0].duration ?? 0)
+
+  const audioRef = useRef<HTMLAudioElement>(null)
+  const currentTrack = playlist[currentTrackIndex]
+
+  /** 트랙 로드 */
+  const loadCurrentTrack = useCallback(async (autoplay = false) => {
+    const audio = audioRef.current
+    if (!audio) return
+
+    try {
+      setCurrentTime(0)
+      audio.src = currentTrack.audioUrl
+      audio.load()
+
+      // duration 보정
+      const onLoaded = () => {
+        const d = Math.floor(audio.duration || 0)
+        setDuration(currentTrack.duration ?? d)
+      }
+      audio.addEventListener("loadedmetadata", onLoaded, { once: true })
+
+      if (autoplay) {
+        const playPromise = audio.play()
+        if (playPromise && typeof playPromise.then === "function") {
+          await playPromise
+          setIsPlaying(true)
+        } else {
+          setIsPlaying(true)
+        }
+      }
+    } catch {
+      setIsPlaying(false)
+    }
+  }, [currentTrack])
+
+  /** 초기/트랙 변경 시 */
+  useEffect(() => {
+    void loadCurrentTrack(isPlaying) // 재생 중에 트랙 바뀌면 이어서 재생
+  }, [currentTrackIndex, loadCurrentTrack]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** 진행도/트랙 종료 처리 */
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio) return
+
+    const onTime = () => setCurrentTime(audio.currentTime)
+    const onEnded = () => {
+      if (repeatMode === "one") {
+        audio.currentTime = 0
+        void audio.play()
+        return
+      }
+      handleNext()
+    }
+
+    audio.addEventListener("timeupdate", onTime)
+    audio.addEventListener("ended", onEnded)
+    return () => {
+      audio.removeEventListener("timeupdate", onTime)
+      audio.removeEventListener("ended", onEnded)
+    }
+  }, [repeatMode])
+
+  /** 재생/일시정지 */
+  const togglePlay = async () => {
+    const audio = audioRef.current
+    if (!audio) return
+    if (isPlaying) {
+      audio.pause()
+      setIsPlaying(false)
+    } else {
+      try {
+        await audio.play()
+        setIsPlaying(true)
+      } catch {
+        // 사용자 제스처 없을 때 실패 가능
+        setIsPlaying(false)
+      }
+    }
+  }
+
+  /** 이전 트랙 */
+  const handlePrevious = () => {
+    const audio = audioRef.current
+    if (!audio) return
+    if (audio.currentTime > 3) {
+      audio.currentTime = 0
+      setCurrentTime(0)
+      return
+    }
+    setCurrentTrackIndex((prev) => (prev === 0 ? playlist.length - 1 : prev - 1))
+  }
+
+  /** 다음 트랙(+셔플/반복) */
+  const handleNext = () => {
+    if (isShuffled) {
+      // 현재 인덱스 제외 랜덤
+      const pool = playlist.map((_, i) => i).filter((i) => i !== currentTrackIndex)
+      const next = pool[Math.floor(Math.random() * pool.length)]
+      setCurrentTrackIndex(next)
+      return
+    }
+
+    if (currentTrackIndex < playlist.length - 1) {
+      setCurrentTrackIndex(currentTrackIndex + 1)
+    } else if (repeatMode === "all") {
+      setCurrentTrackIndex(0)
+    } else {
+      setIsPlaying(false)
+    }
+  }
+
+  /** 탐색 */
+  const handleSeek = (value: number[]) => {
+    const audio = audioRef.current
+    if (!audio) return
+    const v = Math.min(Math.max(value[0], 0), duration || 0)
+    audio.currentTime = v
+    setCurrentTime(v)
+  }
+
+  const formatTime = (s: number) => {
+    const mins = Math.floor(s / 60)
+    const secs = Math.floor(s % 60)
+    return `${mins}:${secs.toString().padStart(2, "0")}`
+  }
+  const formatRemain = (s: number) => {
+    const remain = Math.max((duration || 0) - s, 0)
+    const mins = Math.floor(remain / 60)
+    const secs = Math.floor(remain % 60)
+    return `-${mins}:${secs.toString().padStart(2, "0")}`
+  }
+
+  const toggleRepeat = () => {
+    const modes: Array<"off" | "all" | "one"> = ["off", "all", "one"]
+    const idx = modes.indexOf(repeatMode)
+    setRepeatMode(modes[(idx + 1) % modes.length])
+  }
+
+  const toggleShuffle = () => setIsShuffled((p) => !p)
+
+  const toggleLike = () => {
+    const next = new Set(likedTracks)
+    if (next.has(currentTrack.id)) next.delete(currentTrack.id)
+    else {
+      next.add(currentTrack.id)
+      if (dislikedTracks.has(currentTrack.id)) {
+        const d = new Set(dislikedTracks)
+        d.delete(currentTrack.id)
+        setDislikedTracks(d)
+      }
+    }
+    setLikedTracks(next)
+  }
+
+  const toggleDislike = () => {
+    const next = new Set(dislikedTracks)
+    if (next.has(currentTrack.id)) next.delete(currentTrack.id)
+    else {
+      next.add(currentTrack.id)
+      if (likedTracks.has(currentTrack.id)) {
+        const l = new Set(likedTracks)
+        l.delete(currentTrack.id)
+        setLikedTracks(l)
+      }
+    }
+    setDislikedTracks(next)
+  }
+
+  const selectTrack = (index: number) => {
+    setCurrentTrackIndex(index)
+    setShowPlaylist(false)
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-black via-neutral-900 to-black flex items-center justify-center p-4">
+      <div className="w-full max-w-md mx-auto">
+        <div className="flex items-center justify-between mb-6 text-white">
+          <div className="flex items-center gap-3">
+            <Button variant="ghost" size="icon" className="text-white hover:bg-white/10">
+              <ChevronDown className="w-6 h-6" />
+            </Button>
+            <div>
+              <p className="text-sm font-medium">{currentTrack.playlist}</p>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setShowPlaylist(true)}
+              className="text-white hover:bg-white/10"
+              title="재생목록 열기"
+            >
+              <ListMusic className="w-6 h-6" />
+            </Button>
+            <Button variant="ghost" size="icon" className="text-white hover:bg-white/10">
+              <MoreVertical className="w-6 h-6" />
+            </Button>
+          </div>
+        </div>
+
+        <div className="mb-8">
+          <div
+            className="relative w-full aspect-square rounded-lg overflow-hidden shadow-2xl mb-6"
+            onClick={() => setShowPlaylist(true)}
+            role="button"
+            aria-label="재생목록 열기"
+          >
+            <img src={currentTrack.coverUrl || "/placeholder.svg"} alt={currentTrack.title} className="w-full h-full object-cover" />
+          </div>
+
+          <div className="flex items-start justify-between text-white mb-6">
+            <div className="flex-1">
+              <h1 className="text-2xl font-bold mb-1">{currentTrack.title}</h1>
+              <p className="text-base text-white/70">{currentTrack.artist}</p>
+            </div>
+            <div className="flex gap-2 flex-shrink-0">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={toggleLike}
+                className={cn("text-white hover:bg-white/10", likedTracks.has(currentTrack.id) && "text-red-500")}
+                title="좋아요"
+              >
+                <Heart className={cn("w-6 h-6", likedTracks.has(currentTrack.id) && "fill-red-500")} />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={toggleDislike}
+                className={cn("text-white hover:bg-white/10", dislikedTracks.has(currentTrack.id) && "text-blue-400")}
+                title="별로예요"
+              >
+                <ThumbsDown className={cn("w-6 h-6", dislikedTracks.has(currentTrack.id) && "fill-blue-400")} />
+              </Button>
+            </div>
+          </div>
+
+          <div className="mb-6">
+            <Slider
+              value={[currentTime]}
+              max={duration || 0}
+              step={1}
+              onValueChange={handleSeek}
+              className="mb-2"
+            />
+            <div className="flex justify-between text-sm text-white/60">
+              <span>{formatTime(currentTime)}</span>
+              <span>{formatRemain(currentTime)}</span>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between mb-6 px-2">
+            <Button
+              variant={isShuffled ? "default" : "ghost"}
+              size="icon"
+              onClick={toggleShuffle}
+              className={cn("w-12 h-12", isShuffled ? "bg-white text-black" : "text-white hover:bg-white/10")}
+              title="셔플"
+            >
+              <Shuffle className="w-5 h-5" />
+            </Button>
+
+            <Button variant="ghost" size="icon" onClick={handlePrevious} className="text-white hover:bg-white/10 w-12 h-12">
+              <SkipBack className="w-7 h-7 fill-white" />
+            </Button>
+
+            <Button
+              size="lg"
+              onClick={togglePlay}
+              className="w-16 h-16 rounded-full bg-white hover:bg-white/90 text-black shadow-lg"
+            >
+              {isPlaying ? <Pause className="w-8 h-8 fill-black" /> : <Play className="w-8 h-8 ml-1 fill-black" />}
+            </Button>
+
+            <Button variant="ghost" size="icon" onClick={handleNext} className="text-white hover:bg-white/10 w-12 h-12">
+              <SkipForward className="w-7 h-7 fill-white" />
+            </Button>
+
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={toggleRepeat}
+              className={cn("text-white hover:bg-white/10 w-12 h-12 relative", repeatMode !== "off" && "text-primary")}
+              title={`반복: ${repeatMode}`}
+            >
+              <Repeat className="w-5 h-5" />
+              {repeatMode === "one" && (
+                <span className="absolute text-[10px] font-bold top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
+                  1
+                </span>
+              )}
+            </Button>
+          </div>
+        </div>
+
+        <audio ref={audioRef} preload="metadata" />
+      </div>
+
+      {showPlaylist && <div className="fixed inset-0 bg-black/50 z-40" onClick={() => setShowPlaylist(false)} />}
+
+      <div
+        className={cn(
+          "fixed bottom-0 left-0 right-0 bg-neutral-900 rounded-t-3xl z-50 transition-transform duration-300 ease-out",
+          showPlaylist ? "translate-y-0" : "translate-y-full",
+        )}
+        style={{ maxHeight: "70vh" }}
+      >
+        <div className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold text-white">재생목록</h2>
+            <Button variant="ghost" size="icon" onClick={() => setShowPlaylist(false)} className="text-white hover:bg-white/10">
+              <X className="w-6 h-6" />
+            </Button>
+          </div>
+
+          <div className="overflow-y-auto" style={{ maxHeight: "calc(70vh - 100px)" }}>
+            {playlist.map((track, index) => (
+              <button
+                key={track.id}
+                onClick={() => selectTrack(index)}
+                className={cn(
+                  "w-full flex items-center gap-4 p-3 rounded-lg hover:bg-white/5 transition-colors text-left",
+                  currentTrackIndex === index && "bg-white/10",
+                )}
+              >
+                <img src={track.coverUrl || "/placeholder.svg"} alt={track.title} className="w-14 h-14 rounded object-cover flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className={cn("font-medium truncate", currentTrackIndex === index ? "text-white" : "text-white/90")}>
+                    {track.title}
+                  </p>
+                  <p className="text-sm text-white/60 truncate">{track.artist}</p>
+                </div>
+                {currentTrackIndex === index && isPlaying && (
+                  <div className="flex-shrink-0">
+                    <div className="flex gap-1 items-end h-4" aria-hidden>
+                      <div className="w-1 bg-white animate-pulse" style={{ height: "60%" }} />
+                      <div className="w-1 bg-white animate-pulse" style={{ height: "100%", animationDelay: "0.2s" }} />
+                      <div className="w-1 bg-white animate-pulse" style={{ height: "40%", animationDelay: "0.4s" }} />
+                    </div>
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 }
