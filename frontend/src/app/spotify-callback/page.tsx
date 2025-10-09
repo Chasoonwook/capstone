@@ -1,54 +1,27 @@
-// 파일 경로: src/app/spotify-callback/page.tsx
-
+// src/app/spotify-callback/page.tsx
 "use client";
 
-import { useEffect, Suspense } from "react"; // Suspense 추가
-import { useSearchParams, useRouter } from "next/navigation";
+import { useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 
-// ✅ [수정] 이 페이지를 동적 렌더링으로 강제하는 코드를 추가합니다.
+// 필요하면 유지해도 무방
 export const dynamic = "force-dynamic";
 
-function SpotifyCallback() {
-  const searchParams = useSearchParams();
+export default function SpotifyCallbackPage() {
   const router = useRouter();
+  const sp = useSearchParams();
 
   useEffect(() => {
-    const accessToken = searchParams.get("access_token");
-    const refreshToken = searchParams.get("refresh_token");
-    const expiresIn = searchParams.get("expires_in");
-
-    if (accessToken) {
-      localStorage.setItem("spotify_access_token", accessToken);
-      if (refreshToken) {
-        localStorage.setItem("spotify_refresh_token", refreshToken);
-      }
-      
-      const expiresAt = Date.now() + Number(expiresIn) * 1000;
-      localStorage.setItem("spotify_token_expires_at", String(expiresAt));
-
-      // alert("Spotify 연동에 성공했습니다!"); // 페이지 이동 전에 alert가 있으면 UX에 좋지 않을 수 있어 주석 처리
-      router.replace("/");
-      
-    } else {
-      const error = searchParams.get("error");
-      console.error("Spotify callback error:", error);
-      alert("Spotify 연동에 실패했습니다.");
-      router.replace("/");
-    }
-  }, [searchParams, router]);
+    // 백엔드에서 ?ok=1/0 로 결과만 알려줌
+    const ok = sp.get("ok");
+    // 성공/실패 여부에 따라 토스트를 띄우고 싶다면 여기에 처리
+    // 쿠키는 이미 백엔드에서 설정됨
+    router.replace("/recommend"); // 원하는 이동 경로로 변경
+  }, [router, sp]);
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background text-foreground">
-      <p>Spotify와 연동 중입니다. 잠시만 기다려주세요...</p>
+    <div className="min-h-screen flex items-center justify-center">
+      스포티파이 연동을 마무리하는 중입니다…
     </div>
-  );
-}
-
-// ✅ [수정] Suspense로 컴포넌트를 감싸줍니다.
-export default function SpotifyCallbackPage() {
-  return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center">연동 정보를 읽어오는 중...</div>}>
-      <SpotifyCallback />
-    </Suspense>
   );
 }
