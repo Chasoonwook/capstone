@@ -5,6 +5,7 @@ const fs = require("fs");
 const express = require("express");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
+const axios = require("axios"); // ★ 추가
 require("dotenv").config({ debug: true });
 const pool = require("./db");
 
@@ -110,6 +111,85 @@ try {
 } catch (e) {
   console.error("[router] FAILED to mount /api/spotify:", e && (e.stack || e.message || e));
 }
+
+/* ======================================================================= */
+/*  ★ SDK용 토큰 엔드포인트 (쿠키→유효 access_token 반환)                    */
+/*     - routes/spotify.js에 같은 라우트가 있다면 둘 중 하나만 사용하세요.   */
+/* ======================================================================= */
+const CK_ACCESS = "sp_access";
+const CK_REFRESH = "sp_refresh";
+const SPOTIFY_CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;
+const SPOTIFY_CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
+
+async function refreshAccessToken(refreshToken) {
+  try {
+    const body = new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      client_id: String(SPOTIFY_CLIENT_ID),
+      client_secret: String(SPOTIFY_CLIENT_SECRET),
+    });
+    const resp = await axios.post("https://accounts.spotify.com/api/token", body.toString(), {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    });
+    return resp.data; // { access_token, expires_in, ... }
+  } catch (e) {
+    console.error("[spotify] refreshAccessToken error:", e?.response?.data || e.message);
+    return null;
+  }
+}
+
+// SDK에서 짧게 쓰기 위한 access_token 제공
+app.get("/api/spotify/token", async (req, res) => {
+  try {
+    let access = req.cookies?.[CK_ACCESS] || null;
+    const refresh = req.cookies?.[CK_REFRESH] || null;
+
+    // 현재 access 유효성 검사 (간단히 /v1/me 호출)
+    const tryMe = async (token) =>
+      axios.get("https://api.spotify.com/v1/me", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+    let expiresIn = 300; // 기본 TTL 힌트(메모리 캐시용)
+
+    if (access) {
+      try {
+        await tryMe(access);
+        res.set("Cache-Control", "no-store");
+        return res.json({ access_token: access, expires_in: expiresIn });
+      } catch {
+        // access 만료 → 계속 진행해 refresh 시도
+      }
+    }
+
+    if (!refresh) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+
+    const refreshed = await refreshAccessToken(refresh);
+    if (!refreshed?.access_token) {
+      return res.status(401).json({ error: "refresh_failed" });
+    }
+
+    // 새 access를 쿠키로 갱신
+    const newAccess = refreshed.access_token;
+    const newTtl = Number(refreshed.expires_in || 300);
+    res.cookie(CK_ACCESS, newAccess, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "none",
+      path: "/",
+      maxAge: newTtl * 1000,
+    });
+
+    res.set("Cache-Control", "no-store");
+    return res.json({ access_token: newAccess, expires_in: newTtl });
+  } catch (e) {
+    console.error("[/api/spotify/token] error:", e?.response?.data || e.message);
+    return res.status(500).json({ error: "token_failed" });
+  }
+});
 
 // 즉시 진단용 라우트
 app.get("/debug/spotify", (_req, res) => {
