@@ -6,7 +6,6 @@ import { Suspense } from "react";
 
 // 프리렌더하지 말고 동적으로 처리
 export const dynamic = "force-dynamic";
-export const revalidate = 0;
 
 function CallbackInner() {
   const router = useRouter();

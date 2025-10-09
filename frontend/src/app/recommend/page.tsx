@@ -4,7 +4,6 @@ import RecommendClient from "./RecommendClient";
 
 // 정적 프리렌더 방지 (CSR/SSR만)
 export const dynamic = "force-dynamic";
-export const revalidate = 0;
 
 export default function RecommendPage() {
   return (
