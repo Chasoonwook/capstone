@@ -1,3 +1,5 @@
+// src/app/recommend/RecommendClient.tsx
+
 "use client"
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react"
@@ -100,8 +102,10 @@ export default function RecommendClient() {
       setError(null)
       try {
         const pid = photoId || ""
+        // ✅ API 주소를 백엔드 라우터에 맞게 수정
         const candidates = [
-          `${API_BASE}/api/recommendations?photo_id=${encodeURIComponent(pid)}`,
+          `${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(pid)}`,
+          // 아래는 예비용 주소들
           `${API_BASE}/api/recommendations/${encodeURIComponent(pid)}`,
           `${API_BASE}/api/recommend?photoId=${encodeURIComponent(pid)}`,
         ]
@@ -110,14 +114,21 @@ export default function RecommendClient() {
           const res = await fetch(url)
           if (res.ok) {
             data = await res.json()
-            if (Array.isArray(data?.items)) data = data.items
             break
           }
         }
         let list: Track[] = []
-        if (Array.isArray(data)) {
-          list = data.map((r, i) => normalizeTrack(r, i)).filter(Boolean) as Track[]
+        
+        // ✅ 백엔드 응답 형식에 맞춰 main_songs, sub_songs 등을 하나의 배열로 합침
+        if (data && (data.main_songs || data.sub_songs || data.preferred_songs)) {
+          const allSongs = [
+            ...(data.main_songs || []),
+            ...(data.sub_songs || []),
+            ...(data.preferred_songs || [])
+          ];
+          list = allSongs.map((r, i) => normalizeTrack(r, i)).filter(Boolean) as Track[];
         }
+
         // 실패/비어있으면 데모 1곡만
         if (!list.length) {
           list = [
