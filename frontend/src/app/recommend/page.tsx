@@ -5,10 +5,17 @@ import RecommendClient from "./RecommendClient";
 // 정적 프리렌더 방지 (CSR/SSR만)
 export const dynamic = "force-dynamic";
 
-export default function RecommendPage() {
+export default function RecommendPage({
+  searchParams,
+}: {
+  searchParams?: { photoId?: string; user?: string };
+}) {
+  const photoId = searchParams?.photoId ?? null;
+  const userName = searchParams?.user ?? null;
+
   return (
     <Suspense fallback={<div className="p-6 text-white">로딩중…</div>}>
-      <RecommendClient />
+      <RecommendClient photoId={photoId} userName={userName} />
     </Suspense>
   );
 }

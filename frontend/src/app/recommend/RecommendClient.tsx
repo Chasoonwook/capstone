@@ -1,542 +1,422 @@
-"use client"
+"use client";
 
-import { useState, useRef, useEffect, useCallback, useMemo } from "react"
-import { useRouter } from "next/navigation"
-import { Button } from "@/components/ui/button"
-import { Slider } from "@/components/ui/slider"
+import { useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
 import {
-  Play, Pause, SkipBack, SkipForward,
-  ChevronDown, MoreVertical, Heart, ThumbsDown,
-  ListMusic, Upload
-} from "lucide-react"
-import { cn } from "@/lib/utils"
-import { API_BASE } from "@/lib/api"
+  Play,
+  Pause,
+  SkipBack,
+  SkipForward,
+  ChevronDown,
+  MoreVertical,
+  Heart,
+  X,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import { API_BASE } from "@/lib/api";
 
 type Track = {
-  id: string | number
-  title: string
-  artist: string
-  audioUrl: string
-  coverUrl?: string | null
-  duration?: number | null
-}
+  id: string | number;
+  title: string;
+  artist: string;
+  album?: string;
+  duration: number;       // seconds
+  coverUrl?: string;
+  previewUrl?: string;    // 30s preview (spotify) or mp3 url
+};
 
-const buildPhotoSrc = (photoId?: string | null) => {
-  if (!photoId) return null
-  const id = encodeURIComponent(String(photoId))
-  return `${API_BASE}/api/photos/${id}/binary`
-}
+type Props = {
+  photoId?: string | null;
+  userName?: string | null;
+};
 
-// 여러 응답 포맷을 안전하게 표준화
-const normalizeTrack = (raw: any, idx: number): Track | null => {
-  const title = raw?.title ?? raw?.music_title ?? raw?.name ?? null
-  const artist = raw?.artist ?? raw?.music_artist ?? raw?.singer ?? "Unknown"
-  const audioUrl = raw?.audio_url ?? raw?.preview_url ?? raw?.stream_url ?? null
-  const coverUrl = raw?.cover_url ?? raw?.album_image ?? raw?.image ?? null
-  const duration =
-    Number(raw?.duration ?? raw?.length_seconds ?? raw?.preview_duration ?? 0) || null
+export default function RecommendClient({ photoId, userName }: Props) {
+  const [playlist, setPlaylist] = useState<Track[]>([]);
+  const [currentTrackIndex, setCurrentTrackIndex] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [showPlaylist, setShowPlaylist] = useState(false);
+  const [liked, setLiked] = useState<Set<string | number>>(new Set());
 
-  if (!title || !audioUrl) return null
-  return {
-    id: raw?.id ?? raw?.music_id ?? idx,
-    title,
-    artist,
-    audioUrl,
-    coverUrl,
-    duration,
-  }
-}
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const currentTrack = playlist[currentTrackIndex];
 
-export default function RecommendClient() {
-  const router = useRouter()
-
-  // ✅ useSearchParams 대신 window.location에서 photoId 읽기
-  const [photoId, setPhotoId] = useState<string | null>(null)
+  /* 1) 추천 목록 불러오기 */
   useEffect(() => {
-    if (typeof window === "undefined") return
-    const sp = new URLSearchParams(window.location.search)
-    const id = sp.get("photoId") || sp.get("photoID") || sp.get("id")
-    setPhotoId(id)
-  }, [])
+    if (!photoId) return;
 
-  const analyzedPhotoUrl = useMemo(() => buildPhotoSrc(photoId), [photoId])
-
-  // 사용자 이름(훅이 있다면 교체)
-  const userNameFallback =
-    typeof window !== "undefined"
-      ? localStorage.getItem("user_name") || localStorage.getItem("name")
-      : null
-  const playlistTitle = `${(userNameFallback || "내")} 플레이리스트`
-
-  const [playlist, setPlaylist] = useState<Track[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const [currentTrackIndex, setCurrentTrackIndex] = useState(0)
-  const [isPlaying, setIsPlaying] = useState(false)
-  const [currentTime, setCurrentTime] = useState(0)
-  const [duration, setDuration] = useState<number>(0)
-  const [showPlaylist, setShowPlaylist] = useState(false)
-  const [likedTracks, setLikedTracks] = useState<Set<string | number>>(new Set())
-  const [dislikedTracks, setDislikedTracks] = useState<Set<string | number>>(new Set())
-
-  const audioRef = useRef<HTMLAudioElement>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
-
-  const currentTrack = playlist[currentTrackIndex]
-
-  // ▶︎ 플레이어 복귀용 현재 경로 저장
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const route = `${window.location.pathname}${window.location.search}`
-      sessionStorage.setItem("lastPlayerRoute", route)
-    }
-  }, [])
-
-  // ▶︎ 백엔드에서 추천리스트 가져오기
-  useEffect(() => {
-    const fetchPlaylist = async () => {
-      setLoading(true)
-      setError(null)
+    const fetchRecs = async () => {
       try {
-        const pid = photoId || ""
-        const candidates = [
-          `${API_BASE}/api/recommendations?photo_id=${encodeURIComponent(pid)}`,
-          `${API_BASE}/api/recommendations/${encodeURIComponent(pid)}`,
-          `${API_BASE}/api/recommend?photoId=${encodeURIComponent(pid)}`,
-        ]
-        let data: any = null
-        for (const url of candidates) {
-          const res = await fetch(url)
-          if (res.ok) {
-            data = await res.json()
-            if (Array.isArray(data?.items)) data = data.items
-            break
-          }
+        // A. /api/recommendations/:photoId → 실패 시 B
+        let res = await fetch(`${API_BASE}/api/recommendations/${photoId}`, {
+          credentials: "include",
+        });
+        if (!res.ok) {
+          res = await fetch(
+            `${API_BASE}/api/recommendations?photoId=${encodeURIComponent(photoId)}`,
+            { credentials: "include" }
+          );
         }
-        let list: Track[] = []
-        if (Array.isArray(data)) {
-          list = data.map((r, i) => normalizeTrack(r, i)).filter(Boolean) as Track[]
-        }
-        // 실패/비어있으면 데모 1곡만
-        if (!list.length) {
-          list = [
-            {
-              id: 1,
-              title: "TOO BAD",
-              artist: "G-DRAGON, Anderson.Paak",
-              audioUrl: "/audio/track1.mp3",
-              coverUrl: "/album-cover.png",
-              duration: 153,
-            },
-          ]
-        }
-        setPlaylist(list)
-        setCurrentTrackIndex(0)
-      } catch {
-        setError("추천 목록을 불러오지 못했습니다.")
-        setPlaylist([
-          {
-            id: 1,
-            title: "TOO BAD",
-            artist: "G-DRAGON, Anderson.Paak",
-            audioUrl: "/audio/track1.mp3",
-            coverUrl: "/album-cover.png",
-            duration: 153,
-          },
-        ])
-        setCurrentTrackIndex(0)
-      } finally {
-        setLoading(false)
-      }
-    }
-    // photoId가 파싱된 뒤에 호출
-    if (photoId !== null) {
-      void fetchPlaylist()
-    }
-  }, [photoId])
+        const data = await res.json();
+        const items = normalizeToTracks(data);
+        if (!items.length) throw new Error("no tracks");
 
-  // 트랙 로드
-  const loadCurrentTrack = useCallback(
-    async (autoplay = false) => {
-      const audio = audioRef.current
-      if (!audio || !currentTrack) return
+        setPlaylist(items);
+        setCurrentTrackIndex(0);
+        setCurrentTime(0);
 
-      setCurrentTime(0)
-      audio.src = currentTrack.audioUrl
-      audio.load()
-
-      const onLoaded = () => {
-        const d = Math.floor(audio.duration || 0)
-        setDuration(currentTrack.duration ?? d)
-      }
-      audio.addEventListener("loadedmetadata", onLoaded, { once: true })
-
-      if (autoplay) {
+        // 돌아올 때 이 화면을 쉽게 복귀하도록 저장
         try {
-          await audio.play()
-          setIsPlaying(true)
-        } catch {
-          setIsPlaying(false)
+          sessionStorage.setItem("lastPlayerRoute", `/recommend?photoId=${photoId}`);
+        } catch {}
+      } catch (e) {
+        console.error("[recommendations] load failed:", e);
+        setPlaylist([]);
+      }
+    };
+
+    fetchRecs();
+  }, [photoId]);
+
+  /* 2) 진행시간/종료 핸들링 */
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const onTime = () => setCurrentTime(audio.currentTime);
+    const onEnded = () => handleNext();
+
+    audio.addEventListener("timeupdate", onTime);
+    audio.addEventListener("ended", onEnded);
+    return () => {
+      audio.removeEventListener("timeupdate", onTime);
+      audio.removeEventListener("ended", onEnded);
+    };
+  }, [currentTrackIndex, playlist.length]);
+
+  /* 3) 트랙 변경 시 소스 세팅 (미리듣기 없으면 검색 보완) */
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !currentTrack) return;
+
+    const ensure = async () => {
+      let url = currentTrack.previewUrl;
+      if (!url) {
+        url = await findPreviewUrl(`${currentTrack.title} ${currentTrack.artist}`);
+        if (url) {
+          setPlaylist((prev) => {
+            const next = [...prev];
+            next[currentTrackIndex] = { ...next[currentTrackIndex], previewUrl: url };
+            return next;
+          });
         }
       }
-    },
-    [currentTrack],
-  )
+      audio.src = url || "";
+      if (isPlaying && url) {
+        try {
+          await audio.play();
+        } catch (e) {
+          console.warn("autoplay blocked:", e);
+        }
+      } else {
+        audio.pause();
+      }
+    };
 
-  useEffect(() => {
-    if (currentTrack) void loadCurrentTrack(isPlaying)
-  }, [currentTrackIndex, loadCurrentTrack]) // eslint-disable-line react-hooks/exhaustive-deps
+    ensure();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTrackIndex, isPlaying, currentTrack?.previewUrl]);
 
-  // 진행/종료
-  useEffect(() => {
-    const audio = audioRef.current
-    if (!audio) return
-    const onTime = () => setCurrentTime(audio.currentTime)
-    const onEnded = () => handleNext()
-    audio.addEventListener("timeupdate", onTime)
-    audio.addEventListener("ended", onEnded)
-    return () => {
-      audio.removeEventListener("timeupdate", onTime)
-      audio.removeEventListener("ended", onEnded)
-    }
-  }, [])
-
-  // 컨트롤
+  /* controls */
   const togglePlay = async () => {
-    const audio = audioRef.current
-    if (!audio) return
+    const audio = audioRef.current;
+    if (!audio) return;
+
     if (isPlaying) {
-      audio.pause()
-      setIsPlaying(false)
-    } else {
-      try {
-        await audio.play()
-        setIsPlaying(true)
-      } catch {
-        setIsPlaying(false)
-      }
+      audio.pause();
+      setIsPlaying(false);
+      return;
     }
-  }
+
+    if (!audio.src) {
+      const url =
+        currentTrack?.previewUrl ||
+        (await findPreviewUrl(`${currentTrack?.title} ${currentTrack?.artist}`));
+      if (url) audio.src = url;
+    }
+    try {
+      await audio.play();
+      setIsPlaying(true);
+    } catch (e) {
+      console.warn("play failed:", e);
+      setIsPlaying(false);
+    }
+  };
+
   const handlePrevious = () => {
-    const audio = audioRef.current
-    if (!audio) return
-    if (audio.currentTime > 3) {
-      audio.currentTime = 0
-      setCurrentTime(0)
-      return
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (currentTime > 3) {
+      audio.currentTime = 0;
+      return;
     }
-    setCurrentTrackIndex((prev) => (prev === 0 ? Math.max(playlist.length - 1, 0) : prev - 1))
-  }
+    const i = currentTrackIndex === 0 ? playlist.length - 1 : currentTrackIndex - 1;
+    setCurrentTrackIndex(i);
+    setCurrentTime(0);
+  };
+
   const handleNext = () => {
-    setCurrentTrackIndex((prev) => {
-      if (prev < playlist.length - 1) return prev + 1
-      setIsPlaying(false)
-      return prev
-    })
-  }
+    if (currentTrackIndex < playlist.length - 1) {
+      setCurrentTrackIndex(currentTrackIndex + 1);
+      setCurrentTime(0);
+    } else {
+      setIsPlaying(false);
+    }
+  };
+
   const handleSeek = (value: number[]) => {
-    const audio = audioRef.current
-    if (!audio) return
-    const v = Math.min(Math.max(value[0], 0), duration || 0)
-    audio.currentTime = v
-    setCurrentTime(v)
-  }
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = value[0];
+    setCurrentTime(value[0]);
+  };
 
-  const formatTime = (s: number) => {
-    const m = Math.floor(s / 60)
-    const t = Math.floor(s % 60)
-    return `${m}:${t.toString().padStart(2, "0")}`
-  }
-  const formatRemain = (s: number) => {
-    const r = Math.max((duration || 0) - s, 0)
-    const m = Math.floor(r / 60)
-    const t = Math.floor(r % 60)
-    return `-${m}:${t.toString().padStart(2, "0")}`
-  }
-
-  const toggleLike = () => {
-    if (!currentTrack) return
-    const next = new Set(likedTracks)
-    if (next.has(currentTrack.id)) next.delete(currentTrack.id)
-    else {
-      next.add(currentTrack.id)
-      if (dislikedTracks.has(currentTrack.id)) {
-        const d = new Set(dislikedTracks)
-        d.delete(currentTrack.id)
-        setDislikedTracks(d)
-      }
-    }
-    setLikedTracks(next)
-  }
-  const toggleDislike = () => {
-    if (!currentTrack) return
-    const next = new Set(dislikedTracks)
-    if (next.has(currentTrack.id)) next.delete(currentTrack.id)
-    else {
-      next.add(currentTrack.id)
-      if (likedTracks.has(currentTrack.id)) {
-        const l = new Set(likedTracks)
-        l.delete(currentTrack.id)
-        setLikedTracks(l)
-      }
-    }
-    setDislikedTracks(next)
-  }
   const selectTrack = (index: number) => {
-    setCurrentTrackIndex(index)
-    setShowPlaylist(false)
+    setCurrentTrackIndex(index);
+    setCurrentTime(0);
+    setShowPlaylist(false);
+    setIsPlaying(true);
+  };
+
+  /* helpers */
+  function formatTime(sec: number) {
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return `${m}:${String(s).padStart(2, "0")}`;
   }
 
-  // 업로드(파일 선택) — 트리거만
-  const handleUploadClick = () => fileInputRef.current?.click()
-  const handleFileChange: React.ChangeEventHandler<HTMLInputElement> = (e) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    // TODO: 업로드 → 분석 → 추천 재요청 연결
-    console.log("selected file:", file)
+  async function findPreviewUrl(q: string): Promise<string | undefined> {
+    try {
+      const r = await fetch(
+        `${API_BASE}/api/spotify/search?q=${encodeURIComponent(q)}&type=track&limit=1`,
+        { credentials: "include" }
+      );
+      if (!r.ok) return;
+      const j = await r.json();
+      const item = j?.tracks?.items?.[0] || j?.items?.[0] || j?.results?.[0];
+      return item?.preview_url || item?.audio_preview_url;
+    } catch (e) {
+      console.warn("preview search failed:", e);
+    }
   }
 
-  const artUrl = analyzedPhotoUrl || currentTrack?.coverUrl || "/placeholder.svg"
+  function normalizeToTracks(data: any): Track[] {
+    // {tracks:[...]}/{recommendations:[...]}/[...] 다양한 형태를 흡수
+    const arr: any[] = Array.isArray(data) ? data : data?.tracks || data?.recommendations || [];
+    return arr
+      .map((it: any, idx: number): Track => {
+        const artist =
+          it.artist ||
+          (Array.isArray(it.artists) ? it.artists.map((a: any) => a?.name).filter(Boolean).join(", ") : it.singer) ||
+          it.artist_name ||
+          "Unknown";
+        const title = it.title || it.name || it.track_name || "Unknown";
+        const durationSec =
+          typeof it.duration === "number"
+            ? it.duration
+            : it.duration_ms
+            ? Math.round(it.duration_ms / 1000)
+            : 30;
 
+        const cover =
+          it.coverUrl ||
+          it.image ||
+          it.album?.images?.[0]?.url ||
+          it.albumImage ||
+          "/placeholder.svg";
+
+        const preview =
+          it.previewUrl || it.preview_url || it.audioUrl || it.audio_preview_url;
+
+        return {
+          id: it.id ?? idx,
+          title,
+          artist,
+          album: it.album?.name || it.album || "",
+          duration: durationSec,
+          coverUrl: cover,
+          previewUrl: preview,
+        };
+      })
+      .filter((t) => t.title && t.artist);
+  }
+
+  /* UI */
   return (
-    <div className="min-h-screen bg-gradient-to-b from-black via-neutral-900 to-black flex items-center justify-center p-4">
-      <div className="w-full max-w-md mx-auto">
-        {/* 헤더: 좌 뒤로(메인으로, from=player), 중앙 타이틀, 우측 더보기 */}
-        <div className="relative flex items-center mb-6 text-white">
+    <div className="min-h-screen bg-black text-white">
+      {/* 상단 헤더 */}
+      <div className="px-4 pt-3 flex items-center justify-between">
+        <button className="p-2" onClick={() => history.back()} aria-label="뒤로">
+          <ChevronDown className="w-6 h-6" />
+        </button>
+        <div className="text-sm opacity-80 truncate">
+          {userName ? `${userName} 플레이리스트` : "추천 플레이리스트"}
+        </div>
+        <button className="p-2" aria-label="메뉴">
+          <MoreVertical className="w-6 h-6" />
+        </button>
+      </div>
+
+      {/* 커버 */}
+      <div className="px-4 mt-3">
+        <div className="aspect-square w-full rounded-xl overflow-hidden bg-neutral-900">
+          {currentTrack?.coverUrl ? (
+            <img
+              src={currentTrack.coverUrl}
+              alt={currentTrack?.title || "cover"}
+              className="w-full h-full object-cover"
+            />
+          ) : null}
+        </div>
+      </div>
+
+      {/* 제목/아티스트 */}
+      <div className="px-5 mt-6 flex items-start justify-between">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-bold truncate">{currentTrack?.title || "—"}</h1>
+          <p className="text-white/70 truncate">{currentTrack?.artist || "—"}</p>
+        </div>
+        <div className="flex gap-2">
           <Button
             variant="ghost"
             size="icon"
-            className="text-white hover:bg-white/10"
-            onClick={() => router.push("/?from=player")}
-            title="메인으로"
+            className={cn("text-white hover:bg-white/10", liked.has(currentTrack?.id ?? -1) && "text-red-500")}
+            onClick={() => {
+              const id = currentTrack?.id;
+              if (id == null) return;
+              setLiked((old) => {
+                const n = new Set(old);
+                n.has(id) ? n.delete(id) : n.add(id);
+                return n;
+              });
+            }}
+            aria-label="좋아요"
           >
-            <ChevronDown className="w-6 h-6" />
+            <Heart className="w-6 h-6" />
           </Button>
-
-        <div className="absolute left-1/2 -translate-x-1/2">
-            <p className="text-sm font-medium text-center">{playlistTitle}</p>
-          </div>
-
-          <div className="ml-auto">
-            <Button variant="ghost" size="icon" className="text-white hover:bg-white/10">
-              <MoreVertical className="w-6 h-6" />
-            </Button>
-          </div>
         </div>
-
-        {/* 아트워크(분석 이미지 우선) */}
-        <div className="mb-8">
-          <div
-            className="relative w-full aspect-square rounded-lg overflow-hidden shadow-2xl mb-6 bg-neutral-800"
-            onClick={() => setShowPlaylist(true)}
-            role="button"
-            aria-label="재생목록 열기"
-          >
-            <img src={artUrl ?? "/placeholder.svg"} alt="analyzed" className="w-full h-full object-cover" />
-            <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-black/10" />
-          </div>
-
-          {/* 곡 정보 */}
-          <div className="flex items-start justify-between text-white mb-6">
-            <div className="flex-1">
-              <h1 className="text-2xl font-bold mb-1">
-                {currentTrack?.title || (loading ? "불러오는 중..." : "—")}
-              </h1>
-              <p className="text-base text-white/70">{currentTrack?.artist || "Unknown"}</p>
-            </div>
-            <div className="flex gap-2 flex-shrink-0">
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={toggleLike}
-                className={cn(
-                  "text-white hover:bg-white/10",
-                  currentTrack && likedTracks.has(currentTrack.id) && "text-red-500",
-                )}
-                title="좋아요"
-              >
-                <Heart
-                  className={cn(
-                    "w-6 h-6",
-                    currentTrack && likedTracks.has(currentTrack.id) && "fill-red-500",
-                  )}
-                />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={toggleDislike}
-                className={cn(
-                  "text-white hover:bg-white/10",
-                  currentTrack && dislikedTracks.has(currentTrack.id) && "text-blue-400",
-                )}
-                title="별로예요"
-              >
-                <ThumbsDown
-                  className={cn(
-                    "w-6 h-6",
-                    currentTrack && dislikedTracks.has(currentTrack.id) && "fill-blue-400",
-                  )}
-                />
-              </Button>
-            </div>
-          </div>
-
-          {/* 진행 바 */}
-          <div className="mb-6">
-            <Slider value={[currentTime]} max={duration || 0} step={1} onValueChange={handleSeek} className="mb-2" />
-            <div className="flex justify-between text-sm text-white/60">
-              <span>{formatTime(currentTime)}</span>
-              <span>{formatRemain(currentTime)}</span>
-            </div>
-          </div>
-
-          {/* 하단 컨트롤: 좌(업로드·이전) / 중앙(재생) / 우(다음·리스트) */}
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-3">
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={handleUploadClick}
-                className="text-white hover:bg-white/10 w-12 h-12"
-                title="업로드"
-              >
-                <Upload className="w-6 h-6" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={handlePrevious}
-                className="text-white hover:bg-white/10 w-12 h-12"
-                title="이전"
-              >
-                <SkipBack className="w-7 h-7 fill-white" />
-              </Button>
-            </div>
-
-            <Button
-              size="lg"
-              onClick={togglePlay}
-              className="w-16 h-16 rounded-full bg-white hover:bg-white/90 text-black shadow-lg"
-              title={isPlaying ? "일시정지" : "재생"}
-            >
-              {isPlaying ? (
-                <Pause className="w-8 h-8 fill-black" />
-              ) : (
-                <Play className="w-8 h-8 ml-1 fill-black" />
-              )}
-            </Button>
-
-            <div className="flex items-center gap-3">
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={handleNext}
-                className="text-white hover:bg-white/10 w-12 h-12"
-                title="다음"
-              >
-                <SkipForward className="w-7 h-7 fill-white" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setShowPlaylist(true)}
-                className="text-white hover:bg-white/10 w-12 h-12"
-                title="재생목록"
-              >
-                <ListMusic className="w-6 h-6" />
-              </Button>
-            </div>
-          </div>
-        </div>
-
-        {/* 숨겨진 파일 입력 */}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*"
-          onChange={handleFileChange}
-          className="hidden"
-        />
-
-        <audio ref={audioRef} preload="metadata" />
       </div>
 
-      {/* 재생목록 시트: 백엔드 추천 리스트 표시 */}
-      {showPlaylist && (
-        <div className="fixed inset-0 bg-black/50 z-40" onClick={() => setShowPlaylist(false)} />
-      )}
-      <div
-        className={cn(
-          "fixed bottom-0 left-0 right-0 bg-neutral-900 rounded-t-3xl z-50 transition-transform duration-300 ease-out",
-          showPlaylist ? "translate-y-0" : "translate-y-full",
-        )}
-        style={{ maxHeight: "70vh" }}
-      >
-        <div className="p-6 text-white">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-bold">추천 재생목록</h2>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setShowPlaylist(false)}
-              className="text-white hover:bg-white/10"
-              title="닫기"
-            >
-              ✕
-            </Button>
-          </div>
+      {/* 시크바 */}
+      <div className="px-5 mt-4">
+        <Slider
+          value={[currentTime]}
+          max={currentTrack?.duration || 30}
+          step={1}
+          onValueChange={handleSeek}
+          className="mb-2"
+        />
+        <div className="flex justify-between text-xs text-white/60">
+          <span>{formatTime(currentTime)}</span>
+          <span>-{formatTime((currentTrack?.duration || 30) - currentTime)}</span>
+        </div>
+      </div>
 
-          <div className="overflow-y-auto" style={{ maxHeight: "calc(70vh - 100px)" }}>
-            {error && <p className="text-red-400 mb-3">{error}</p>}
-            {loading && <p className="text-white/70">불러오는 중...</p>}
-            {!loading &&
-              playlist.map((track, index) => (
+      {/* 컨트롤 */}
+      <div className="px-5 mt-6 flex items-center justify-between">
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => setShowPlaylist(true)}
+          className="text-white hover:bg-white/10"
+          aria-label="재생목록"
+        >
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <path d="M4 6h16M4 12h10M4 18h7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+        </Button>
+
+        <div className="flex items-center gap-6">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handlePrevious}
+            className="text-white hover:bg-white/10"
+            aria-label="이전"
+          >
+            <SkipBack className="w-7 h-7 fill-white" />
+          </Button>
+          <Button
+            onClick={togglePlay}
+            className="w-16 h-16 rounded-full bg-white text-black hover:bg-white/90"
+            aria-label="재생/일시정지"
+          >
+            {isPlaying ? <Pause className="w-8 h-8" /> : <Play className="w-8 h-8 translate-x-[2px]" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handleNext}
+            className="text-white hover:bg-white/10"
+            aria-label="다음"
+          >
+            <SkipForward className="w-7 h-7 fill-white" />
+          </Button>
+        </div>
+
+        <div className="w-10" />
+      </div>
+
+      {/* 재생목록 모달 */}
+      {showPlaylist && (
+        <>
+          <div className="fixed inset-0 bg-black/60 z-40" onClick={() => setShowPlaylist(false)} />
+          <div className="fixed bottom-0 left-0 right-0 z-50 rounded-t-3xl bg-neutral-900">
+            <div className="p-5 flex items-center justify-between">
+              <h3 className="text-lg font-bold">추천 재생목록</h3>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setShowPlaylist(false)}
+                className="text-white hover:bg-white/10"
+                aria-label="닫기"
+              >
+                <X className="w-6 h-6" />
+              </Button>
+            </div>
+            <div className="max-h-[60vh] overflow-y-auto px-5 pb-6">
+              {playlist.map((t, i) => (
                 <button
-                  key={`${track.id}-${index}`}
-                  onClick={() => selectTrack(index)}
+                  key={`${t.id}-${i}`}
+                  onClick={() => selectTrack(i)}
                   className={cn(
-                    "w-full flex items-center gap-4 p-3 rounded-lg hover:bg-white/5 transition-colors text-left",
-                    currentTrackIndex === index && "bg-white/10",
+                    "w-full flex items-center gap-4 p-3 rounded-xl text-left hover:bg-white/5",
+                    i === currentTrackIndex && "bg-white/10",
                   )}
                 >
                   <img
-                    src={track.coverUrl || analyzedPhotoUrl || "/placeholder.svg"}
-                    alt={track.title}
-                    className="w-14 h-14 rounded object-cover flex-shrink-0"
+                    src={t.coverUrl || "/placeholder.svg"}
+                    alt={t.title}
+                    className="w-12 h-12 rounded object-cover"
                   />
-                  <div className="flex-1 min-w-0">
-                    <p
-                      className={cn(
-                        "font-medium truncate",
-                        currentTrackIndex === index ? "text-white" : "text-white/90",
-                      )}
-                    >
-                      {track.title}
+                  <div className="min-w-0 flex-1">
+                    <p className={cn("truncate font-medium", i === currentTrackIndex ? "text-white" : "text-white/90")}>
+                      {t.title}
                     </p>
-                    <p className="text-sm text-white/60 truncate">{track.artist}</p>
+                    <p className="text-sm text-white/60 truncate">{t.artist}</p>
                   </div>
-                  {currentTrackIndex === index && isPlaying && (
-                    <div className="flex-shrink-0" aria-hidden>
-                      <div className="flex gap-1 items-end h-4">
-                        <div className="w-1 bg-white animate-pulse" style={{ height: "60%" }} />
-                        <div
-                          className="w-1 bg-white animate-pulse"
-                          style={{ height: "100%", animationDelay: "0.2s" }}
-                        />
-                        <div
-                          className="w-1 bg-white animate-pulse"
-                          style={{ height: "40%", animationDelay: "0.4s" }}
-                        />
-                      </div>
-                    </div>
-                  )}
                 </button>
               ))}
+              {!playlist.length && (
+                <div className="py-10 text-center text-white/60">추천 곡을 불러오지 못했습니다.</div>
+              )}
+            </div>
           </div>
-        </div>
-      </div>
+        </>
+      )}
+
+      <audio ref={audioRef} />
     </div>
-  )
+  );
 }
