@@ -21,7 +21,20 @@ const SCOPE = [
   "user-modify-playback-state",
 ].join(" ");
 
-// ── utils
+/* ───────────────────────────────────────────────────────────
+   axios 인스턴스 (업스트림 지연 방어)
+   ─────────────────────────────────────────────────────────── */
+const axiosSpotify = axios.create({
+  timeout: 10000, // 10s
+});
+
+/* ───────────────────────────────────────────────────────────
+   /me 호출 캐시 & 중복요청 합치기
+   ─────────────────────────────────────────────────────────── */
+const meCache = new Map(); // key: accessToken, val: { ts, profile, pending? }
+const ME_TTL_MS = 60 * 1000;
+
+/* ── utils */
 const b64url = (bufOrStr) =>
   Buffer.from(bufOrStr).toString("base64").replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"");
 
@@ -63,6 +76,7 @@ async function refreshAccessToken(refreshToken) {
     });
     const r = await axios.post("https://accounts.spotify.com/api/token", body.toString(), {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      timeout: 10000,
     });
     return r.data; // { access_token, expires_in, ... }
   } catch (e) {
@@ -77,7 +91,7 @@ async function callSpotifyWithCookies(req, res, method, url, data, params) {
   const refresh = req.cookies?.[CK_REFRESH] || null;
 
   const doCall = (token) =>
-    axios.request({
+    axiosSpotify.request({
       method, url, data, params,
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -87,7 +101,6 @@ async function callSpotifyWithCookies(req, res, method, url, data, params) {
     const r = await doCall(access);
     return r;
   } catch (e1) {
-    // 401/403만 refresh 시도
     const status = e1?.response?.status;
     if (!refresh || (status !== 401 && status !== 403)) throw e1;
 
@@ -100,11 +113,12 @@ async function callSpotifyWithCookies(req, res, method, url, data, params) {
   }
 }
 
-// ───────────────────────────────────────────────────────────
-// 로그인 시작
+/* ───────────────────────────────────────────────────────────
+   로그인 시작
+   ─────────────────────────────────────────────────────────── */
 router.get(["/login", "/authorize"], (req, res) => {
-  const returnTo = safeReturnTo(req.query.return);          // ★
-  const state = b64url(JSON.stringify({ r: returnTo }));    // ★
+  const returnTo = safeReturnTo(req.query.return);
+  const state = b64url(JSON.stringify({ r: returnTo }));
 
   const verifier  = b64url(crypto.randomBytes(32));
   const challenge = b64url(crypto.createHash("sha256").update(verifier).digest());
@@ -118,7 +132,7 @@ router.get(["/login", "/authorize"], (req, res) => {
     response_type: "code",
     redirect_uri: REDIRECT_URI,
     scope: SCOPE,
-    state,                                  // ★
+    state,
     code_challenge_method: "S256",
     code_challenge: challenge,
   });
@@ -126,7 +140,9 @@ router.get(["/login", "/authorize"], (req, res) => {
   res.redirect(`https://accounts.spotify.com/authorize?${p.toString()}`);
 });
 
-// 콜백
+/* ───────────────────────────────────────────────────────────
+   콜백
+   ─────────────────────────────────────────────────────────── */
 router.get("/callback", async (req, res) => {
   try {
     const { code, state } = req.query;
@@ -150,33 +166,72 @@ router.get("/callback", async (req, res) => {
 
     const tokenRes = await axios.post("https://accounts.spotify.com/api/token", body.toString(), {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      timeout: 10000,
     });
 
     const { access_token, refresh_token, expires_in } = tokenRes.data || {};
     setAccessCookie(res, access_token, expires_in);
     if (refresh_token) setRefreshCookie(res, refresh_token);
 
-    return res.redirect(`${FRONT_BASE}/spotify-callback?ok=1&r=${encodeURIComponent(returnTo)}`); // ★
+    return res.redirect(`${FRONT_BASE}/spotify-callback?ok=1&r=${encodeURIComponent(returnTo)}`);
   } catch (err) {
     console.error("[spotify/callback]", err?.response?.data || err.message);
     clearSpotifyCookies(res);
-    return res.redirect(`${FRONT_BASE}/spotify-callback?ok=0&r=${encodeURIComponent("/")}`); // ★
+    return res.redirect(`${FRONT_BASE}/spotify-callback?ok=0&r=${encodeURIComponent("/")}`);
   }
 });
 
-// 상태
+/* ───────────────────────────────────────────────────────────
+   상태 (/me) — 캐시 + 중복요청 합치기
+   ─────────────────────────────────────────────────────────── */
 router.get("/me", async (req, res) => {
+  const access = req.cookies?.[CK_ACCESS] || null;
   try {
-    const r = await callSpotifyWithCookies(req, res, "GET", "https://api.spotify.com/v1/me");
-    return res.json({ connected: true, profile: r.data });
+    if (!access) return res.status(401).json({ connected: false });
+
+    const now = Date.now();
+    const cached = meCache.get(access);
+
+    // 캐시 히트
+    if (cached && cached.profile && now - cached.ts < ME_TTL_MS) {
+      return res.json({ connected: true, profile: cached.profile, cached: true });
+    }
+    // 중복 요청 합치기
+    if (cached?.pending) {
+      await cached.pending;
+      const again = meCache.get(access);
+      if (again?.profile) {
+        return res.json({ connected: true, profile: again.profile, cached: true });
+      }
+    }
+
+    // 실제 호출(만료 시 refresh는 callSpotifyWithCookies가 처리)
+    const pending = (async () => {
+      const r = await callSpotifyWithCookies(req, res, "GET", "https://api.spotify.com/v1/me");
+      const profile = r.data;
+      meCache.set(access, { ts: Date.now(), profile });
+      return profile;
+    })();
+
+    meCache.set(access, { ts: now, profile: null, pending });
+
+    const profile = await pending;
+    return res.json({ connected: true, profile });
+
   } catch (e) {
     const s = e?.response?.status || 500;
-    if (s === 401) return res.status(401).json({ error: "unauthorized" });
+    if (s === 401) return res.status(401).json({ connected: false });
     return res.status(s).json(e?.response?.data || { error: "me_failed" });
+  } finally {
+    // pending 플래그 제거
+    const c = meCache.get(access);
+    if (c) meCache.set(access, { ts: c.ts, profile: c.profile });
   }
 });
 
-// 재생 관련
+/* ───────────────────────────────────────────────────────────
+   재생 관련
+   ─────────────────────────────────────────────────────────── */
 router.get("/devices", async (req, res) => {
   try {
     const r = await callSpotifyWithCookies(req, res, "GET", "https://api.spotify.com/v1/me/player/devices");
@@ -229,11 +284,12 @@ router.post("/previous", async (req, res) => {
   }
 });
 
-// ★ 추가: 검색 API (프론트 util에서 사용)
-//    GET /api/spotify/search?q=TITLE ARTIST&type=track&limit=1
+/* ───────────────────────────────────────────────────────────
+   검색 (프론트 util에서 사용)
+   ─────────────────────────────────────────────────────────── */
 router.get("/search", async (req, res) => {
   try {
-    const q = req.query.q || req.query.query; // 둘 다 허용
+    const q = req.query.q || req.query.query;
     const type = String(req.query.type || "track");
     const limit = Number(req.query.limit || 5);
     if (!q) return res.status(400).json({ error: "missing_q" });
@@ -248,7 +304,9 @@ router.get("/search", async (req, res) => {
   }
 });
 
-// 연결 해제
+/* ───────────────────────────────────────────────────────────
+   연결 해제
+   ─────────────────────────────────────────────────────────── */
 router.post("/logout", (req, res) => {
   clearSpotifyCookies(res);
   res.json({ ok: true });
