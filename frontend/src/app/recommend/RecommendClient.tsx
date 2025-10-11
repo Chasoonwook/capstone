@@ -1,5 +1,4 @@
 // src/app/recommend/RecommendClient.tsx
-
 "use client"
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react"
@@ -13,14 +12,16 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { API_BASE } from "@/lib/api"
+import { useSpotifyPlayer } from "@/hooks/useSpotifyPlayer"
 
 type Track = {
   id: string | number
   title: string
   artist: string
-  audioUrl: string
+  audioUrl?: string | null            // 미리듣기 없을 수 있음
   coverUrl?: string | null
   duration?: number | null
+  spotify_track_id?: string | null    // Spotify 전체 재생용
 }
 
 const buildPhotoSrc = (photoId?: string | null) => {
@@ -33,12 +34,14 @@ const buildPhotoSrc = (photoId?: string | null) => {
 const normalizeTrack = (raw: any, idx: number): Track | null => {
   const title = raw?.title ?? raw?.music_title ?? raw?.name ?? null
   const artist = raw?.artist ?? raw?.music_artist ?? raw?.singer ?? "Unknown"
-  const audioUrl = raw?.audio_url ?? raw?.preview_url ?? raw?.stream_url ?? null
+  const preview = raw?.audio_url ?? raw?.preview_url ?? raw?.stream_url ?? null
+  const audioUrl = preview === "EMPTY" ? null : preview
   const coverUrl = raw?.cover_url ?? raw?.album_image ?? raw?.image ?? null
   const duration =
     Number(raw?.duration ?? raw?.length_seconds ?? raw?.preview_duration ?? 0) || null
+  const spotify_track_id = raw?.spotify_track_id ?? null
 
-  if (!title || !audioUrl) return null
+  if (!title) return null
   return {
     id: raw?.id ?? raw?.music_id ?? idx,
     title,
@@ -46,13 +49,15 @@ const normalizeTrack = (raw: any, idx: number): Track | null => {
     audioUrl,
     coverUrl,
     duration,
+    spotify_track_id,
   }
 }
 
 export default function RecommendClient() {
   const router = useRouter()
+  const sp = useSpotifyPlayer() // {ready, deviceId, state, playUris, pause, resume, next, prev, seek, ...}
 
-  // ✅ useSearchParams 대신 window.location에서 photoId 읽기
+  // URL에서 photoId 읽기
   const [photoId, setPhotoId] = useState<string | null>(null)
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -102,76 +107,44 @@ export default function RecommendClient() {
       setError(null)
       try {
         const pid = photoId || ""
-        // ✅ API 주소를 백엔드 라우터에 맞게 수정
-        const candidates = [
-          `${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(pid)}`,
-          // 아래는 예비용 주소들
-          `${API_BASE}/api/recommendations/${encodeURIComponent(pid)}`,
-          `${API_BASE}/api/recommend?photoId=${encodeURIComponent(pid)}`,
-        ]
-        let data: any = null
-        for (const url of candidates) {
-          const res = await fetch(url)
-          if (res.ok) {
-            data = await res.json()
-            break
-          }
-        }
+        const url = `${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(pid)}`
+        const res = await fetch(url, { credentials: "include" }) // 쿠키 동봉(보강용)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const data: any = await res.json()
+
         let list: Track[] = []
-        
-        // ✅ 백엔드 응답 형식에 맞춰 main_songs, sub_songs 등을 하나의 배열로 합침
         if (data && (data.main_songs || data.sub_songs || data.preferred_songs)) {
           const allSongs = [
             ...(data.main_songs || []),
             ...(data.sub_songs || []),
-            ...(data.preferred_songs || [])
-          ];
-          list = allSongs.map((r, i) => normalizeTrack(r, i)).filter(Boolean) as Track[];
+            ...(data.preferred_songs || []),
+          ]
+          list = allSongs.map((r, i) => normalizeTrack(r, i)).filter(Boolean) as Track[]
         }
 
-        // 실패/비어있으면 데모 1곡만
-        if (!list.length) {
-          list = [
-            {
-              id: 1,
-              title: "TOO BAD",
-              artist: "G-DRAGON, Anderson.Paak",
-              audioUrl: "/audio/track1.mp3",
-              coverUrl: "/album-cover.png",
-              duration: 153,
-            },
-          ]
-        }
         setPlaylist(list)
         setCurrentTrackIndex(0)
-      } catch {
+      } catch (e: any) {
+        console.error(e)
         setError("추천 목록을 불러오지 못했습니다.")
-        setPlaylist([
-          {
-            id: 1,
-            title: "TOO BAD",
-            artist: "G-DRAGON, Anderson.Paak",
-            audioUrl: "/audio/track1.mp3",
-            coverUrl: "/album-cover.png",
-            duration: 153,
-          },
-        ])
+        setPlaylist([]) // 데모 404 방지: 더미 트랙 제거
         setCurrentTrackIndex(0)
       } finally {
         setLoading(false)
       }
     }
-    // photoId가 파싱된 뒤에 호출
-    if (photoId !== null) {
-      void fetchPlaylist()
-    }
+    if (photoId !== null) void fetchPlaylist()
   }, [photoId])
 
-  // 트랙 로드
+  // 트랙 로드 (<audio> 전용)
   const loadCurrentTrack = useCallback(
     async (autoplay = false) => {
       const audio = audioRef.current
       if (!audio || !currentTrack) return
+      if (!currentTrack.audioUrl) { // Spotify 전용 트랙
+        setDuration(0)
+        return
+      }
 
       setCurrentTime(0)
       audio.src = currentTrack.audioUrl
@@ -199,17 +172,23 @@ export default function RecommendClient() {
     if (currentTrack) void loadCurrentTrack(isPlaying)
   }, [currentTrackIndex, loadCurrentTrack]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 진행/종료
+  // 진행/종료/에러
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
     const onTime = () => setCurrentTime(audio.currentTime)
     const onEnded = () => handleNext()
+    const onError = () => {
+      console.warn("[audio error]", audio.error, audio.currentSrc || audio.src)
+      setError("오디오를 불러오지 못했습니다. (URL/CORS/HTTPS 확인)")
+    }
     audio.addEventListener("timeupdate", onTime)
     audio.addEventListener("ended", onEnded)
+    audio.addEventListener("error", onError)
     return () => {
       audio.removeEventListener("timeupdate", onTime)
       audio.removeEventListener("ended", onEnded)
+      audio.removeEventListener("error", onError)
     }
   }, [])
 
@@ -217,6 +196,13 @@ export default function RecommendClient() {
   const togglePlay = async () => {
     const audio = audioRef.current
     if (!audio) return
+    const t = playlist[currentTrackIndex]
+    // Spotify 분기
+    if (t?.spotify_track_id) {
+      if (isPlaying) { await sp.pause(); setIsPlaying(false); return }
+      await sp.resume(); setIsPlaying(true); return
+    }
+    // 미리듣기 분기
     if (isPlaying) {
       audio.pause()
       setIsPlaying(false)
@@ -229,7 +215,10 @@ export default function RecommendClient() {
       }
     }
   }
+
   const handlePrevious = () => {
+    const t = playlist[currentTrackIndex]
+    if (t?.spotify_track_id) { sp.prev(); return }
     const audio = audioRef.current
     if (!audio) return
     if (audio.currentTime > 3) {
@@ -239,17 +228,27 @@ export default function RecommendClient() {
     }
     setCurrentTrackIndex((prev) => (prev === 0 ? Math.max(playlist.length - 1, 0) : prev - 1))
   }
+
   const handleNext = () => {
+    const t = playlist[currentTrackIndex]
+    if (t?.spotify_track_id) { sp.next(); return }
     setCurrentTrackIndex((prev) => {
       if (prev < playlist.length - 1) return prev + 1
       setIsPlaying(false)
       return prev
     })
   }
+
   const handleSeek = (value: number[]) => {
+    const v = Math.min(Math.max(value[0], 0), (duration || 0))
+    const t = playlist[currentTrackIndex]
+    if (t?.spotify_track_id) {
+      sp.seek(v * 1000)
+      setCurrentTime(v)
+      return
+    }
     const audio = audioRef.current
     if (!audio) return
-    const v = Math.min(Math.max(value[0], 0), duration || 0)
     audio.currentTime = v
     setCurrentTime(v)
   }
@@ -294,8 +293,22 @@ export default function RecommendClient() {
     }
     setDislikedTracks(next)
   }
-  const selectTrack = (index: number) => {
+
+  const selectTrack = async (index: number) => {
     setCurrentTrackIndex(index)
+    const t = playlist[index]
+    // Spotify 전용 트랙이면 즉시 전체 재생
+    if (t?.spotify_track_id) {
+      if (!sp.deviceId || !sp.ready) {
+        alert("Spotify 연결 중입니다. (Premium 필요) 잠시 후 다시 시도하세요.")
+      } else {
+        await sp.playUris([`spotify:track:${t.spotify_track_id}`])
+        setIsPlaying(true)
+      }
+      setShowPlaylist(false)
+      return
+    }
+    // 미리듣기 트랙은 <audio>가 처리
     setShowPlaylist(false)
   }
 
@@ -304,16 +317,21 @@ export default function RecommendClient() {
   const handleFileChange: React.ChangeEventHandler<HTMLInputElement> = (e) => {
     const file = e.target.files?.[0]
     if (!file) return
-    // TODO: 업로드 → 분석 → 추천 재요청 연결
     console.log("selected file:", file)
+    // TODO: 업로드 → /api/photos/analyze → 추천 재호출
   }
 
   const artUrl = analyzedPhotoUrl || currentTrack?.coverUrl || "/placeholder.svg"
 
+  // 현재 표시에 사용할 시간/길이(Spotify 우선)
+  const isSp = !!playlist[currentTrackIndex]?.spotify_track_id
+  const curSec = isSp ? Math.floor((sp.state.position || 0) / 1000) : currentTime
+  const durSec = isSp ? Math.floor((sp.state.duration || 0) / 1000) : duration
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-black via-neutral-900 to-black flex items-center justify-center p-4">
       <div className="w-full max-w-md mx-auto">
-        {/* 헤더: 좌 뒤로(메인으로, from=player), 중앙 타이틀, 우측 더보기 */}
+        {/* 헤더 */}
         <div className="relative flex items-center mb-6 text-white">
           <Button
             variant="ghost"
@@ -325,18 +343,26 @@ export default function RecommendClient() {
             <ChevronDown className="w-6 h-6" />
           </Button>
 
-        <div className="absolute left-1/2 -translate-x-1/2">
+          <div className="absolute left-1/2 -translate-x-1/2">
             <p className="text-sm font-medium text-center">{playlistTitle}</p>
           </div>
 
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-2">
+            {!sp.ready && (
+              <a
+                className="text-xs text-white/70 underline"
+                href={`${API_BASE}/api/spotify/login?return=${encodeURIComponent(typeof window !== "undefined" ? window.location.pathname + window.location.search : "/")}`}
+              >
+                Spotify 연결
+              </a>
+            )}
             <Button variant="ghost" size="icon" className="text-white hover:bg-white/10">
               <MoreVertical className="w-6 h-6" />
             </Button>
           </div>
         </div>
 
-        {/* 아트워크(분석 이미지 우선) */}
+        {/* 아트워크 */}
         <div className="mb-8">
           <div
             className="relative w-full aspect-square rounded-lg overflow-hidden shadow-2xl mb-6 bg-neutral-800"
@@ -396,14 +422,20 @@ export default function RecommendClient() {
 
           {/* 진행 바 */}
           <div className="mb-6">
-            <Slider value={[currentTime]} max={duration || 0} step={1} onValueChange={handleSeek} className="mb-2" />
+            <Slider
+              value={[curSec]}
+              max={durSec || 0}
+              step={1}
+              onValueChange={handleSeek}
+              className="mb-2"
+            />
             <div className="flex justify-between text-sm text-white/60">
-              <span>{formatTime(currentTime)}</span>
-              <span>{formatRemain(currentTime)}</span>
+              <span>{formatTime(curSec)}</span>
+              <span>{`-${formatTime(Math.max(durSec - curSec, 0))}`}</span>
             </div>
           </div>
 
-          {/* 하단 컨트롤: 좌(업로드·이전) / 중앙(재생) / 우(다음·리스트) */}
+          {/* 하단 컨트롤 */}
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
               <Button
@@ -526,20 +558,20 @@ export default function RecommendClient() {
                     >
                       {track.title}
                     </p>
-                    <p className="text-sm text-white/60 truncate">{track.artist}</p>
+                    <p className="text-sm text-white/60 truncate">
+                      {track.artist}
+                      {/* 재생 방식 배지 */}
+                      <span className="ml-2 text-xs text-white/50">
+                        {track.spotify_track_id ? "Spotify" : (track.audioUrl ? "Preview" : "—")}
+                      </span>
+                    </p>
                   </div>
                   {currentTrackIndex === index && isPlaying && (
                     <div className="flex-shrink-0" aria-hidden>
                       <div className="flex gap-1 items-end h-4">
                         <div className="w-1 bg-white animate-pulse" style={{ height: "60%" }} />
-                        <div
-                          className="w-1 bg-white animate-pulse"
-                          style={{ height: "100%", animationDelay: "0.2s" }}
-                        />
-                        <div
-                          className="w-1 bg-white animate-pulse"
-                          style={{ height: "40%", animationDelay: "0.4s" }}
-                        />
+                        <div className="w-1 bg-white animate-pulse" style={{ height: "100%", animationDelay: "0.2s" }} />
+                        <div className="w-1 bg-white animate-pulse" style={{ height: "40%", animationDelay: "0.4s" }} />
                       </div>
                     </div>
                   )}
