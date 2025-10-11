@@ -1,8 +1,9 @@
 // routes/recommendations.js
 // 배포 로그에서 로드 여부 확인용
-console.log("[recs] router loaded v6");
+console.log("[recs] router loaded v6+enrich+normalize");
 
 const express = require("express");
+const axios = require("axios");
 const pool = require("../db");
 const router = express.Router();
 
@@ -48,7 +49,7 @@ function getUserId(req) {
   return Number.isFinite(n) ? n : null;
 }
 
-/** 후보 라벨(+장르)로 후보 풀 가져오기 (가중치 샘플링용) */
+/* ===================== 후보 풀 로더 ===================== */
 async function fetchCandidatesByLabels({ candidates, limit, genres }) {
   if (!candidates?.length || !limit) return [];
   const params = [];
@@ -64,8 +65,12 @@ async function fetchCandidatesByLabels({ candidates, limit, genres }) {
 
   params.push(limit);
   const sql = `
-    SELECT COALESCE(music_id) AS music_id, title, artist, label, genre,
-           popularity, released_at, mood
+    SELECT COALESCE(music_id) AS music_id,
+           title, artist, label, genre,
+           popularity, released_at, mood,
+           NULLIF(url, 'EMPTY') AS preview_url,  -- 'EMPTY' → NULL 정규화
+           NULL::text AS album_image,
+           NULL::text AS spotify_track_id
       FROM music
      WHERE ${where}
   ORDER BY created_at DESC
@@ -75,12 +80,15 @@ async function fetchCandidatesByLabels({ candidates, limit, genres }) {
   return rows;
 }
 
-/** mood(예: mountain, beach)로 후보 풀 가져오기 (랜덤 샘플용) */
 async function fetchCandidatesByMood({ mood, limit }) {
   if (!mood || !limit) return [];
   const sql = `
-    SELECT COALESCE(music_id) AS music_id, title, artist, label, genre,
-           popularity, released_at, mood
+    SELECT COALESCE(music_id) AS music_id,
+           title, artist, label, genre,
+           popularity, released_at, mood,
+           NULLIF(url, 'EMPTY') AS preview_url,
+           NULL::text AS album_image,
+           NULL::text AS spotify_track_id
       FROM music
      WHERE lower(trim(mood)) = lower($1)
   ORDER BY created_at DESC
@@ -90,11 +98,14 @@ async function fetchCandidatesByMood({ mood, limit }) {
   return rows;
 }
 
-/** 아무 조건 없이 후보 풀 가져오기(폴백용) */
 async function fetchAnyCandidates(limit) {
   const { rows } = await pool.query(
-    `SELECT COALESCE(music_id) AS music_id, title, artist, label, genre,
-            popularity, released_at, mood
+    `SELECT COALESCE(music_id) AS music_id,
+            title, artist, label, genre,
+            popularity, released_at, mood,
+            NULLIF(url, 'EMPTY') AS preview_url,
+            NULL::text AS album_image,
+            NULL::text AS spotify_track_id
        FROM music
    ORDER BY created_at DESC
       LIMIT $1`,
@@ -103,7 +114,6 @@ async function fetchAnyCandidates(limit) {
   return rows;
 }
 
-/** 디버그용 (해당 후보로 몇 곡 있는지) */
 async function countByLabels({ candidates, genres }) {
   const out = { by_label: [], total: 0 };
   if (!candidates?.length) return out;
@@ -133,9 +143,8 @@ async function countByLabels({ candidates, genres }) {
 
 /* =============== 가중치 계산 관련 =============== */
 const W = { moodMain: 1.0, moodSub: 0.7, song: 1.0, pop: 0.3, recency: 0.2 };
-const TAU_DAYS = 30; // 피드백 감가기반 시간 상수(일)
+const TAU_DAYS = 30;
 
-/** 유저 곡 피드백(지수 감가 합산) 로드: Map<music_id, score> */
 async function loadFeedbackScores(userId, musicIds) {
   if (!userId || !musicIds?.length) return new Map();
   const { rows } = await pool.query(
@@ -171,7 +180,6 @@ function makeScorer(songScoreMap, bucket) {
   };
 }
 
-/** 가중치 샘플링 (중복 제거) */
 function weightedSampleK(arr, k, weightFn, used) {
   const out = [];
   const pool = arr.filter((x) => !used.has(x.music_id));
@@ -180,7 +188,6 @@ function weightedSampleK(arr, k, weightFn, used) {
   const weights = pool.map((x) => weightFn(x));
   let total = weights.reduce((a, b) => a + b, 0);
 
-  // 전부 0이면 무작위 보정
   if (total <= 0) {
     while (out.length < Math.min(k, pool.length)) {
       const r = Math.floor(Math.random() * pool.length);
@@ -191,7 +198,6 @@ function weightedSampleK(arr, k, weightFn, used) {
     return out;
   }
 
-  // 중복 없이 k개 뽑기
   while (out.length < k && pool.length > 0 && total > 0) {
     let r = Math.random() * total;
     let idx = 0;
@@ -209,7 +215,6 @@ function weightedSampleK(arr, k, weightFn, used) {
   return out;
 }
 
-/** 순수 랜덤 샘플링 (중복 제거) */
 function randomSampleK(arr, k, used) {
   const out = [];
   const pool = arr.filter((x) => !used.has(x.music_id));
@@ -223,9 +228,62 @@ function randomSampleK(arr, k, used) {
   return out;
 }
 
+/* ===================== (선택) Spotify 보강 ===================== */
+/**
+ * 스포티파이 연결된 사용자인 경우, 제목+아티스트로 1건 검색하여
+ * album_image / spotify_track_id / preview_url 을 보강한다.
+ * 실패해도 조용히 폴백한다.
+ */
+async function enrichWithSpotify(req, list) {
+  if (!Array.isArray(list) || list.length === 0) return list;
+
+  // 사용자 쿠키가 없으면 보강 시도 자체를 생략(로그 스팸/지연 방지)
+  const ck = req.headers.cookie || "";
+  if (!/sp_access=|sp_refresh=/.test(ck)) return list;
+
+  const baseUrl = `${req.protocol}://${req.get("host")}`;
+
+  async function fillOne(item) {
+    // 이미 값이 충분하면 패스
+    const hasPreview = item.preview_url && item.preview_url !== "EMPTY";
+    if (item.spotify_track_id && item.album_image && hasPreview) return item;
+
+    const q = [item.title, item.artist].filter(Boolean).join(" ");
+    if (!q) return item;
+
+    try {
+      const r = await axios.get(`${baseUrl}/api/spotify/search`, {
+        params: { q, type: "track", limit: 1 },
+        headers: { cookie: ck },
+        timeout: 8000,
+      });
+
+      const track = r.data?.tracks?.items?.[0];
+      if (!track) return item;
+
+      const albumImg = track.album?.images?.[0]?.url || null;
+      const preview  = track.preview_url || null;
+      const trackId  = track.id || null;
+
+      return {
+        ...item,
+        album_image: item.album_image || albumImg,
+        // 서버에서 미리 'EMPTY' → null 로 정규화
+        preview_url: hasPreview ? item.preview_url : (preview || null),
+        spotify_track_id: item.spotify_track_id || trackId,
+      };
+    } catch {
+      return item;
+    }
+  }
+
+  // 병렬 요청(최대 10곡) — 필요하면 여기서 배치/세마포로 제한 가능
+  return await Promise.all(list.map(fillOne));
+}
+
 /* ===================== 핑 ===================== */
 router.get("/__ping", (_req, res) => {
-  res.json({ ok: true, from: "routes/recommendations.js", version: "recs-v6" });
+  res.json({ ok: true, from: "routes/recommendations.js", version: "recs-v6+enrich+normalize" });
 });
 
 /* =============== by-photo: 5 + 2 + 3 = 10 (가중치/랜덤 혼합) =============== */
@@ -289,46 +347,28 @@ router.get("/by-photo/:photoId", async (req, res) => {
     // 4) 가중치/랜덤 샘플링
     const used = new Set();
 
-    // 메인 5 (가중치)
-    const mainPicked = weightedSampleK(
-      mainPool,
-      5,
-      makeScorer(songScoreMap, "main"),
-      used
-    );
+    const mainPicked = weightedSampleK(mainPool, 5, makeScorer(songScoreMap, "main"), used);
 
-    // 서브 2: background가 'mountain' 또는 'beach'면 music.mood로 랜덤 2, 아니면 기존 sub_mood 가중치 2
     const BG_SET = new Set(["mountain", "beach"]);
     let subPicked = [];
 
     if (background && BG_SET.has(background)) {
-      // mood=background 후보 수집 후 랜덤 2
       const bgPool = await fetchCandidatesByMood({ mood: background, limit: 200 });
       subPicked = randomSampleK(bgPool, 2, used);
-
-      // 후보가 부족하면 아무 곡으로 보충
       if (subPicked.length < 2) {
         const anyPool = await fetchAnyCandidates(100);
         const extra = randomSampleK(anyPool, 2 - subPicked.length, used);
         subPicked = subPicked.concat(extra);
       }
     } else {
-      // 기존 로직: sub_mood 기반 가중치 샘플링
-      subPicked = weightedSampleK(
-        subPool,
-        2,
-        makeScorer(songScoreMap, "sub"),
-        used
-      );
+      subPicked = weightedSampleK(subPool, 2, makeScorer(songScoreMap, "sub"), used);
       if (subPicked.length < 2) {
-        // 부족하면 아무 곡으로 보충
         const anyPool = await fetchAnyCandidates(100);
         const extra = randomSampleK(anyPool, 2 - subPicked.length, used);
         subPicked = subPicked.concat(extra);
       }
     }
 
-    // 선호 3 (가중치) — 부족하면 메인+서브 풀에서 보충
     let prefPicked = [];
     if (preferred_genres.length) {
       prefPicked = weightedSampleK(
@@ -338,27 +378,21 @@ router.get("/by-photo/:photoId", async (req, res) => {
         used
       );
     }
-
     if (prefPicked.length < 3) {
       const remain = [...mainPool, ...subPool].filter((x) => !used.has(x.music_id));
-      const extra = weightedSampleK(
-        remain,
-        3 - prefPicked.length,
-        makeScorer(songScoreMap, "pref"),
-        used
-      );
+      const extra = weightedSampleK(remain, 3 - prefPicked.length, makeScorer(songScoreMap, "pref"), used);
       prefPicked = prefPicked.concat(extra);
     }
 
-    // 5) 최종 페이로드
+    // 5) 최종 페이로드 (+ 스포티파이 보강)
     const payload = {
       main_mood,
       sub_mood,
       background,
       preferred_genres,
-      main_songs: mainPicked,
-      sub_songs: subPicked,
-      preferred_songs: prefPicked,
+      main_songs: await enrichWithSpotify(req, mainPicked),
+      sub_songs: await enrichWithSpotify(req, subPicked),
+      preferred_songs: await enrichWithSpotify(req, prefPicked),
     };
 
     if (debug) {
