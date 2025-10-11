@@ -15,6 +15,7 @@ import HistorySwitch from "@/components/history/HistorySwitch"
 
 import { Camera, Home, Music2 } from "lucide-react"
 import { API_BASE } from "@/lib/api"
+import { getSpotifyStatus } from "@/lib/spotify" // ★ 60초 캐시된 /me 호출 유틸
 
 export default function Page() {
   const { user, isLoggedIn, logout } = useAuthUser()
@@ -45,10 +46,10 @@ export default function Page() {
   const [isSpotifyConnected, setIsSpotifyConnected] = useState(false)
   const [showSpotifyModal, setShowSpotifyModal] = useState(false)
 
-  // ✅ 추천 화면에서 내려왔을 때만 하단 내비를 보이게 하는 플래그
+  // 추천 화면에서 내려왔을 때만 하단 내비 보이기
   const [showNav, setShowNav] = useState(false)
 
-  // ▶ 중앙 '플레이어' 버튼: 최근 플레이어 경로로 복귀
+  // 플레이어 복귀(마지막 플레이어 경로 저장해 둔 값)
   const openPlayer = () => {
     const last =
       (typeof window !== "undefined" &&
@@ -57,13 +58,12 @@ export default function Page() {
     router.push(last)
   }
 
-  // ✅ useSearchParams 대신 client-side에서만 URL 쿼리 확인
+  // useSearchParams 없이 클라이언트에서만 쿼리 확인
   useEffect(() => {
     if (typeof window === "undefined") return
     const url = new URL(window.location.href)
     if (url.searchParams.get("from") === "player") {
       setShowNav(true)
-      // URL 정리: from 제거
       url.searchParams.delete("from")
       window.history.replaceState({}, "", url.toString())
     } else {
@@ -71,27 +71,15 @@ export default function Page() {
     }
   }, [])
 
+  // Spotify 연결 상태 체크(60초 캐시 + 포커스시 재확인)
   useEffect(() => {
     let mounted = true
 
-    const checkConnected = () => {
+    const checkConnected = async () => {
       try {
-        if (typeof window !== "undefined") {
-          const url = new URL(window.location.href)
-          if (url.searchParams.get("spotify") === "connected") {
-            url.searchParams.delete("spotify")
-            window.history.replaceState({}, "", url.toString())
-          }
-        }
-
-        const expiresAt = Number(
-          localStorage.getItem("spotify_token_expires_at") || "0",
-        )
-        const accessToken = localStorage.getItem("spotify_access_token")
-        const connected = !!accessToken && Date.now() < expiresAt
-
+        const j = await getSpotifyStatus() // ★ 중앙 유틸 사용
         if (!mounted) return
-
+        const connected = !!j?.connected
         setIsSpotifyConnected(connected)
 
         const dismissedUntil = Number(localStorage.getItem(dismissKey) || "0")
@@ -173,7 +161,6 @@ export default function Page() {
           </section>
         </main>
 
-        {/* 떠있는 업로드 버튼: 내비 보일 때는 숨김 */}
         {!showNav && (
           <button
             onClick={() => setShowUploadModal(true)}
@@ -224,11 +211,10 @@ export default function Page() {
         }}
       />
 
-      {/* ▶︎ 추천 화면에서 내려왔을 때만 보이는 하단 내비 */}
+      {/* 추천에서 내려왔을 때만 하단 내비 표시 */}
       {showNav && (
         <nav className="fixed bottom-0 left-0 right-0 border-t border-border bg-background/90 backdrop-blur supports-[backdrop-filter]:bg-background/70 z-40">
           <div className="max-w-lg mx-auto flex items-center justify-between px-6 py-3">
-            {/* 홈 */}
             <button
               onClick={() => router.push("/")}
               className="w-10 h-10 rounded-full hover:bg-muted/60 flex items-center justify-center text-foreground"
@@ -238,7 +224,6 @@ export default function Page() {
               <Home className="w-6 h-6" />
             </button>
 
-            {/* 플레이어 복귀 */}
             <button
               onClick={openPlayer}
               className="w-14 h-14 -translate-y-3 rounded-full bg-primary text-primary-foreground shadow-lg hover:scale-105 transition-transform flex items-center justify-center"
@@ -248,7 +233,6 @@ export default function Page() {
               <Music2 className="w-6 h-6" />
             </button>
 
-            {/* 업로드 */}
             <button
               onClick={() => setShowUploadModal(true)}
               className="w-10 h-10 rounded-full hover:bg-muted/60 flex items-center justify-center text-foreground"
