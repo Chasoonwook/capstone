@@ -15,7 +15,7 @@ import HistorySwitch from "@/components/history/HistorySwitch"
 
 import { Camera, Home, Music2 } from "lucide-react"
 import { API_BASE } from "@/lib/api"
-import { getSpotifyStatus } from "../lib/spotifyClient";
+import { getSpotifyStatus, invalidateSpotifyStatus } from "../lib/spotifyClient" // ← 클라이언트 전용
 
 export default function Page() {
   const { user, isLoggedIn, logout } = useAuthUser()
@@ -62,6 +62,8 @@ export default function Page() {
   useEffect(() => {
     if (typeof window === "undefined") return
     const url = new URL(window.location.href)
+
+    // 플레이어에서 내려왔는지 체크
     if (url.searchParams.get("from") === "player") {
       setShowNav(true)
       url.searchParams.delete("from")
@@ -69,16 +71,25 @@ export default function Page() {
     } else {
       setShowNav(false)
     }
+
+    // Spotify 연동 직후 표시가 남아있다면 강제 재조회 + 파라미터 제거
+    if (url.searchParams.has("spotify")) {
+      invalidateSpotifyStatus()
+      url.searchParams.delete("spotify")
+      window.history.replaceState({}, "", url.toString())
+    }
   }, [])
 
-  // Spotify 연결 상태 체크(60초 캐시 + 포커스시 재확인)
+  // Spotify 연결 상태 체크(60초 캐시 + 포커스 시 강제 재조회)
   useEffect(() => {
     let mounted = true
 
-    const checkConnected = async () => {
+    const checkConnected = async (force = false) => {
       try {
-        const j = await getSpotifyStatus() // ★ 중앙 유틸 사용(클라이언트 전용)
+        if (force) invalidateSpotifyStatus() // ★ 강제 재조회 트리거
+        const j = await getSpotifyStatus()   // ★ 클라이언트 전용 유틸(쿠키 포함 + 60s 캐시)
         if (!mounted) return
+
         const connected = !!j?.connected
         setIsSpotifyConnected(connected)
 
@@ -92,11 +103,16 @@ export default function Page() {
       }
     }
 
-    checkConnected()
-    window.addEventListener("focus", checkConnected)
+    // 최초 1회는 강제 재조회(연동 직후를 대비)
+    checkConnected(true)
+
+    // 탭 포커스마다 강제 재조회
+    const onFocus = () => checkConnected(true)
+    window.addEventListener("focus", onFocus)
+
     return () => {
       mounted = false
-      window.removeEventListener("focus", checkConnected)
+      window.removeEventListener("focus", onFocus)
     }
   }, [dismissKey, isLoggedIn])
 
@@ -207,6 +223,7 @@ export default function Page() {
           setShowSpotifyModal(false)
         }}
         onConnect={() => {
+          // 백엔드에서 authorize 후 / 로 돌아오면 위 useEffect가 강제 재조회함
           window.location.href = `${API_BASE}/api/spotify/authorize?return=/`
         }}
       />
