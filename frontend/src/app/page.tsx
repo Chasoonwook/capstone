@@ -15,7 +15,7 @@ import HistorySwitch from "@/components/history/HistorySwitch"
 
 import { Camera, Home, Music2 } from "lucide-react"
 import { API_BASE } from "@/lib/api"
-import { getSpotifyStatus } from "@/lib/spotify" // ★ 60초 캐시된 /me 호출 유틸
+import { getSpotifyStatus } from "../lib/spotifyClient";
 
 export default function Page() {
   const { user, isLoggedIn, logout } = useAuthUser()
@@ -49,7 +49,7 @@ export default function Page() {
   // 추천 화면에서 내려왔을 때만 하단 내비 보이기
   const [showNav, setShowNav] = useState(false)
 
-  // 플레이어 복귀(마지막 플레이어 경로 저장해 둔 값)
+  // 플레이어 복귀(마지막 플레이어 경로 저장해 둔 값 사용)
   const openPlayer = () => {
     const last =
       (typeof window !== "undefined" &&
@@ -58,7 +58,7 @@ export default function Page() {
     router.push(last)
   }
 
-  // useSearchParams 없이 클라이언트에서만 쿼리 확인
+  // useSearchParams 없이, 클라이언트에서만 쿼리 확인 (CSR-bailout 경고 방지)
   useEffect(() => {
     if (typeof window === "undefined") return
     const url = new URL(window.location.href)
@@ -77,7 +77,7 @@ export default function Page() {
 
     const checkConnected = async () => {
       try {
-        const j = await getSpotifyStatus() // ★ 중앙 유틸 사용
+        const j = await getSpotifyStatus() // ★ 중앙 유틸 사용(클라이언트 전용)
         if (!mounted) return
         const connected = !!j?.connected
         setIsSpotifyConnected(connected)
@@ -211,7 +211,7 @@ export default function Page() {
         }}
       />
 
-      {/* 추천에서 내려왔을 때만 하단 내비 표시 */}
+      {/* 추천에서 내려왔을 때만 하단 내비 */}
       {showNav && (
         <nav className="fixed bottom-0 left-0 right-0 border-t border-border bg-background/90 backdrop-blur supports-[backdrop-filter]:bg-background/70 z-40">
           <div className="max-w-lg mx-auto flex items-center justify-between px-6 py-3">
