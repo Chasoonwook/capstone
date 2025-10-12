@@ -4,9 +4,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { API_BASE } from "@/lib/api";
 
-/** ─────────────────────────────────────────────────────────
- *  타입들
- *  ───────────────────────────────────────────────────────── */
+/** ─ Types ─ */
 type ReadyEvent = { device_id: string };
 type ErrorEvent = { message: string };
 type WebPlaybackStateLite = {
@@ -45,9 +43,15 @@ type SpotifyWindow = Window & {
   Spotify?: SpotifyNS;
 };
 
-/** ─────────────────────────────────────────────────────────
- *  SDK 로딩
- *  ───────────────────────────────────────────────────────── */
+// 전역 싱글톤 캐시(페이지 전환/재마운트에도 유지)
+type G = Window & {
+  __sp_player?: SpotifyPlayer | null;
+  __sp_ready?: boolean;
+  __sp_deviceId?: string | null;
+};
+const g = (typeof window !== "undefined" ? (window as unknown as G) : ({} as G));
+
+/** ─ SDK 로딩 ─ */
 async function ensureSDK(): Promise<void> {
   const w = window as unknown as SpotifyWindow;
   if (w.Spotify?.Player) return;
@@ -64,15 +68,13 @@ async function ensureSDK(): Promise<void> {
   });
 }
 
-/** ─────────────────────────────────────────────────────────
- *  토큰: 백엔드에서 짧게 받아서 메모리에만 보관
- *  ───────────────────────────────────────────────────────── */
+/** ─ 토큰: 백엔드에서 짧게 받아 메모리에만 보관 ─ */
 let memToken: { value: string; exp: number } | null = null;
 
 async function fetchAccessToken(): Promise<{ access_token: string; expires_in?: number }> {
   const res = await fetch(`${API_BASE}/api/spotify/token`, {
     method: "GET",
-    credentials: "include", // ★ 쿠키 동봉
+    credentials: "include",
     headers: { "Cache-Control": "no-store" },
   });
   if (!res.ok) throw new Error("unauthorized");
@@ -81,24 +83,20 @@ async function fetchAccessToken(): Promise<{ access_token: string; expires_in?: 
 
 async function getAccessToken(): Promise<string> {
   const now = Date.now();
-  if (memToken && now < memToken.exp - 30_000) {
-    return memToken.value;
-  }
+  if (memToken && now < memToken.exp - 30_000) return memToken.value;
   const data = await fetchAccessToken();
-  const ttl = Math.max(60, Number(data.expires_in || 300)); // 최소 60초
+  const ttl = Math.max(60, Number(data.expires_in || 300));
   memToken = { value: data.access_token, exp: Date.now() + ttl * 1000 };
   return memToken.value;
 }
 
-/** ─────────────────────────────────────────────────────────
- *  Hook 본체
- *  ───────────────────────────────────────────────────────── */
+/** ─ Hook 본체 ─ */
 export function useSpotifyPlayer() {
   const playerRef = useRef<SpotifyPlayer | null>(null);
   const deviceIdRef = useRef<string | null>(null);
 
-  const [ready, setReady] = useState(false);
-  const [deviceId, setDeviceId] = useState<string | null>(null);
+  const [ready, setReady] = useState<boolean>(!!g.__sp_ready);
+  const [deviceId, setDeviceId] = useState<string | null>(g.__sp_deviceId ?? null);
   const [state, setState] = useState<WebPlaybackStateLite>({
     position: 0,
     duration: 0,
@@ -106,12 +104,24 @@ export function useSpotifyPlayer() {
     trackUri: null,
   });
 
+  // 중복 호출 방지용
+  const busyRef = useRef(false);
+
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
       await ensureSDK();
-      if (cancelled || playerRef.current) return;
+      if (cancelled) return;
+
+      // 이미 전역에 플레이어가 있으면 재사용
+      if (g.__sp_player) {
+        playerRef.current = g.__sp_player;
+        deviceIdRef.current = g.__sp_deviceId ?? null;
+        setDeviceId(g.__sp_deviceId ?? null);
+        setReady(!!g.__sp_ready);
+        return;
+      }
 
       const PlayerCtor = (window as unknown as SpotifyWindow).Spotify!.Player;
 
@@ -120,7 +130,7 @@ export function useSpotifyPlayer() {
         volume: 0.7,
         getOAuthToken: async (cb) => {
           try {
-            const token = await getAccessToken(); // ★ 쿠키 기반 토큰 수급
+            const token = await getAccessToken();
             cb(token);
           } catch (e) {
             console.error("[spotify] getOAuthToken failed:", e);
@@ -129,11 +139,17 @@ export function useSpotifyPlayer() {
       });
 
       player.addListener("ready", (ev) => {
+        g.__sp_ready = true;
+        g.__sp_deviceId = ev.device_id;
         deviceIdRef.current = ev.device_id;
         setDeviceId(ev.device_id);
         setReady(true);
       });
-      player.addListener("not_ready", () => setReady(false));
+      player.addListener("not_ready", () => {
+        g.__sp_ready = false;
+        setReady(false);
+      });
+
       player.addListener("authentication_error", ({ message }) =>
         console.error("Auth Error:", message)
       );
@@ -155,13 +171,16 @@ export function useSpotifyPlayer() {
       });
 
       await player.connect();
-      if (!cancelled) playerRef.current = player;
+      if (!cancelled) {
+        playerRef.current = player;
+        g.__sp_player = player; // 싱글톤 보관
+      }
     })();
 
     return () => {
       cancelled = true;
-      playerRef.current?.disconnect();
-      playerRef.current = null;
+      // 싱글톤 유지: disconnect() 하지 않음
+      // playerRef.current?.disconnect();
     };
   }, []);
 
@@ -169,12 +188,12 @@ export function useSpotifyPlayer() {
     await playerRef.current?.activateElement?.();
   }, []);
 
-  // 모든 백엔드 제어 API는 쿠키 동봉으로 호출
+  // 백엔드 호출 (항상 쿠키 동봉)
   const callBackend = useCallback(
     async (endpoint: string, body?: any, method: "GET" | "POST" | "PUT" = "POST") => {
       const init: RequestInit = {
         method,
-        credentials: "include", // ★ 쿠키 동봉
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
       };
       if (method !== "GET" && body !== undefined) init.body = JSON.stringify(body);
@@ -186,41 +205,75 @@ export function useSpotifyPlayer() {
   );
 
   const transferToThisDevice = useCallback(async () => {
-    if (!deviceIdRef.current) return;
-    await callBackend("/api/spotify/transfer", {
-      device_id: deviceIdRef.current,
-      play: true,
-    }, "PUT");
+    if (!deviceIdRef.current || busyRef.current) return;
+    busyRef.current = true;
+    try {
+      await callBackend("/api/spotify/transfer", {
+        device_id: deviceIdRef.current,
+        play: true,
+      }, "PUT");
+    } finally {
+      busyRef.current = false;
+    }
   }, [callBackend]);
 
   const playUris = useCallback(
     async (uris: string[]) => {
-      if (!ready || !deviceIdRef.current) return;
-      await activate();
-      await transferToThisDevice();
-      await callBackend(
-        "/api/spotify/play",
-        { device_id: deviceIdRef.current, uris, position_ms: 0 },
-        "PUT"
-      );
+      if (!ready || !deviceIdRef.current || busyRef.current) return;
+      busyRef.current = true;
+      try {
+        await activate();
+        await transferToThisDevice();
+        await callBackend(
+          "/api/spotify/play",
+          { device_id: deviceIdRef.current, uris, position_ms: 0 },
+          "PUT"
+        );
+      } finally {
+        busyRef.current = false;
+      }
     },
     [ready, activate, transferToThisDevice, callBackend]
   );
 
   const resume = useCallback(async () => {
-    await callBackend("/api/spotify/play", { device_id: deviceIdRef.current }, "PUT");
+    if (busyRef.current) return;
+    busyRef.current = true;
+    try {
+      await callBackend("/api/spotify/play", { device_id: deviceIdRef.current }, "PUT");
+    } finally {
+      busyRef.current = false;
+    }
   }, [callBackend]);
 
   const pause = useCallback(async () => {
-    await callBackend("/api/spotify/pause", {}, "PUT");
+    if (busyRef.current) return;
+    busyRef.current = true;
+    try {
+      await callBackend("/api/spotify/pause", {}, "PUT");
+    } finally {
+      busyRef.current = false;
+    }
   }, [callBackend]);
 
   const next = useCallback(async () => {
-    await callBackend("/api/spotify/next", {}, "POST");
+    if (busyRef.current) return;
+    busyRef.current = true;
+    try {
+      await callBackend("/api/spotify/next", {}, "POST");
+    } finally {
+      busyRef.current = false;
+    }
   }, [callBackend]);
 
   const prev = useCallback(async () => {
-    await callBackend("/api/spotify/previous", {}, "POST");
+    if (busyRef.current) return;
+    busyRef.current = true;
+    try {
+      await callBackend("/api/spotify/previous", {}, "POST");
+    } finally {
+      busyRef.current = false;
+    }
   }, [callBackend]);
 
   const seek = useCallback(async (positionMs: number) => {
