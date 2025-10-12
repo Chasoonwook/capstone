@@ -30,7 +30,7 @@ const buildPhotoSrc = (photoId?: string | null) => {
   return `${API_BASE}/api/photos/${id}/binary`
 }
 
-// 여러 응답 포맷을 안전하게 표준화
+// 여러 응답 포맷 표준화
 const normalizeTrack = (raw: any, idx: number): Track | null => {
   const title = raw?.title ?? raw?.music_title ?? raw?.name ?? null
   const artist = raw?.artist ?? raw?.music_artist ?? raw?.singer ?? "Unknown"
@@ -61,7 +61,7 @@ export default function RecommendClient() {
   const [photoId, setPhotoId] = useState<string | null>(null)
   useEffect(() => {
     if (typeof window === "undefined") return
-    const qs = new URLSearchParams(window.location.search) // ← 이름 변경(섀도잉 방지)
+    const qs = new URLSearchParams(window.location.search)
     const id = qs.get("photoId") || qs.get("photoID") || qs.get("id")
     setPhotoId(id)
   }, [])
@@ -87,12 +87,16 @@ export default function RecommendClient() {
   const [likedTracks, setLikedTracks] = useState<Set<string | number>>(new Set())
   const [dislikedTracks, setDislikedTracks] = useState<Set<string | number>>(new Set())
 
+  // 슬라이더 드래그 상태(시크)
+  const [seeking, setSeeking] = useState(false)
+  const [seekValue, setSeekValue] = useState(0)
+
   const audioRef = useRef<HTMLAudioElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const currentTrack = playlist[currentTrackIndex]
 
-  // ▶︎ 플레이어 복귀용 현재 경로 저장
+  // 플레이어 복귀용 경로 저장
   useEffect(() => {
     if (typeof window !== "undefined") {
       const route = `${window.location.pathname}${window.location.search}`
@@ -100,7 +104,7 @@ export default function RecommendClient() {
     }
   }, [])
 
-  // ▶︎ 백엔드에서 추천리스트 가져오기
+  // 추천리스트 로드
   useEffect(() => {
     const fetchPlaylist = async () => {
       setLoading(true)
@@ -108,7 +112,7 @@ export default function RecommendClient() {
       try {
         const pid = photoId || ""
         const url = `${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(pid)}`
-        const res = await fetch(url, { credentials: "include" }) // 쿠키 동봉(보강용)
+        const res = await fetch(url, { credentials: "include" })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const data: any = await res.json()
 
@@ -136,12 +140,12 @@ export default function RecommendClient() {
     if (photoId !== null) void fetchPlaylist()
   }, [photoId])
 
-  // 트랙 로드: Spotify면 SDK로, 아니면 <audio>로
+  // 트랙 로드: Spotify면 SDK, 아니면 <audio>
   const loadCurrentTrack = useCallback(
     async (autoplay = false) => {
       if (!currentTrack) return
 
-      // ★ Spotify 트랙: SDK 재생
+      // Spotify 트랙
       if (currentTrack.spotify_track_id) {
         setDuration(sp.state.duration ? Math.floor(sp.state.duration / 1000) : (currentTrack.duration || 0))
         if (autoplay && sp.ready) {
@@ -180,13 +184,13 @@ export default function RecommendClient() {
     [currentTrack, sp.ready, sp.state.duration, sp.playUris],
   )
 
-  // 인덱스 바뀔 때 자동 재생
+  // 인덱스 변경 시 자동 재생
   useEffect(() => {
     if (currentTrack) void loadCurrentTrack(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTrackIndex])
 
-  // 진행/종료/에러 (오디오는 미리듣기일 때만 의미)
+  // 오디오 이벤트(미리듣기용)
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
@@ -206,16 +210,14 @@ export default function RecommendClient() {
     }
   }, [])
 
-  // 컨트롤
+  // 플레이/일시정지
   const togglePlay = async () => {
     const t = playlist[currentTrackIndex]
     if (!t) return
-    // Spotify 분기
     if (t.spotify_track_id) {
       if (isPlaying) { await sp.pause(); setIsPlaying(false); return }
       await sp.resume(); setIsPlaying(true); return
     }
-    // 미리듣기 분기
     const audio = audioRef.current
     if (!audio) return
     if (isPlaying) {
@@ -231,7 +233,7 @@ export default function RecommendClient() {
     }
   }
 
-  // 우리 플레이리스트 기준으로 이전/다음 이동 + Spotify라면 playUris 호출
+  // 인덱스로 이동(Spotify는 새 트랙 playUris)
   const goToIndex = async (nextIndex: number) => {
     if (nextIndex < 0 || nextIndex >= playlist.length) return
     setCurrentTrackIndex(nextIndex)
@@ -257,17 +259,30 @@ export default function RecommendClient() {
     void goToIndex(next)
   }
 
-  const handleSeek = (value: number[]) => {
-    const v = Math.min(Math.max(value[0], 0), (duration || 0))
+  // 시크: 드래그 중/커밋 분리
+  const isSp = !!playlist[currentTrackIndex]?.spotify_track_id
+  const curSec = isSp ? Math.floor((sp.state.position || 0) / 1000) : currentTime
+  const durSec = isSp ? Math.floor((sp.state.duration || 0) / 1000) : duration
+
+  const onSeekChange = (value: number[]) => {
+    const v = Math.max(0, Math.min(value[0], durSec || 0))
+    setSeeking(true)
+    setSeekValue(v)
+  }
+
+  const onSeekCommit = async (value: number[]) => {
+    const v = Math.max(0, Math.min(value[0], durSec || 0))
     const t = playlist[currentTrackIndex]
     if (t?.spotify_track_id) {
-      sp.seek(v * 1000)
-      return
+      await sp.seek(v * 1000) // ms
+    } else {
+      const audio = audioRef.current
+      if (audio) {
+        audio.currentTime = v // s
+        setCurrentTime(v)
+      }
     }
-    const audio = audioRef.current
-    if (!audio) return
-    audio.currentTime = v
-    setCurrentTime(v)
+    setTimeout(() => setSeeking(false), 150)
   }
 
   const formatTime = (s: number) => {
@@ -320,11 +335,6 @@ export default function RecommendClient() {
   }
 
   const artUrl = analyzedPhotoUrl || currentTrack?.coverUrl || "/placeholder.svg"
-
-  // 현재 표시에 사용할 시간/길이(Spotify 우선)
-  const isSp = !!playlist[currentTrackIndex]?.spotify_track_id
-  const curSec = isSp ? Math.floor((sp.state.position || 0) / 1000) : currentTime
-  const durSec = isSp ? Math.floor((sp.state.duration || 0) / 1000) : duration
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-black via-neutral-900 to-black flex items-center justify-center p-4">
@@ -421,15 +431,16 @@ export default function RecommendClient() {
           {/* 진행 바 */}
           <div className="mb-6">
             <Slider
-              value={[curSec]}
+              value={[seeking ? seekValue : curSec]}
               max={durSec || 0}
               step={1}
-              onValueChange={handleSeek}
+              onValueChange={onSeekChange}    // 드래그 중
+              onValueCommit={onSeekCommit}    // 드롭 시 실제 이동
               className="mb-2"
             />
             <div className="flex justify-between text-sm text-white/60">
-              <span>{formatTime(curSec)}</span>
-              <span>{`-${formatTime(Math.max(durSec - curSec, 0))}`}</span>
+              <span>{formatTime(seeking ? seekValue : curSec)}</span>
+              <span>{`-${formatTime(Math.max(durSec - (seeking ? seekValue : curSec), 0))}`}</span>
             </div>
           </div>
 
@@ -504,7 +515,7 @@ export default function RecommendClient() {
         <audio ref={audioRef} preload="metadata" />
       </div>
 
-      {/* 재생목록 시트: 백엔드 추천 리스트 표시 */}
+      {/* 재생목록 시트 */}
       {showPlaylist && (
         <div className="fixed inset-0 bg-black/50 z-40" onClick={() => setShowPlaylist(false)} />
       )}
@@ -556,7 +567,7 @@ export default function RecommendClient() {
                     >
                       {track.title}
                     </p>
-                  <p className="text-sm text-white/60 truncate">
+                    <p className="text-sm text-white/60 truncate">
                       {track.artist}
                       <span className="ml-2 text-xs text-white/50">
                         {track.spotify_track_id ? "Spotify" : (track.audioUrl ? "Preview" : "—")}
