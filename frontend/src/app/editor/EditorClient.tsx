@@ -37,6 +37,13 @@ export default function EditorClient() {
   const [saving, setSaving] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
+  // SearchAndRequest에서 저장한 곡 메타가 필요하면 읽어서 UI에 사용할 수 있음
+  // const [songMeta, setSongMeta] = useState<{title:string|null;artist:string|null;cover:string|null}|null>(null)
+  // useEffect(() => {
+  //   const raw = sessionStorage.getItem("editorSong")
+  //   if (raw) { try { const s = JSON.parse(raw); setSongMeta({title:s.title, artist:s.artist, cover:s.cover}); } catch {} }
+  // }, [])
+
   const candidates = useMemo(() => {
     if (!photoId) return []
     return [`${API_BASE}/api/photos/${photoId}/binary`, `${API_BASE}/photos/${photoId}/binary`]
@@ -91,7 +98,8 @@ export default function EditorClient() {
         }
       }
 
-      const selected_from = selectedFromParam === "preferred" ? null : selectedFromParam === "sub" ? "sub" : "main"
+      const selected_from =
+        selectedFromParam === "preferred" ? null : selectedFromParam === "sub" ? "sub" : "main"
 
       const payload = {
         user_id: me?.id ?? undefined,
@@ -117,9 +125,7 @@ export default function EditorClient() {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json", ...authHeader },
-          body: JSON.stringify({
-            ...payload,
-          }),
+          body: JSON.stringify({ ...payload }),
         })
         if (!res.ok) {
           const errText = await res.text().catch(() => "")
@@ -182,11 +188,9 @@ export default function EditorClient() {
       </header>
 
       <main className="max-w-4xl mx-auto px-4 py-8">
-        {!isEditing && (
-          <div className="text-center mb-6">
-            <p className="text-muted-foreground text-sm">추억을 그대로 저장하거나 꾸며서 저장할 수 있어요</p>
-          </div>
-        )}
+        <div className="text-center mb-6">
+          <p className="text-muted-foreground text-sm">추억을 그대로 저장하거나 꾸며서 저장할 수 있어요</p>
+        </div>
 
         <div className="bg-card rounded-2xl shadow-lg overflow-hidden mb-6 border border-border">
           <div className="relative w-full bg-muted flex items-center justify-center min-h-[400px] max-h-[70vh]">
@@ -211,45 +215,37 @@ export default function EditorClient() {
           </div>
         )}
 
-        {!isEditing && (
-          <div className="flex flex-col sm:flex-row gap-3 justify-center">
-            <Button
-              variant="outline"
-              onClick={handleCancel}
-              disabled={saving}
-              className="sm:w-auto w-full bg-transparent"
-            >
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              돌아가기
-            </Button>
+        <div className="flex flex-col sm:flex-row gap-3 justify-center">
+          <Button
+            variant="outline"
+            onClick={handleCancel}
+            disabled={saving}
+            className="sm:w-auto w-full bg-transparent"
+          >
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            돌아가기
+          </Button>
 
-            <Button
-              variant="outline"
-              onClick={handleSaveAsIs}
-              disabled={saving}
-              className="sm:w-auto w-full border-primary/20 hover:bg-primary/5 bg-transparent"
-            >
-              <Save className="w-4 h-4 mr-2" />
-              {saving ? "저장 중…" : "바로 저장하기"}
-            </Button>
+          <Button
+            variant="outline"
+            onClick={handleSaveAsIs}
+            disabled={saving}
+            className="sm:w-auto w-full border-primary/20 hover:bg-primary/5 bg-transparent"
+          >
+            <Save className="w-4 h-4 mr-2" />
+            {saving ? "저장 중…" : "바로 저장하기"}
+          </Button>
 
-            <Button
-              onClick={handleGoEdit}
-              disabled={saving}
-              className="sm:w-auto w-full bg-primary hover:bg-primary/90"
-            >
-              <Sparkles className="w-4 h-4 mr-2" />
-              꾸미기
-            </Button>
-          </div>
-        )}
-      </main>
-
-      {isEditing && (
-        <div className="max-w-4xl mx-auto px-4 pb-8">
-          {/* <PhotoEditorCanvas photoId={Number(photoId)} historyId={Number(historyId)} /> */}
+          <Button
+            onClick={handleGoEdit}
+            disabled={saving}
+            className="sm:w-auto w-full bg-primary hover:bg-primary/90"
+          >
+            <Sparkles className="w-4 h-4 mr-2" />
+            꾸미기
+          </Button>
         </div>
-      )}
+      </main>
     </div>
   )
 }
