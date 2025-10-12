@@ -23,16 +23,15 @@ import {
 type SpotifyImage = { url: string; height: number; width: number }
 type SpotifySearchItem =
   | { id?: string; name?: string; album?: { id?: string; name?: string; images?: SpotifyImage[] } } // Spotify 원형
-  | { trackId?: string; title?: string; artist?: string; albumImage?: string | null }               // 너의 백엔드 형태
-
+  | { trackId?: string; title?: string; artist?: string; albumImage?: string | null }               // 백엔드 축약형
 type SpotifySearchResponse = { items: SpotifySearchItem[]; total?: number }
+
 type ArtCache = Record<string, string | null>
 
 type Props = {
   musics?: MusicItem[]
   loading?: boolean
   error?: string | null
-  /** 헤더용으로 더 길게 쓸 때 */
   size?: "normal" | "wide"
   noOuterMargin?: boolean
 }
@@ -52,6 +51,14 @@ const useIsNarrow = () => {
 /** 캐시 키: 제목/가수 소문자+trim 정규화 */
 const keyOf = (m: MusicItem) =>
   `${(m.title ?? "").trim().toLowerCase()} - ${(m.artist ?? "").trim().toLowerCase()}`
+
+/** 에디터에서 사용할 곡 메타 */
+type EditorSong = {
+  id: number | string
+  title: string | null
+  artist: string | null
+  cover: string | null
+}
 
 export default function SearchAndRequest({
   musics,
@@ -100,12 +107,9 @@ export default function SearchAndRequest({
 
   useEffect(() => {
     if (results.length === 0) return
-
-    // 아직 캐시에 없는 키만 추출
     const needMusics = results.filter((m) => !(keyOf(m) in artCache))
     if (needMusics.length === 0) return
 
-    // 이전 요청 중단
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
@@ -113,19 +117,18 @@ export default function SearchAndRequest({
     async function loadArts() {
       setArtLoading(true)
       try {
-        // 과도한 호출 방지: 상위 n개만 시도(필요 시 숫자 조정)
         const targets = needMusics.slice(0, 12)
         const tasks = targets.map(async (m) => {
           const key = keyOf(m)
-          // 방어: 캐시 재확인
           if (key in artCache) return { key, url: artCache[key] }
 
           const title = (m.title ?? "").trim()
           const artist = (m.artist ?? "").trim()
           if (!title && !artist) return { key, url: null }
 
-          // ✅ 프론트 라우트 강제 (API_BASE 사용 안 함)
-          const url = `/api/spotify/search?title=${encodeURIComponent(m.title ?? "")}&artist=${encodeURIComponent(m.artist ?? "")}&limit=1`
+          const url = `/api/spotify/search?title=${encodeURIComponent(title)}&artist=${encodeURIComponent(
+            artist,
+          )}&limit=1`
 
           try {
             const r = await fetch(url, { signal: controller.signal, cache: "no-store" })
@@ -164,6 +167,92 @@ export default function SearchAndRequest({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [results])
 
+  /* ── 메인과 동일한 업로드 유틸 ─────────────────────────── */
+  async function uploadPhotoToBackend(file: File): Promise<{ photoId: string } | null> {
+    const form = new FormData()
+    form.append("file", file)
+    const uid = localStorage.getItem("uid")
+    if (uid) form.append("userId", uid)
+
+    const url = `${API_BASE}/api/photos/analyze`
+    try {
+      const res = await fetch(url, { method: "POST", body: form })
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "")
+        console.error("[upload] 실패:", res.status, txt)
+        return null
+      }
+      const json = (await res.json()) as { photoId?: string | number }
+      const photoId = json?.photoId != null ? String(json.photoId) : null
+      if (!photoId) {
+        console.error("[upload] 응답에 photoId 없음:", json)
+        return null
+      }
+      return { photoId }
+    } catch (e) {
+      console.error("[upload] 요청 오류:", e)
+      return null
+    }
+  }
+
+  /* ── 사진 선택 → 서버 업로드 → 에디터 이동 ─────────────── */
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const pendingMusicRef = useRef<MusicItem | null>(null)
+
+  const onPickClick = (m: MusicItem) => {
+    pendingMusicRef.current = m
+    fileInputRef.current?.click()
+  }
+
+  const onFileChosen: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const m = pendingMusicRef.current
+    pendingMusicRef.current = null
+    e.currentTarget.value = "" // 같은 파일 다시 선택 가능하게 리셋
+
+    try {
+      if (file.size > 10 * 1024 * 1024) {
+        alert("이미지 용량이 큽니다. 10MB 이하로 업로드해 주세요.")
+        return
+      }
+      const uid = localStorage.getItem("uid")
+      if (!uid) {
+        alert("로그인이 필요합니다.")
+        return
+      }
+
+      // 1) 서버 업로드
+      const uploaded = await uploadPhotoToBackend(file)
+      if (!uploaded?.photoId) {
+        alert("사진 업로드에 실패했습니다.")
+        return
+      }
+
+      // 2) 선택한 노래 메타를 에디터용으로 저장
+      if (m) {
+        const key = keyOf(m)
+        const songPayload: EditorSong = {
+          id: m.music_id,
+          title: m.title ?? null,
+          artist: m.artist ?? null,
+          cover: artCache[key] ?? null,
+        }
+        sessionStorage.setItem("editorSong", JSON.stringify(songPayload))
+      }
+
+      // 3) 이동 (photoId & musicId 쿼리 전달)
+      const q = new URLSearchParams()
+      q.set("photoId", uploaded.photoId)
+      if (m?.music_id != null) q.set("musicId", String(m.music_id))
+      q.set("selected_from", "main")
+      router.push(`/editor?${q.toString()}`)
+    } catch (err) {
+      console.error("[editor] 사진 업로드/이동 실패", err)
+      alert("사진 업로드 중 오류가 발생했습니다.")
+    }
+  }
+
   /* ── 노래 추가 요청 모달 ───────────────────────────────── */
   const [open, setOpen] = useState(false)
   const [title, setTitle] = useState("")
@@ -201,20 +290,16 @@ export default function SearchAndRequest({
     }
   }
 
-  /* ── 오버레이 열기/닫기 ─────────────────────────────────── */
+  /* ── 오버레이 열기/닫기 & ESC ──────────────────────────── */
   const openOverlay = () => {
-    inlineInputRef.current?.blur() // 인라인 포커스 제거
-    setOverlayOpen(true) // ✅ 항상 오버레이로
+    inlineInputRef.current?.blur()
+    setOverlayOpen(true)
     setTimeout(() => overlayInputRef.current?.focus(), 0)
   }
-
   const closeOverlay = () => {
     setOverlayOpen(false)
-    // 재오픈 방지: 인라인 인풋 포커스 주지 않고 blur만
     requestAnimationFrame(() => inlineInputRef.current?.blur())
   }
-
-  // ESC로 닫기
   useEffect(() => {
     if (!overlayOpen) return
     const onKey = (e: KeyboardEvent) => {
@@ -225,7 +310,6 @@ export default function SearchAndRequest({
   }, [overlayOpen])
 
   /* ── UI ─────────────────────────────────────────────────── */
-
   const containerMax = size === "wide" ? "max-w-5xl" : "max-w-xl"
   const resultsMax = size === "wide" ? "max-w-4xl" : "max-w-2xl"
 
@@ -233,12 +317,10 @@ export default function SearchAndRequest({
   const InlineBlock = (
     <>
       <div className={`${containerMax} w-full mx-auto relative`}>
-        {/* 🔹 돋보기 아이콘 */}
         <Search
           aria-hidden
           className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400 z-10 pointer-events-none"
         />
-        {/* 🔹 인풋은 z-0로 */}
         <Input
           id="global-search-input"
           ref={inlineInputRef}
@@ -247,7 +329,6 @@ export default function SearchAndRequest({
           readOnly
           onFocus={openOverlay}
           onClick={openOverlay}
-          /* ⬇️ 텍스트/플레이스홀더 색을 명시적으로 지정 */
           className="z-0 pl-12 pr-4 py-4 text-base border-gray-200 focus:border-purple-300 rounded-2xl bg-white/80 backdrop-blur-sm cursor-pointer
                      text-gray-900 placeholder:text-gray-400 caret-primary
                      dark:bg-neutral-900/80 dark:text-gray-100 dark:placeholder:text-gray-500"
@@ -260,15 +341,11 @@ export default function SearchAndRequest({
   const ResultList = (
     <div className={`${resultsMax} w-full mx-auto mt-6`}>
       {loading ? (
-        <div className="text-center text-gray-500 py-8 bg-white/70 rounded-xl border">
-          음악 목록 불러오는 중…
-        </div>
+        <div className="text-center text-gray-500 py-8 bg-white/70 rounded-xl border">음악 목록 불러오는 중…</div>
       ) : error ? (
         <div className="text-center text-red-500 py-8 bg-white/70 rounded-xl border">{error}</div>
       ) : q.trim().length === 0 ? (
-        <div className="text-center text-gray-400 py-4 text-sm">
-          검색어를 입력하면 결과가 표시됩니다.
-        </div>
+        <div className="text-center text-gray-400 py-4 text-sm">검색어를 입력하면 결과가 표시됩니다.</div>
       ) : results.length === 0 ? (
         <div className="max-w-xl mx-auto bg-white/80 rounded-2xl border p-6 text-center">
           <p className="text-sm text-gray-700">검색 결과가 없습니다. 원하시는 노래를 요청해 주세요.</p>
@@ -291,7 +368,6 @@ export default function SearchAndRequest({
                       width={48}
                       height={48}
                       className="rounded-md flex-shrink-0"
-                      // 이미지 로드 실패 시 회색박스로 대체
                       onError={(e) => {
                         const el = e.currentTarget as HTMLImageElement
                         el.style.display = "none"
@@ -309,7 +385,13 @@ export default function SearchAndRequest({
 
                 <div className="flex items-center gap-2">
                   {artLoading && <span className="text-xs text-gray-400">이미지 로딩…</span>}
-                  <Button variant="ghost" size="sm" onClick={() => console.log("[pick]", m.music_id)}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="border-gray-300 text-gray-800 hover:bg-gray-100 hover:text-gray-900
+                               dark:border-gray-600 dark:text-gray-100 dark:hover:bg-neutral-800"
+                    onClick={() => onPickClick(m)}
+                  >
                     선택
                   </Button>
                 </div>
@@ -327,7 +409,7 @@ export default function SearchAndRequest({
       {/* 배경 딤 */}
       <div className="absolute inset-0 bg-black/50" onClick={closeOverlay} />
 
-      {/* 패널: 상단에 빈공간 없이 붙이기 */}
+      {/* 패널 */}
       <div className="absolute inset-x-0 top-0 w-full bg-background rounded-none shadow-2xl border-b border-border overflow-hidden">
         {/* 헤더 */}
         <div className="flex items-center justify-between px-3 py-2 border-b">
@@ -347,7 +429,6 @@ export default function SearchAndRequest({
               placeholder="노래 제목 또는 가수 검색"
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              /* ⬇️ 텍스트/플레이스홀더 색을 명시적으로 지정 */
               className="pl-10 pr-3 py-3 text-base border-gray-200 focus:border-purple-300 rounded-xl bg-white/80
                          text-gray-900 placeholder:text-gray-400 caret-primary
                          dark:bg-neutral-900/80 dark:text-gray-100 dark:placeholder:text-gray-500"
@@ -372,11 +453,17 @@ export default function SearchAndRequest({
 
   return (
     <section className={noOuterMargin ? "mb-0" : "mb-16"}>
-      {/* 인라인: 검색창만 노출 */}
       {InlineBlock}
-
-      {/* 오버레이 */}
       {Overlay}
+
+      {/* 숨겨진 파일 입력기: 노래 선택 시 사진 선택용 */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={onFileChosen}
+      />
 
       {/* 노래 추가 요청 모달 */}
       <Dialog
@@ -416,9 +503,7 @@ export default function SearchAndRequest({
             ) : title.trim() && artist.trim() ? (
               typeof count === "number" ? (
                 count > 0 ? (
-                  <span>
-                    현재 <b>{count}</b>명이 요청 중이에요.
-                  </span>
+                  <span>현재 <b>{count}</b>명이 요청 중이에요.</span>
                 ) : (
                   <span>아직 요청이 없습니다. 첫 요청을 남겨보세요!</span>
                 )
@@ -431,9 +516,7 @@ export default function SearchAndRequest({
           </div>
 
           <DialogFooter className="mt-4">
-            <Button variant="outline" onClick={() => setOpen(false)}>
-              닫기
-            </Button>
+            <Button variant="outline" onClick={() => setOpen(false)}>닫기</Button>
             <Button onClick={submit} disabled={submitting}>
               {submitting ? "요청 중…" : "요청 보내기"}
             </Button>
