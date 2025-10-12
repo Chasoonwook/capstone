@@ -1,16 +1,15 @@
 // routes/spotify.js
+// Spotify Web Playback + REST 프록시 라우터 (에러 투명화 버전)
+
 const express = require("express");
 const axios = require("axios");
 const crypto = require("crypto");
 
 const router = express.Router();
 
-/* ───────────────────────────────────────────────────────────
-   ENV
-   ─────────────────────────────────────────────────────────── */
 const CLIENT_ID     = process.env.SPOTIFY_CLIENT_ID;
 const CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
-const REDIRECT_URI  = process.env.SPOTIFY_REDIRECT_URI; // e.g. https://<BACKEND>/api/spotify/callback
+const REDIRECT_URI  = process.env.SPOTIFY_REDIRECT_URI; // e.g. https://capstone-app-back.onrender.com/api/spotify/callback
 const FRONT_BASE    = process.env.FRONT_BASE || "https://capstone-front-tau.vercel.app";
 
 const CK_ACCESS  = "sp_access";
@@ -25,19 +24,19 @@ const SCOPE = [
 ].join(" ");
 
 /* ───────────────────────────────────────────────────────────
-   axios (업스트림 지연 방어)
+   axios 인스턴스 (업스트림 지연 방어)
    ─────────────────────────────────────────────────────────── */
-const axiosSpotify = axios.create({ timeout: 10000 });
+const axiosSpotify = axios.create({
+  timeout: 10000, // 10s
+});
 
 /* ───────────────────────────────────────────────────────────
-   /me 캐시 & 중복요청 합치기
+   /me 호출 캐시 & 중복요청 합치기
    ─────────────────────────────────────────────────────────── */
 const meCache = new Map(); // key: accessToken, val: { ts, profile, pending? }
 const ME_TTL_MS = 60 * 1000;
 
-/* ───────────────────────────────────────────────────────────
-   utils
-   ─────────────────────────────────────────────────────────── */
+/* ── utils */
 const b64url = (bufOrStr) =>
   Buffer.from(bufOrStr).toString("base64").replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"");
 
@@ -49,6 +48,7 @@ const b64urlToStr = (s="") => {
 
 const safeReturnTo = (val) => (typeof val === "string" && /^\/(?!\/)/.test(val) ? val : "/");
 
+/** 공통: 액세스/리프레시 쿠키 쓰기/지우기 */
 function setAccessCookie(res, token, expiresInSec) {
   if (!token) return;
   res.cookie(CK_ACCESS, token, {
@@ -69,6 +69,7 @@ function clearSpotifyCookies(res) {
   res.clearCookie(CK_REFRESH, opt);
 }
 
+/** 토큰 리프레시 */
 async function refreshAccessToken(refreshToken) {
   try {
     const body = new URLSearchParams({
@@ -88,7 +89,18 @@ async function refreshAccessToken(refreshToken) {
   }
 }
 
-// ★ 공통: 쿠키 access로 호출, 실패 시 refresh로 갱신해서 재시도
+/** 에러 투명화: axios 에러를 상태/바디 그대로 전달 */
+function formatAxiosErr(e) {
+  const status = e?.response?.status || 500;
+  const data = e?.response?.data || { error: e.message || "unknown_error" };
+  console.error("[spotify api error]", status, data);
+  return { status, data };
+}
+
+/**
+ * 공통 호출: 쿠키 access로 호출 → 401/403이면 refresh로 갱신 후 1회 재시도
+ * 실패 시, 실제 Spotify의 status/data를 그대로 반환(throw)
+ */
 async function callSpotifyWithCookies(req, res, method, url, data, params) {
   let access = req.cookies?.[CK_ACCESS] || null;
   const refresh = req.cookies?.[CK_REFRESH] || null;
@@ -105,8 +117,10 @@ async function callSpotifyWithCookies(req, res, method, url, data, params) {
     return r;
   } catch (e1) {
     const status = e1?.response?.status;
-    if (!refresh || (status !== 401 && status !== 403)) throw e1;
-
+    if (!refresh || (status !== 401 && status !== 403)) {
+      throw e1;
+    }
+    // refresh
     const ref = await refreshAccessToken(refresh);
     if (!ref?.access_token) throw e1;
 
@@ -117,28 +131,7 @@ async function callSpotifyWithCookies(req, res, method, url, data, params) {
 }
 
 /* ───────────────────────────────────────────────────────────
-   디버그 엔드포인트 (존재 확인용)
-   ─────────────────────────────────────────────────────────── */
-router.get("/__ping", (_req, res) => {
-  res.json({ ok: true, from: "routes/spotify.js" });
-});
-
-router.get("/__routes", (_req, res) => {
-  try {
-    const list = (router.stack || [])
-      .filter((l) => l.route && l.route.path)
-      .map((l) => ({
-        path: l.route.path,
-        methods: Object.keys(l.route.methods || {}),
-      }));
-    res.json({ ok: true, base: "/api/spotify", routes: list });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e && e.message || e) });
-  }
-});
-
-/* ───────────────────────────────────────────────────────────
-   로그인 시작 (PKCE)
+   로그인 시작
    ─────────────────────────────────────────────────────────── */
 router.get(["/login", "/authorize"], (req, res) => {
   const returnTo = safeReturnTo(req.query.return);
@@ -216,9 +209,11 @@ router.get("/me", async (req, res) => {
     const now = Date.now();
     const cached = meCache.get(access);
 
+    // 캐시 히트
     if (cached && cached.profile && now - cached.ts < ME_TTL_MS) {
       return res.json({ connected: true, profile: cached.profile, cached: true });
     }
+    // 중복 요청 합치기
     if (cached?.pending) {
       await cached.pending;
       const again = meCache.get(access);
@@ -250,24 +245,28 @@ router.get("/me", async (req, res) => {
 });
 
 /* ───────────────────────────────────────────────────────────
-   재생 관련
+   재생 관련 (에러 투명화)
    ─────────────────────────────────────────────────────────── */
 router.get("/devices", async (req, res) => {
   try {
     const r = await callSpotifyWithCookies(req, res, "GET", "https://api.spotify.com/v1/me/player/devices");
     res.json(r.data);
   } catch (e) {
-    res.status(e?.response?.status || 500).json(e?.response?.data || {});
+    const { status, data } = formatAxiosErr(e);
+    res.status(status).json(data);
   }
 });
 
 router.put("/transfer", async (req, res) => {
   try {
-    await callSpotifyWithCookies(req, res, "PUT", "https://api.spotify.com/v1/me/player",
-      { device_ids: [req.body?.device_id], play: !!req.body?.play });
+    await callSpotifyWithCookies(
+      req, res, "PUT", "https://api.spotify.com/v1/me/player",
+      { device_ids: [req.body?.device_id], play: !!req.body?.play }
+    );
     res.json({ ok: true });
   } catch (e) {
-    res.status(e?.response?.status || 500).json(e?.response?.data || {});
+    const { status, data } = formatAxiosErr(e);
+    res.status(status).json(data);
   }
 });
 
@@ -278,7 +277,8 @@ router.put("/play", async (req, res) => {
     await callSpotifyWithCookies(req, res, "PUT", url.toString(), req.body);
     res.json({ ok: true });
   } catch (e) {
-    res.status(e?.response?.status || 500).json(e?.response?.data || {});
+    const { status, data } = formatAxiosErr(e);
+    res.status(status).json(data);
   }
 });
 
@@ -287,7 +287,8 @@ router.put("/pause", async (req, res) => {
     await callSpotifyWithCookies(req, res, "PUT", "https://api.spotify.com/v1/me/player/pause", {});
     res.json({ ok: true });
   } catch (e) {
-    res.status(e?.response?.status || 500).json(e?.response?.data || {});
+    const { status, data } = formatAxiosErr(e);
+    res.status(status).json(data);
   }
 });
 
@@ -296,7 +297,8 @@ router.post("/next", async (req, res) => {
     await callSpotifyWithCookies(req, res, "POST", "https://api.spotify.com/v1/me/player/next", {});
     res.json({ ok: true });
   } catch (e) {
-    res.status(e?.response?.status || 500).json(e?.response?.data || {});
+    const { status, data } = formatAxiosErr(e);
+    res.status(status).json(data);
   }
 });
 
@@ -305,12 +307,13 @@ router.post("/previous", async (req, res) => {
     await callSpotifyWithCookies(req, res, "POST", "https://api.spotify.com/v1/me/player/previous", {});
     res.json({ ok: true });
   } catch (e) {
-    res.status(e?.response?.status || 500).json(e?.response?.data || {});
+    const { status, data } = formatAxiosErr(e);
+    res.status(status).json(data);
   }
 });
 
 /* ───────────────────────────────────────────────────────────
-   검색 (프론트 util / 추천 보강에서 사용)
+   검색 (프론트 util에서 사용) — 쿠키 기반 인증
    ─────────────────────────────────────────────────────────── */
 router.get("/search", async (req, res) => {
   try {
@@ -325,7 +328,8 @@ router.get("/search", async (req, res) => {
     );
     res.json(r.data);
   } catch (e) {
-    res.status(e?.response?.status || 500).json(e?.response?.data || { error: "search_failed" });
+    const { status, data } = formatAxiosErr(e);
+    res.status(status).json(data);
   }
 });
 
