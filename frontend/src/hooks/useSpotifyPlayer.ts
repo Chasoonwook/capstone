@@ -1,18 +1,11 @@
 // src/hooks/useSpotifyPlayer.ts
 "use client";
-
 import { useEffect, useRef, useState, useCallback } from "react";
 import { API_BASE } from "@/lib/api";
 
-/** ─ Types ─ */
 type ReadyEvent = { device_id: string };
 type ErrorEvent = { message: string };
-type WebPlaybackStateLite = {
-  position: number;
-  duration: number;
-  paused: boolean;
-  trackUri: string | null;
-};
+type WebPlaybackStateLite = { position: number; duration: number; paused: boolean; trackUri: string | null };
 type TokenGetter = (cb: (token: string) => void) => void;
 type PlayerOptions = { name: string; getOAuthToken: TokenGetter; volume?: number };
 type SpotifyPlayer = {
@@ -20,14 +13,7 @@ type SpotifyPlayer = {
   disconnect(): void;
   addListener(event: "ready", cb: (ev: ReadyEvent) => void): void;
   addListener(event: "not_ready", cb: (ev: ReadyEvent) => void): void;
-  addListener(
-    event:
-      | "initialization_error"
-      | "authentication_error"
-      | "account_error"
-      | "playback_error",
-    cb: (ev: ErrorEvent) => void
-  ): void;
+  addListener(event: "initialization_error" | "authentication_error" | "account_error" | "playback_error", cb: (ev: ErrorEvent) => void): void;
   addListener(event: "player_state_changed", cb: (state: any) => void): void;
   removeListener(event: string): void;
   pause(): Promise<void>;
@@ -37,21 +23,10 @@ type SpotifyPlayer = {
   seek(position_ms: number): Promise<void>;
   activateElement?: () => void | Promise<void>;
 };
+
 type SpotifyNS = { Player: new (opts: PlayerOptions) => SpotifyPlayer };
-type SpotifyWindow = Window & {
-  onSpotifyWebPlaybackSDKReady?: () => void;
-  Spotify?: SpotifyNS;
-};
+type SpotifyWindow = Window & { onSpotifyWebPlaybackSDKReady?: () => void; Spotify?: SpotifyNS };
 
-// 전역 싱글톤 캐시(페이지 전환/재마운트에도 유지)
-type G = Window & {
-  __sp_player?: SpotifyPlayer | null;
-  __sp_ready?: boolean;
-  __sp_deviceId?: string | null;
-};
-const g = (typeof window !== "undefined" ? (window as unknown as G) : ({} as G));
-
-/** ─ SDK 로딩 ─ */
 async function ensureSDK(): Promise<void> {
   const w = window as unknown as SpotifyWindow;
   if (w.Spotify?.Player) return;
@@ -68,7 +43,6 @@ async function ensureSDK(): Promise<void> {
   });
 }
 
-/** ─ 토큰: 백엔드에서 짧게 받아 메모리에만 보관 ─ */
 let memToken: { value: string; exp: number } | null = null;
 
 async function fetchAccessToken(): Promise<{ access_token: string; expires_in?: number }> {
@@ -77,7 +51,7 @@ async function fetchAccessToken(): Promise<{ access_token: string; expires_in?: 
     credentials: "include",
     headers: { "Cache-Control": "no-store" },
   });
-  if (!res.ok) throw new Error("unauthorized");
+  if (!res.ok) throw new Error(`/api/spotify/token ${res.status}`);
   return res.json();
 }
 
@@ -90,41 +64,23 @@ async function getAccessToken(): Promise<string> {
   return memToken.value;
 }
 
-/** ─ Hook 본체 ─ */
 export function useSpotifyPlayer() {
   const playerRef = useRef<SpotifyPlayer | null>(null);
   const deviceIdRef = useRef<string | null>(null);
 
-  const [ready, setReady] = useState<boolean>(!!g.__sp_ready);
-  const [deviceId, setDeviceId] = useState<string | null>(g.__sp_deviceId ?? null);
+  const [ready, setReady] = useState(false);
+  const [deviceId, setDeviceId] = useState<string | null>(null);
   const [state, setState] = useState<WebPlaybackStateLite>({
-    position: 0,
-    duration: 0,
-    paused: true,
-    trackUri: null,
+    position: 0, duration: 0, paused: true, trackUri: null,
   });
-
-  // 중복 호출 방지용
-  const busyRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
-
     (async () => {
       await ensureSDK();
-      if (cancelled) return;
-
-      // 이미 전역에 플레이어가 있으면 재사용
-      if (g.__sp_player) {
-        playerRef.current = g.__sp_player;
-        deviceIdRef.current = g.__sp_deviceId ?? null;
-        setDeviceId(g.__sp_deviceId ?? null);
-        setReady(!!g.__sp_ready);
-        return;
-      }
+      if (cancelled || playerRef.current) return;
 
       const PlayerCtor = (window as unknown as SpotifyWindow).Spotify!.Player;
-
       const player = new PlayerCtor({
         name: "PhotoMoodMusic Web Player",
         volume: 0.7,
@@ -139,26 +95,14 @@ export function useSpotifyPlayer() {
       });
 
       player.addListener("ready", (ev) => {
-        g.__sp_ready = true;
-        g.__sp_deviceId = ev.device_id;
         deviceIdRef.current = ev.device_id;
         setDeviceId(ev.device_id);
         setReady(true);
       });
-      player.addListener("not_ready", () => {
-        g.__sp_ready = false;
-        setReady(false);
-      });
-
-      player.addListener("authentication_error", ({ message }) =>
-        console.error("Auth Error:", message)
-      );
-      player.addListener("account_error", ({ message }) =>
-        console.error("Account Error:", message)
-      );
-      player.addListener("playback_error", ({ message }) =>
-        console.error("Playback Error:", message)
-      );
+      player.addListener("not_ready", () => setReady(false));
+      player.addListener("authentication_error", ({ message }) => console.error("Auth Error:", message));
+      player.addListener("account_error", ({ message }) => console.error("Account Error:", message));
+      player.addListener("playback_error", ({ message }) => console.error("Playback Error:", message));
 
       player.addListener("player_state_changed", (s: any) => {
         if (!s) return;
@@ -171,24 +115,22 @@ export function useSpotifyPlayer() {
       });
 
       await player.connect();
-      if (!cancelled) {
-        playerRef.current = player;
-        g.__sp_player = player; // 싱글톤 보관
-      }
+      if (!cancelled) playerRef.current = player;
     })();
 
     return () => {
       cancelled = true;
-      // 싱글톤 유지: disconnect() 하지 않음
-      // playerRef.current?.disconnect();
+      playerRef.current?.disconnect();
+      playerRef.current = null;
     };
   }, []);
 
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
   const activate = useCallback(async () => {
-    await playerRef.current?.activateElement?.();
+    try { await playerRef.current?.activateElement?.(); } catch {}
   }, []);
 
-  // 백엔드 호출 (항상 쿠키 동봉)
   const callBackend = useCallback(
     async (endpoint: string, body?: any, method: "GET" | "POST" | "PUT" = "POST") => {
       const init: RequestInit = {
@@ -198,99 +140,54 @@ export function useSpotifyPlayer() {
       };
       if (method !== "GET" && body !== undefined) init.body = JSON.stringify(body);
       const r = await fetch(`${API_BASE}${endpoint}`, init);
-      if (!r.ok) throw new Error(`${endpoint} failed ${r.status}`);
+      // 에러는 그대로 throw해서 상태/메시지 보이게
+      if (!r.ok) {
+        const text = await r.text().catch(() => "");
+        throw new Error(`${endpoint} ${r.status} ${text || ""}`.trim());
+      }
       return r.json().catch(() => ({}));
     },
     []
   );
 
   const transferToThisDevice = useCallback(async () => {
-    if (!deviceIdRef.current || busyRef.current) return;
-    busyRef.current = true;
-    try {
-      await callBackend("/api/spotify/transfer", {
-        device_id: deviceIdRef.current,
-        play: true,
-      }, "PUT");
-    } finally {
-      busyRef.current = false;
-    }
+    if (!deviceIdRef.current) throw new Error("no_device_id");
+    await callBackend("/api/spotify/transfer", { device_id: deviceIdRef.current, play: true }, "PUT");
+    // 전환 시간 약간 대기
+    await sleep(300);
   }, [callBackend]);
 
   const playUris = useCallback(
     async (uris: string[]) => {
-      if (!ready || !deviceIdRef.current || busyRef.current) return;
-      busyRef.current = true;
-      try {
-        await activate();
-        await transferToThisDevice();
-        await callBackend(
-          "/api/spotify/play",
-          { device_id: deviceIdRef.current, uris, position_ms: 0 },
-          "PUT"
-        );
-      } finally {
-        busyRef.current = false;
-      }
+      if (!ready || !deviceIdRef.current) throw new Error("player_not_ready");
+      await activate();              // 사용자 제스처 필요 시
+      await transferToThisDevice();  // 디바이스 전환
+      await callBackend("/api/spotify/play",
+        { device_id: deviceIdRef.current, uris, position_ms: 0 }, "PUT");
     },
     [ready, activate, transferToThisDevice, callBackend]
   );
 
   const resume = useCallback(async () => {
-    if (busyRef.current) return;
-    busyRef.current = true;
-    try {
-      await callBackend("/api/spotify/play", { device_id: deviceIdRef.current }, "PUT");
-    } finally {
-      busyRef.current = false;
-    }
+    if (!deviceIdRef.current) throw new Error("no_device_id");
+    await callBackend("/api/spotify/play", { device_id: deviceIdRef.current }, "PUT");
   }, [callBackend]);
 
   const pause = useCallback(async () => {
-    if (busyRef.current) return;
-    busyRef.current = true;
-    try {
-      await callBackend("/api/spotify/pause", {}, "PUT");
-    } finally {
-      busyRef.current = false;
-    }
+    await callBackend("/api/spotify/pause", {}, "PUT");
   }, [callBackend]);
 
   const next = useCallback(async () => {
-    if (busyRef.current) return;
-    busyRef.current = true;
-    try {
-      await callBackend("/api/spotify/next", {}, "POST");
-    } finally {
-      busyRef.current = false;
-    }
+    await callBackend("/api/spotify/next", {}, "POST");
   }, [callBackend]);
 
   const prev = useCallback(async () => {
-    if (busyRef.current) return;
-    busyRef.current = true;
-    try {
-      await callBackend("/api/spotify/previous", {}, "POST");
-    } finally {
-      busyRef.current = false;
-    }
+    await callBackend("/api/spotify/previous", {}, "POST");
   }, [callBackend]);
 
   const seek = useCallback(async (positionMs: number) => {
     await playerRef.current?.seek(Math.max(0, Math.floor(positionMs)));
   }, []);
 
-  return {
-    ready,
-    deviceId,
-    state,
-    activate,
-    transferToThisDevice,
-    playUris,
-    resume,
-    pause,
-    next,
-    prev,
-    seek,
-  };
+  return { ready, deviceId, state, activate, transferToThisDevice, playUris, resume, pause, next, prev, seek };
 }
