@@ -5,9 +5,12 @@ const crypto = require("crypto");
 
 const router = express.Router();
 
+/* ───────────────────────────────────────────────────────────
+   ENV
+   ─────────────────────────────────────────────────────────── */
 const CLIENT_ID     = process.env.SPOTIFY_CLIENT_ID;
 const CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
-const REDIRECT_URI  = process.env.SPOTIFY_REDIRECT_URI; // e.g. https://capstone-app-back.onrender.com/api/spotify/callback
+const REDIRECT_URI  = process.env.SPOTIFY_REDIRECT_URI; // e.g. https://<BACKEND>/api/spotify/callback
 const FRONT_BASE    = process.env.FRONT_BASE || "https://capstone-front-tau.vercel.app";
 
 const CK_ACCESS  = "sp_access";
@@ -22,19 +25,19 @@ const SCOPE = [
 ].join(" ");
 
 /* ───────────────────────────────────────────────────────────
-   axios 인스턴스 (업스트림 지연 방어)
+   axios (업스트림 지연 방어)
    ─────────────────────────────────────────────────────────── */
-const axiosSpotify = axios.create({
-  timeout: 10000, // 10s
-});
+const axiosSpotify = axios.create({ timeout: 10000 });
 
 /* ───────────────────────────────────────────────────────────
-   /me 호출 캐시 & 중복요청 합치기
+   /me 캐시 & 중복요청 합치기
    ─────────────────────────────────────────────────────────── */
 const meCache = new Map(); // key: accessToken, val: { ts, profile, pending? }
 const ME_TTL_MS = 60 * 1000;
 
-/* ── utils */
+/* ───────────────────────────────────────────────────────────
+   utils
+   ─────────────────────────────────────────────────────────── */
 const b64url = (bufOrStr) =>
   Buffer.from(bufOrStr).toString("base64").replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"");
 
@@ -85,7 +88,7 @@ async function refreshAccessToken(refreshToken) {
   }
 }
 
-// ★ 공통: 쿠키에서 access로 호출, 실패 시 refresh로 갱신해서 재시도
+// ★ 공통: 쿠키 access로 호출, 실패 시 refresh로 갱신해서 재시도
 async function callSpotifyWithCookies(req, res, method, url, data, params) {
   let access = req.cookies?.[CK_ACCESS] || null;
   const refresh = req.cookies?.[CK_REFRESH] || null;
@@ -114,7 +117,28 @@ async function callSpotifyWithCookies(req, res, method, url, data, params) {
 }
 
 /* ───────────────────────────────────────────────────────────
-   로그인 시작
+   디버그 엔드포인트 (존재 확인용)
+   ─────────────────────────────────────────────────────────── */
+router.get("/__ping", (_req, res) => {
+  res.json({ ok: true, from: "routes/spotify.js" });
+});
+
+router.get("/__routes", (_req, res) => {
+  try {
+    const list = (router.stack || [])
+      .filter((l) => l.route && l.route.path)
+      .map((l) => ({
+        path: l.route.path,
+        methods: Object.keys(l.route.methods || {}),
+      }));
+    res.json({ ok: true, base: "/api/spotify", routes: list });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+  }
+});
+
+/* ───────────────────────────────────────────────────────────
+   로그인 시작 (PKCE)
    ─────────────────────────────────────────────────────────── */
 router.get(["/login", "/authorize"], (req, res) => {
   const returnTo = safeReturnTo(req.query.return);
@@ -192,11 +216,9 @@ router.get("/me", async (req, res) => {
     const now = Date.now();
     const cached = meCache.get(access);
 
-    // 캐시 히트
     if (cached && cached.profile && now - cached.ts < ME_TTL_MS) {
       return res.json({ connected: true, profile: cached.profile, cached: true });
     }
-    // 중복 요청 합치기
     if (cached?.pending) {
       await cached.pending;
       const again = meCache.get(access);
@@ -205,7 +227,6 @@ router.get("/me", async (req, res) => {
       }
     }
 
-    // 실제 호출(만료 시 refresh는 callSpotifyWithCookies가 처리)
     const pending = (async () => {
       const r = await callSpotifyWithCookies(req, res, "GET", "https://api.spotify.com/v1/me");
       const profile = r.data;
@@ -223,7 +244,6 @@ router.get("/me", async (req, res) => {
     if (s === 401) return res.status(401).json({ connected: false });
     return res.status(s).json(e?.response?.data || { error: "me_failed" });
   } finally {
-    // pending 플래그 제거
     const c = meCache.get(access);
     if (c) meCache.set(access, { ts: c.ts, profile: c.profile });
   }
@@ -240,6 +260,7 @@ router.get("/devices", async (req, res) => {
     res.status(e?.response?.status || 500).json(e?.response?.data || {});
   }
 });
+
 router.put("/transfer", async (req, res) => {
   try {
     await callSpotifyWithCookies(req, res, "PUT", "https://api.spotify.com/v1/me/player",
@@ -249,6 +270,7 @@ router.put("/transfer", async (req, res) => {
     res.status(e?.response?.status || 500).json(e?.response?.data || {});
   }
 });
+
 router.put("/play", async (req, res) => {
   try {
     const url = new URL("https://api.spotify.com/v1/me/player/play");
@@ -259,6 +281,7 @@ router.put("/play", async (req, res) => {
     res.status(e?.response?.status || 500).json(e?.response?.data || {});
   }
 });
+
 router.put("/pause", async (req, res) => {
   try {
     await callSpotifyWithCookies(req, res, "PUT", "https://api.spotify.com/v1/me/player/pause", {});
@@ -267,6 +290,7 @@ router.put("/pause", async (req, res) => {
     res.status(e?.response?.status || 500).json(e?.response?.data || {});
   }
 });
+
 router.post("/next", async (req, res) => {
   try {
     await callSpotifyWithCookies(req, res, "POST", "https://api.spotify.com/v1/me/player/next", {});
@@ -275,6 +299,7 @@ router.post("/next", async (req, res) => {
     res.status(e?.response?.status || 500).json(e?.response?.data || {});
   }
 });
+
 router.post("/previous", async (req, res) => {
   try {
     await callSpotifyWithCookies(req, res, "POST", "https://api.spotify.com/v1/me/player/previous", {});
@@ -285,7 +310,7 @@ router.post("/previous", async (req, res) => {
 });
 
 /* ───────────────────────────────────────────────────────────
-   검색 (프론트 util에서 사용)
+   검색 (프론트 util / 추천 보강에서 사용)
    ─────────────────────────────────────────────────────────── */
 router.get("/search", async (req, res) => {
   try {
