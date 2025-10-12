@@ -94,6 +94,9 @@ export default function RecommendClient() {
 
   const currentTrack = playlist[currentTrackIndex];
 
+  // Spotify 자동-다음 가드
+  const spEndGuardRef = useRef<number>(0);
+
   // 복귀용 경로 저장
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -139,6 +142,50 @@ export default function RecommendClient() {
     if (photoId !== null) void fetchPlaylist();
   }, [photoId]);
 
+  /** 공통 재생: 인덱스로 강제 재생(Spotify/프리뷰 모두) */
+  const playAt = useCallback(
+    async (index: number) => {
+      if (!playlist.length) return;
+      const i = (index + playlist.length) % playlist.length;
+      const t = playlist[i];
+      setCurrentTrackIndex(i);
+      setSeekPreview(null);
+
+      // Spotify 전체 재생
+      if (t?.spotify_track_id) {
+        try {
+          await sp.playUris([`spotify:track:${t.spotify_track_id}`]);
+          setIsPlaying(true);
+        } catch (e) {
+          console.error(e);
+          setIsPlaying(false);
+        }
+        return;
+      }
+
+      // 프리뷰(<audio>)
+      const audio = audioRef.current;
+      if (audio && t?.audioUrl) {
+        try {
+          audio.src = t.audioUrl;
+          audio.load();
+          const onLoaded = () => {
+            const d = Math.floor(audio.duration || 0);
+            setDuration(t.duration ?? d);
+          };
+          audio.addEventListener("loadedmetadata", onLoaded, { once: true });
+          await audio.play();
+          setIsPlaying(true);
+        } catch {
+          setIsPlaying(false);
+        }
+      } else {
+        setIsPlaying(false);
+      }
+    },
+    [playlist, sp],
+  );
+
   /** ────────────── <audio> 로딩/진행/종료 ────────────── */
   const loadCurrentTrack = useCallback(
     async (autoplay = false) => {
@@ -178,7 +225,7 @@ export default function RecommendClient() {
     [currentTrack],
   );
 
-  // 곡/인덱스 바뀔 때 로드
+  // 곡/인덱스 바뀔 때 로드(<audio>용)
   useEffect(() => {
     if (currentTrack) void loadCurrentTrack(isPlaying);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -204,6 +251,22 @@ export default function RecommendClient() {
     };
   }, []);
 
+  /** Spotify 자동 다음: 끝에 근접하면 다음 곡 */
+  const isSp = !!playlist[currentTrackIndex]?.spotify_track_id;
+  useEffect(() => {
+    if (!isSp) return;
+    const dur = sp.state.duration || 0;
+    const pos = sp.state.position || 0;
+    if (dur > 0 && pos >= dur - 800) {
+      const now = Date.now();
+      if (now - spEndGuardRef.current > 1500) {
+        spEndGuardRef.current = now;
+        handleNext(); // 우리 플레이리스트 기준 next
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sp.state.position, sp.state.duration, isSp]);
+
   /** ────────────── 컨트롤 ────────────── */
   const togglePlay = async () => {
     const t = playlist[currentTrackIndex];
@@ -215,9 +278,9 @@ export default function RecommendClient() {
         return;
       }
       try {
+        // 로드 안돼 있으면 playAt(현재)
         if (sp.state.duration === 0 || !sp.state.trackUri) {
-          // 아직 트랙이 로드 안 된 상태라면 새로 플레이
-          await sp.playUris([`spotify:track:${t.spotify_track_id}`]);
+          await playAt(currentTrackIndex);
         } else {
           await sp.resume();
         }
@@ -244,13 +307,21 @@ export default function RecommendClient() {
     }
   };
 
-  const handlePrevious = () => {
+  const handlePrevious = async () => {
     const t = playlist[currentTrackIndex];
     setSeekPreview(null);
+
+    // Spotify: 3초 넘었으면 처음으로, 아니면 이전 곡
     if (t?.spotify_track_id) {
-      sp.prev();
+      if (sp.state.position > 3000) {
+        await sp.seek(0);
+      } else {
+        await playAt(currentTrackIndex - 1);
+      }
       return;
     }
+
+    // <audio>
     const audio = audioRef.current;
     if (!audio) return;
     if (audio.currentTime > 3) {
@@ -258,21 +329,12 @@ export default function RecommendClient() {
       setCurrentTime(0);
       return;
     }
-    setCurrentTrackIndex((prev) => (prev === 0 ? Math.max(playlist.length - 1, 0) : prev - 1));
+    await playAt(currentTrackIndex - 1);
   };
 
-  const handleNext = () => {
-    const t = playlist[currentTrackIndex];
+  const handleNext = async () => {
     setSeekPreview(null);
-    if (t?.spotify_track_id) {
-      sp.next();
-      return;
-    }
-    setCurrentTrackIndex((prev) => {
-      if (prev < playlist.length - 1) return prev + 1;
-      setIsPlaying(false);
-      return prev;
-    });
+    await playAt(currentTrackIndex + 1);
   };
 
   /** Slider 조작 (미리보기 + 커밋 분리) */
@@ -296,19 +358,7 @@ export default function RecommendClient() {
   };
 
   const selectTrack = async (index: number) => {
-    setCurrentTrackIndex(index);
-    setSeekPreview(null);
-    const t = playlist[index];
-    if (t?.spotify_track_id) {
-      if (!sp.deviceId || !sp.ready) {
-        alert("Spotify 연결 중입니다. (Premium 필요) 잠시 후 다시 시도하세요.");
-      } else {
-        await sp.playUris([`spotify:track:${t.spotify_track_id}`]);
-        setIsPlaying(true);
-      }
-      setShowPlaylist(false);
-      return;
-    }
+    await playAt(index);
     setShowPlaylist(false);
   };
 
@@ -324,7 +374,6 @@ export default function RecommendClient() {
   const artUrl = analyzedPhotoUrl || currentTrack?.coverUrl || "/placeholder.svg";
 
   /** 현재 표시에 사용할 시간/길이 계산 */
-  const isSp = !!playlist[currentTrackIndex]?.spotify_track_id;
   const spSec = Math.floor((sp.state.position || 0) / 1000);
   const spDur = Math.floor((sp.state.duration || 0) / 1000);
 
@@ -493,7 +542,7 @@ export default function RecommendClient() {
               </Button>
             </div>
 
-            {/* 중앙 버튼: 살짝 작게(원 요청 반영) */}
+            {/* 중앙 버튼(조금 작게) */}
             <Button
               size="lg"
               onClick={togglePlay}
