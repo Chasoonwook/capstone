@@ -19,14 +19,34 @@ export const metadata: Metadata = {
 
 export default function RootLayout({
   children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+}: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
+    <html lang="ko">
+      <head>
+        {/* Spotify cover 이미지 CDN들: TCP/TLS 핸드셰이크를 미리 열어둠 */}
+        <link rel="preconnect" href="https://i.scdn.co" crossOrigin="" />
+        <link rel="preconnect" href="https://p.scdn.co" crossOrigin="" />
+        <link rel="preconnect" href="https://mosaic.scdn.co" crossOrigin="" />
+        <link rel="dns-prefetch" href="https://i.scdn.co" />
+        <link rel="dns-prefetch" href="https://p.scdn.co" />
+        <link rel="dns-prefetch" href="https://mosaic.scdn.co" />
+
+        {/* (선택) Apple / Deezer도 쓰면 주석 해제
+        <link rel="preconnect" href="https://is1-ssl.mzstatic.com" crossOrigin="" />
+        <link rel="preconnect" href="https://is2-ssl.mzstatic.com" crossOrigin="" />
+        <link rel="preconnect" href="https://is3-ssl.mzstatic.com" crossOrigin="" />
+        <link rel="preconnect" href="https://is4-ssl.mzstatic.com" crossOrigin="" />
+        <link rel="preconnect" href="https://is5-ssl.mzstatic.com" crossOrigin="" />
+        <link rel="dns-prefetch" href="https://is1-ssl.mzstatic.com" />
+        <link rel="dns-prefetch" href="https://is2-ssl.mzstatic.com" />
+        <link rel="dns-prefetch" href="https://is3-ssl.mzstatic.com" />
+        <link rel="dns-prefetch" href="https://is4-ssl.mzstatic.com" />
+        <link rel="dns-prefetch" href="https://is5-ssl.mzstatic.com" />
+        <link rel="preconnect" href="https://e-cdns-images.dzcdn.net" crossOrigin="" />
+        <link rel="dns-prefetch" href="https://e-cdns-images.dzcdn.net" />
+        */}
+      </head>
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         {children}
       </body>
     </html>

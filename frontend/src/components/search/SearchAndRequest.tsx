@@ -19,11 +19,15 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 
-/** Spotify 응답 (요약 타입) */
+/** 서버 배치 응답 타입 */
+type BatchItem = { key: string; albumImage: string | null; title?: string | null; artist?: string | null; trackId?: string | null }
+type BatchResponse = { items: BatchItem[] }
+
+/** 단건 검색 축약 타입(기존 대비 호환 유지용) */
 type SpotifyImage = { url: string; height: number; width: number }
 type SpotifySearchItem =
-  | { id?: string; name?: string; album?: { id?: string; name?: string; images?: SpotifyImage[] } } // Spotify 원형
-  | { trackId?: string; title?: string; artist?: string; albumImage?: string | null }               // 백엔드 축약형
+  | { id?: string; name?: string; album?: { id?: string; name?: string; images?: SpotifyImage[] } }
+  | { trackId?: string; title?: string; artist?: string; albumImage?: string | null }
 type SpotifySearchResponse = { items: SpotifySearchItem[]; total?: number }
 
 type ArtCache = Record<string, string | null>
@@ -58,6 +62,21 @@ type EditorSong = {
   title: string | null
   artist: string | null
   cover: string | null
+}
+
+/** 세션 캐시 (검색 결과 재방문 가속) */
+const SESSION_KEY = "albumArtCache_v1"
+const loadSessionArt = (): ArtCache => {
+  try {
+    return JSON.parse(sessionStorage.getItem(SESSION_KEY) || "{}")
+  } catch {
+    return {}
+  }
+}
+const saveSessionArt = (obj: ArtCache) => {
+  try {
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(obj))
+  } catch {}
 }
 
 export default function SearchAndRequest({
@@ -105,6 +124,11 @@ export default function SearchAndRequest({
   const [artLoading, setArtLoading] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
 
+  /** 최초 마운트 시 세션 캐시 불러오기 */
+  useEffect(() => {
+    setArtCache((prev) => ({ ...loadSessionArt(), ...prev }))
+  }, [])
+
   useEffect(() => {
     if (results.length === 0) return
     const needMusics = results.filter((m) => !(keyOf(m) in artCache))
@@ -114,47 +138,48 @@ export default function SearchAndRequest({
     const controller = new AbortController()
     abortRef.current = controller
 
-    async function loadArts() {
+    async function loadArtsBatch() {
       setArtLoading(true)
       try {
+        // 화면 상단 우선 12개만
         const targets = needMusics.slice(0, 12)
-        const tasks = targets.map(async (m) => {
-          const key = keyOf(m)
-          if (key in artCache) return { key, url: artCache[key] }
 
-          const title = (m.title ?? "").trim()
-          const artist = (m.artist ?? "").trim()
-          if (!title && !artist) return { key, url: null }
+        // 세션 캐시 즉시 반영 (있다면)
+        const sess = loadSessionArt()
+        const pending = targets.filter((m) => !(keyOf(m) in sess))
+        if (Object.keys(sess).length) {
+          setArtCache((prev) => ({ ...sess, ...prev }))
+        }
+        if (pending.length === 0) return
 
-          const url = `/api/spotify/search?title=${encodeURIComponent(title)}&artist=${encodeURIComponent(
-            artist,
-          )}&limit=1`
+        // ✅ 한 번에 배치 호출 (백엔드 /api/spotify/search/batch)
+        const body = {
+          pairs: pending.map((m) => ({
+            title: (m.title || "").trim(),
+            artist: (m.artist || "").trim(),
+          })),
+        }
 
-          try {
-            const r = await fetch(url, { signal: controller.signal, cache: "no-store" })
-            if (!r.ok) return { key, url: null }
-
-            const json = (await r.json()) as SpotifySearchResponse | { error?: unknown }
-            if ("error" in json) return { key, url: null }
-
-            const item = (json as SpotifySearchResponse).items?.[0] as any
-            const img: string | null =
-              item?.albumImage ??
-              item?.album?.images?.[1]?.url ??
-              item?.album?.images?.[0]?.url ??
-              item?.album?.images?.[2]?.url ??
-              null
-
-            return { key, url: img }
-          } catch {
-            return { key, url: null }
-          }
+        const r = await fetch("/api/spotify/search/batch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+          cache: "no-store",
         })
+        if (!r.ok) return
 
-        const arr = await Promise.all(tasks)
+        const json = (await r.json()) as BatchResponse | { error?: unknown }
+        if ("error" in json) return
+
+        const upd: ArtCache = {}
+        for (const it of (json as BatchResponse).items || []) {
+          upd[it.key] = it.albumImage ?? null
+        }
+
         setArtCache((prev) => {
-          const next: ArtCache = { ...prev }
-          for (const { key, url } of arr) next[key] = url
+          const next = { ...prev, ...upd }
+          saveSessionArt(next)
           return next
         })
       } finally {
@@ -162,7 +187,7 @@ export default function SearchAndRequest({
       }
     }
 
-    void loadArts()
+    void loadArtsBatch()
     return () => controller.abort()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [results])
@@ -352,7 +377,7 @@ export default function SearchAndRequest({
         </div>
       ) : (
         <ul className="mt-2 space-y-2">
-          {results.map((m) => {
+          {results.map((m, idx) => {
             const key = keyOf(m)
             const img = artCache[key] ?? null
             return (
@@ -362,7 +387,7 @@ export default function SearchAndRequest({
               >
                 <div className="flex items-center gap-3 min-w-0 flex-1">
                   {img ? (
-                    // ✔ 경고(③) 해결: 고정 크기 래퍼 + fill + object-cover
+                    // ✔ 경고 해결: 고정 크기 래퍼 + fill + object-cover
                     <div className="relative w-12 h-12 rounded-md overflow-hidden flex-shrink-0">
                       <Image
                         src={img}
@@ -370,8 +395,8 @@ export default function SearchAndRequest({
                         fill
                         sizes="48px"
                         className="object-cover"
+                        priority={idx < 4} // 상단 몇 개 우선 로드
                         onError={(e) => {
-                          // 이미지 깨지면 감춰서 레이아웃 유지
                           const el = e.currentTarget as HTMLImageElement
                           el.style.display = "none"
                         }}
@@ -426,7 +451,7 @@ export default function SearchAndRequest({
             <X className="w-5 h-5" />
           </button>
 
-          <div className="flex-1 max-w-xl mx-2 relative">
+        <div className="flex-1 max-w-xl mx-2 relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 h-5 w-5" />
             <Input
               ref={overlayInputRef}
