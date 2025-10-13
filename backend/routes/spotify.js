@@ -313,25 +313,77 @@ router.post("/previous", async (req, res) => {
 });
 
 /* ───────────────────────────────────────────────────────────
-   검색 (프론트 util에서 사용) — 쿠키 기반 인증
+   검색 (로그인 없을 때도 앨범표지 조회 가능)
    ─────────────────────────────────────────────────────────── */
 router.get("/search", async (req, res) => {
   try {
-    const q = req.query.q || req.query.query;
+    // 👇 추가: title/artist를 받아 q로 합쳐줌
+    let q = req.query.q || req.query.query;
+    const title = req.query.title;
+    const artist = req.query.artist;
+    if (!q && (title || artist)) {
+      const t = title ? String(title) : "";
+      const a = artist ? ` artist:${String(artist)}` : "";
+      q = `${t}${a}`.trim();
+    }
+
     const type = String(req.query.type || "track");
     const limit = Number(req.query.limit || 5);
     if (!q) return res.status(400).json({ error: "missing_q" });
 
-    const r = await callSpotifyWithCookies(
-      req, res, "GET", "https://api.spotify.com/v1/search", null,
-      { q: String(q), type, limit }
-    );
-    res.json(r.data);
+    let data;
+    try {
+      const r = await callSpotifyWithCookies(
+        req, res, "GET", "https://api.spotify.com/v1/search", null,
+        { q: String(q), type, limit }
+      );
+      data = r.data;
+    } catch (e) {
+      const tokenRes = await axios.post(
+        "https://accounts.spotify.com/api/token",
+        new URLSearchParams({ grant_type: "client_credentials" }).toString(),
+        {
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            Authorization:
+              "Basic " +
+              Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64"),
+          },
+        }
+      );
+      const accessToken = tokenRes.data.access_token;
+      const r2 = await axios.get("https://api.spotify.com/v1/search", {
+        params: { q: String(q), type, limit },
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      data = r2.data;
+    }
+
+    const tracks = data?.tracks?.items || [];
+    const items = tracks.map((t) => {
+      const imgs = t?.album?.images || [];
+      const cover =
+        (imgs[0] && imgs[0].url) ||
+        (imgs[imgs.length - 1] && imgs[imgs.length - 1].url) ||
+        null;
+      return {
+        trackId: t?.id || null,
+        title: t?.name || null,
+        artist:
+          (Array.isArray(t?.artists) && t.artists[0]?.name) ||
+          (Array.isArray(t?.album?.artists) && t.album.artists[0]?.name) ||
+          null,
+        albumImage: cover,
+      };
+    });
+
+    res.json({ items });
   } catch (e) {
     const { status, data } = formatAxiosErr(e);
     res.status(status).json(data);
   }
 });
+
 
 /* ───────────────────────────────────────────────────────────
    연결 해제
