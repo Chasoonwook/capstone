@@ -4,6 +4,7 @@
 import { useSearchParams } from "next/navigation";
 import HistoryStrip from "@/components/history/HistoryStrip";
 import DiaryStrip from "@/components/history/DiaryStrip";
+import RankingsList from "@/components/history/RankingList";
 import { useDiaries } from "@/hooks/useDiaries";
 
 /** 유저 객체 / localStorage 에서 "정수(>=1)" user_id만 추출 */
@@ -72,6 +73,9 @@ export default function HistorySwitch({
           error={diariesError}
         />
       );
+
+    case "chart":
+      return <RankingsList />;
 
     default:
       return (
