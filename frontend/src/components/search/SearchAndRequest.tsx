@@ -362,17 +362,21 @@ export default function SearchAndRequest({
               >
                 <div className="flex items-center gap-3 min-w-0 flex-1">
                   {img ? (
-                    <Image
-                      src={img}
-                      alt={m.title ?? "album cover"}
-                      width={48}
-                      height={48}
-                      className="rounded-md flex-shrink-0"
-                      onError={(e) => {
-                        const el = e.currentTarget as HTMLImageElement
-                        el.style.display = "none"
-                      }}
-                    />
+                    // ✔ 경고(③) 해결: 고정 크기 래퍼 + fill + object-cover
+                    <div className="relative w-12 h-12 rounded-md overflow-hidden flex-shrink-0">
+                      <Image
+                        src={img}
+                        alt={m.title ?? "album cover"}
+                        fill
+                        sizes="48px"
+                        className="object-cover"
+                        onError={(e) => {
+                          // 이미지 깨지면 감춰서 레이아웃 유지
+                          const el = e.currentTarget as HTMLImageElement
+                          el.style.display = "none"
+                        }}
+                      />
+                    </div>
                   ) : (
                     <div className="w-12 h-12 bg-gray-200 rounded-md flex-shrink-0" aria-hidden />
                   )}
