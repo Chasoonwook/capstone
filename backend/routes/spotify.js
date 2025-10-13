@@ -317,7 +317,7 @@ router.post("/previous", async (req, res) => {
    ─────────────────────────────────────────────────────────── */
 router.get("/search", async (req, res) => {
   try {
-    // 👇 추가: title/artist를 받아 q로 합쳐줌
+    // title/artist를 받아 q로 합쳐줌
     let q = req.query.q || req.query.query;
     const title = req.query.title;
     const artist = req.query.artist;
@@ -333,36 +333,42 @@ router.get("/search", async (req, res) => {
 
     let data;
     try {
+      // 1) 사용자 토큰으로 시도
       const r = await callSpotifyWithCookies(
         req, res, "GET", "https://api.spotify.com/v1/search", null,
         { q: String(q), type, limit }
       );
       data = r.data;
     } catch (e) {
+      // 2) 로그인 안 되어있거나 401 → Client Credentials Flow로 fallback
       const tokenRes = await axios.post(
         "https://accounts.spotify.com/api/token",
         new URLSearchParams({ grant_type: "client_credentials" }).toString(),
         {
           headers: {
             "Content-Type": "application/x-www-form-urlencoded",
-            Authorization:
-              "Basic " +
-              Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64"),
+            Authorization: "Basic " + Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64"),
           },
+          timeout: 10000,
         }
       );
       const accessToken = tokenRes.data.access_token;
       const r2 = await axios.get("https://api.spotify.com/v1/search", {
         params: { q: String(q), type, limit },
         headers: { Authorization: `Bearer ${accessToken}` },
+        timeout: 10000,
       });
       data = r2.data;
+      // 비로그인 검색은 짧게 캐시 허용
+      res.set("Cache-Control", "public, max-age=60");
     }
 
+    // 응답 축약: albumImage 포함
     const tracks = data?.tracks?.items || [];
     const items = tracks.map((t) => {
       const imgs = t?.album?.images || [];
       const cover =
+        (imgs[1] && imgs[1].url) || // 중간 크기 우선
         (imgs[0] && imgs[0].url) ||
         (imgs[imgs.length - 1] && imgs[imgs.length - 1].url) ||
         null;
@@ -384,6 +390,79 @@ router.get("/search", async (req, res) => {
   }
 });
 
+/* ───────────────────────────────────────────────────────────
+   배치 검색: [{title, artist}] → { items: [{key, albumImage, title, artist, trackId}] }
+   ─────────────────────────────────────────────────────────── */
+router.post("/search/batch", async (req, res) => {
+  try {
+    const pairs = Array.isArray(req.body?.pairs) ? req.body.pairs : [];
+    if (pairs.length === 0) return res.json({ items: [] });
+
+    // 1) 사용자 토큰이 있으면 재사용
+    let bearer = null;
+    const access = req.cookies?.[CK_ACCESS];
+    if (access) {
+      bearer = `Bearer ${access}`;
+    } else {
+      // 2) 없으면 Client Credentials 1회 발급
+      const tokenRes = await axios.post(
+        "https://accounts.spotify.com/api/token",
+        new URLSearchParams({ grant_type: "client_credentials" }).toString(),
+        {
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            Authorization: "Basic " + Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64"),
+          },
+          timeout: 10000,
+        }
+      );
+      bearer = `Bearer ${tokenRes.data.access_token}`;
+      // 비로그인 공용 결과는 잠깐 캐시
+      res.set("Cache-Control", "public, max-age=120");
+    }
+
+    // 키 생성 규칙 (프론트 keyOf와 동일)
+    const makeKey = (t, a) => `${String(t||"").trim().toLowerCase()} - ${String(a||"").trim().toLowerCase()}`;
+
+    // 간단 동시성 제한(5개씩)
+    const chunk = (arr, n) => arr.reduce((acc, _, i) => (i % n ? acc : acc.concat([arr.slice(i, i + n)])), []);
+
+    const groups = chunk(pairs, 5);
+    const out = [];
+    for (const g of groups) {
+      const tasks = g.map(async ({ title, artist }) => {
+        const key = makeKey(title, artist);
+        const q = `${title || ""}${artist ? ` artist:${artist}` : ""}`.trim();
+        if (!q) return { key, albumImage: null, title: title||null, artist: artist||null, trackId: null };
+
+        const r = await axios.get("https://api.spotify.com/v1/search", {
+          params: { q, type: "track", limit: 1 },
+          headers: { Authorization: bearer },
+          timeout: 10000,
+        }).catch(() => null);
+
+        const t = r?.data?.tracks?.items?.[0] || null;
+        const imgs = t?.album?.images || [];
+        const cover = (imgs[1]?.url || imgs[0]?.url || imgs[2]?.url || null);
+
+        return {
+          key,
+          albumImage: cover,
+          title: t?.name || title || null,
+          artist: (t?.artists?.[0]?.name || artist || null),
+          trackId: t?.id || null,
+        };
+      });
+      const part = await Promise.all(tasks);
+      out.push(...part);
+    }
+
+    return res.json({ items: out });
+  } catch (e) {
+    const { status, data } = formatAxiosErr(e);
+    res.status(status).json(data);
+  }
+});
 
 /* ───────────────────────────────────────────────────────────
    연결 해제
