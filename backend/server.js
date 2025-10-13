@@ -233,6 +233,11 @@ function loadRoute(relPath) {
   }
 }
 
+/**
+ * ✅ 주의: rankings 라우터는 구버전 경로도 함께 마운트한다.
+ *    - /api/rankings           (신규)
+ *    - /api/rankings-simple    (구버전 호환)
+ */
 const mounts = [
   ["/api/photos", "routes/photos"],
   ["/api/recommendations", "routes/recommendations"],
@@ -246,7 +251,9 @@ const mounts = [
   ["/api", "routes/feedback"],
   ["/api", "routes/stickers"],
   ["/api/diaries", "routes/diaries"],
+  // rankings는 두 경로로 동시 마운트 (404 방지용)
   ["/api/rankings", "routes/rankings"],
+  ["/api/rankings-simple", "routes/rankings"],
 ];
 
 const mounted = [];

@@ -194,3 +194,23 @@ track:title artist:artist 쿼리로 검색 → album.images[0].url 추출
 콘솔 로그 태그를 rankings/weekly, rankings/monthly 등으로 일관되게 정리.
 
 실패 응답 키를 { error: "..." } 형식으로 단순화.
+
+### server.js 코드 수정 (1013)
+🔧 1️⃣ 핵심 변화 — rankings 라우터 두 경로로 등록
+✔ 기존
+[ "/api/rankings", "routes/rankings" ],
+
+
+/api/rankings/* 경로만 인식
+
+프론트가 /api/rankings-simple/*으로 요청하면 404 발생
+
+🔥 수정 후
+// rankings는 두 경로로 동시 마운트 (404 방지용)
+[ "/api/rankings", "routes/rankings" ],
+[ "/api/rankings-simple", "routes/rankings" ],
+
+
+👉 즉, 같은 라우터 파일(routes/rankings.js)을 /api/rankings와 /api/rankings-simple 둘 다에 등록해서
+프론트 요청이 어느 쪽으로 오든 정상 응답하도록 바꾼 거야.
+이게 지금 404 에러(특히 Render 배포 환경) 해결의 핵심 포인트야.
