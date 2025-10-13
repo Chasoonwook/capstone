@@ -8,7 +8,8 @@ import { Slider } from "@/components/ui/slider"
 import {
   Play, Pause, SkipBack, SkipForward,
   ChevronDown, MoreVertical, Heart, ThumbsDown,
-  ListMusic, Share2
+  ListMusic, Share2,
+  Upload
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { API_BASE } from "@/lib/api"
@@ -406,7 +407,7 @@ export default function RecommendClient() {
                 className="text-white hover:bg-white/10 w-12 h-12"
                 title="편집/공유"
               >
-                <Share2 className="w-6 h-6" />
+                <Upload className="w-6 h-6" />
               </Button>
               <Button
                 variant="ghost"
