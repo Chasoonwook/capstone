@@ -1,22 +1,18 @@
+// src/app/editor/edit/EditorClient.tsx
 "use client"
 
-import type React from "react"
 import { useEffect, useMemo, useRef, useState, useCallback } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { API_BASE } from "@/lib/api"
-import { fetchMe } from "@/app/recommend/hooks/useAuthMe"
 import { RotateCw, Sun, Pencil, Sticker, RefreshCw, Check, X } from "lucide-react"
 import { Stage, Layer, Image as KImage, Line, Group, Transformer } from "react-konva"
 import useImage from "use-image"
 import Konva from "konva"
 import "konva/lib/filters/Brighten"
 
-type StickerMeta = {
-  sticker_id: number
-  name?: string | null
-  mime_type?: string | null
-}
+/* ---------- 타입 ---------- */
+type StickerMeta = { sticker_id: number; name?: string | null }
 type PlacedSticker = {
   id: string
   sticker_id: number
@@ -26,19 +22,25 @@ type PlacedSticker = {
   scale: number
   url: string
 }
+type Draft = {
+  rotation: number
+  brightness: number
+  lines: Array<{ points: number[]; color: string; size: number }>
+  placed: PlacedSticker[]
+}
 
+/* ---------- 유틸 ---------- */
 const uuid = () => Math.random().toString(36).slice(2) + Date.now().toString(36)
 
 function useElementSize<T extends HTMLElement>() {
   const ref = useRef<T | null>(null)
-  const [size, setSize] = useState<{ width: number; height: number }>({ width: 1024, height: 768 })
+  const [size, setSize] = useState({ width: 1024, height: 768 })
   useEffect(() => {
     const el = ref.current
     if (!el) return
-    const ro = new ResizeObserver((entries) => {
-      const entry = entries[0]
-      if (!entry) return
-      const cr = entry.contentRect
+    const ro = new ResizeObserver(([entry]) => {
+      const cr = entry?.contentRect
+      if (!cr) return
       setSize({
         width: Math.max(320, Math.floor(cr.width)),
         height: Math.max(240, Math.floor(cr.height)),
@@ -50,97 +52,79 @@ function useElementSize<T extends HTMLElement>() {
   return { ref, size }
 }
 
-function UseImage({
-  src,
-  brightness,
-  onImgReady,
-}: {
-  src: string
-  brightness: number
-  onImgReady?: (node: any) => void
-}) {
+function BaseImage({ src, brightness }: { src: string; brightness: number }) {
   const [img] = useImage(src, "anonymous")
   const ref = useRef<any>(null)
   useEffect(() => {
-    const node = ref.current
-    if (!node || !img) return
-    node.cache()
-    node.filters([Konva.Filters.Brighten])
-    const val = (brightness - 100) / 100
-    node.brightness(val)
-    onImgReady?.(node)
-  }, [img, brightness, onImgReady])
+    if (!img || !ref.current) return
+    ref.current.cache()
+    ref.current.filters([Konva.Filters.Brighten])
+    ref.current.brightness((brightness - 100) / 100)
+  }, [img, brightness])
   return <KImage ref={ref} image={img || undefined} listening={false} />
 }
 
-function useFitSize(naturalW: number | null, naturalH: number | null, maxW: number, maxH: number) {
-  return useMemo(() => {
-    if (!naturalW || !naturalH) return { w: Math.floor(Math.min(maxW, 640)), h: Math.floor(Math.min(maxH, 480)), scale: 1 }
-    const rw = maxW / naturalW
-    const rh = maxH / naturalH
-    const s = Math.min(rw, rh, 1)
-    return { w: Math.floor(naturalW * s), h: Math.floor(naturalH * s), scale: s }
-  }, [naturalW, naturalH, maxW, maxH])
+const fitRect = (nw: number, nh: number, maxW: number, maxH: number) => {
+  const s = Math.min(maxW / nw, maxH / nh, 1)
+  return { w: Math.floor(nw * s), h: Math.floor(nh * s), s }
 }
 
-export default function EditClient() {
-  const searchParams = useSearchParams()
+/* ================= 메인 컴포넌트 ================= */
+export default function EditorClient() {
+  const qs = useSearchParams()
   const router = useRouter()
 
-  const photoId = searchParams.get("photoId")
-  const musicId = searchParams.get("musicId")
-  const selectedFromParam = searchParams.get("selected_from")
+  const photoId = qs.get("photoId")
+  const draftKey = useMemo(() => (photoId ? `editor_draft::${photoId}` : ""), [photoId])
 
   const [imgUrl, setImgUrl] = useState<string | null>(null)
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
 
-  const [rotation, setRotation] = useState<number>(0)
-  const [brightness, setBrightness] = useState<number>(100)
-
-  const [brushColor, setBrushColor] = useState<string>("#0095f6")
-  const [brushSize, setBrushSize] = useState<number>(6)
+  const [rotation, setRotation] = useState(0)
+  const [brightness, setBrightness] = useState(100)
+  const [brushColor, setBrushColor] = useState("#0095f6")
+  const [brushSize, setBrushSize] = useState(6)
   const [isDrawing, setIsDrawing] = useState(false)
   const [lines, setLines] = useState<Array<{ points: number[]; color: string; size: number }>>([])
-
   const [stickerList, setStickerList] = useState<StickerMeta[]>([])
   const [placed, setPlaced] = useState<PlacedSticker[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
-
-  const [activeTool, setActiveTool] = useState<"rotate" | "brightness" | "draw" | "sticker" | null>(null)
+  const [tool, setTool] = useState<"rotate" | "brightness" | "draw" | "sticker" | null>(null)
 
   const stageRef = useRef<any>(null)
-  const baseLayerRef = useRef<any>(null)
   const stickerLayerRef = useRef<any>(null)
   const trRef = useRef<any>(null)
 
-  const { ref: canvasBoxRef, size: box } = useElementSize<HTMLDivElement>()
+  const { ref: boxRef, size: box } = useElementSize<HTMLDivElement>()
 
+  /* ---------- 원본 이미지 로드 ---------- */
   useEffect(() => {
     if (!photoId) return
-    let revokeUrl: string | null = null
+    let revoke: string | null = null
     let cancelled = false
-
-    const candidates = [`${API_BASE}/api/photos/${photoId}/binary`, `${API_BASE}/photos/${photoId}/binary`]
     ;(async () => {
+      const candidates = [
+        `${API_BASE}/api/photos/${photoId}/binary`,
+        `${API_BASE}/photos/${photoId}/binary`,
+      ]
       for (const u of candidates) {
         try {
-          const r = await fetch(u, { method: "GET" })
+          const r = await fetch(u)
           if (!r.ok) continue
           const blob = await r.blob()
-          const objectUrl = URL.createObjectURL(blob)
-          revokeUrl = objectUrl
-
+          const url = URL.createObjectURL(blob)
+          revoke = url
           const tmp = new Image()
           tmp.onload = () => {
-            if (!cancelled) {
-              setNatural({ w: tmp.naturalWidth, h: tmp.naturalHeight })
-              setImgUrl(objectUrl)
-              setLoading(false)
-            }
+            if (cancelled) return
+            setNatural({ w: tmp.naturalWidth, h: tmp.naturalHeight })
+            setImgUrl(url)
+            setLoading(false)
           }
-          tmp.src = objectUrl
+          tmp.src = url
           return
         } catch {}
       }
@@ -149,231 +133,234 @@ export default function EditClient() {
         setLoading(false)
       }
     })()
-
     return () => {
       cancelled = true
-      if (revokeUrl) URL.revokeObjectURL(revokeUrl)
+      if (revoke) URL.revokeObjectURL(revoke)
     }
   }, [photoId])
 
-  const maxW = Math.max(320, box.width - 8)
-  const maxH = Math.max(240, box.height - 8)
-  const fit = useFitSize(natural?.w ?? null, natural?.h ?? null, maxW, maxH)
-
-  const fetchStickers = useCallback(async () => {
-    try {
-      const r = await fetch(`${API_BASE}/api/stickers`, { credentials: "include" })
-      if (r.ok) {
-        const arr: StickerMeta[] = await r.json()
-        setStickerList(arr || [])
-      }
-    } catch {}
+  /* ---------- 스티커 목록 ---------- */
+  useEffect(() => {
+    ;(async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/stickers`, { credentials: "include" })
+        if (r.ok) setStickerList(await r.json())
+      } catch {}
+    })()
   }, [])
-  useEffect(() => { fetchStickers() }, [fetchStickers])
 
-  const handleUploadSticker = async (file: File) => {
-    const fd = new FormData()
-    fd.append("file", file)
-    fd.append("name", file.name)
+  /* ---------- 드래프트 로드 ---------- */
+  useEffect(() => {
+    if (!draftKey) return
     try {
-      const r = await fetch(`${API_BASE}/api/stickers`, {
-        method: "POST",
-        body: fd,
-        credentials: "include",
-      })
-      if (r.ok) await fetchStickers()
-      else alert("스티커 업로드 실패")
-    } catch { alert("스티커 업로드 중 오류") }
-  }
+      const raw = localStorage.getItem(draftKey)
+      if (!raw) return
+      const d = JSON.parse(raw) as Draft
+      if (typeof d.rotation === "number") setRotation(d.rotation)
+      if (typeof d.brightness === "number") setBrightness(d.brightness)
+      if (Array.isArray(d.lines)) setLines(d.lines)
+      if (Array.isArray(d.placed)) setPlaced(d.placed)
+    } catch {}
+    // 저장된 드래프트는 편집이 끝나면(✔/✖) 지웁니다.
+  }, [draftKey])
 
-  const addStickerToStage = (meta: StickerMeta) => {
-    const url = `${API_BASE}/api/stickers/${meta.sticker_id}/binary`
-    setPlaced((prev) => prev.concat({
-      id: uuid(),
-      sticker_id: meta.sticker_id,
-      x: fit.w / 2 - 64,
-      y: fit.h / 2 - 64,
-      rotation: 0,
-      scale: 1,
-      url,
-    }))
-  }
+  /* ---------- 드래프트 저장 (변경시) ---------- */
+  useEffect(() => {
+    if (!draftKey) return
+    const draft: Draft = { rotation, brightness, lines, placed }
+    try {
+      localStorage.setItem(draftKey, JSON.stringify(draft))
+    } catch {}
+  }, [draftKey, rotation, brightness, lines, placed])
 
-  const handleMouseDown = (e: any) => {
+  const clearDraft = useCallback(() => {
+    if (!draftKey) return
+    try {
+      localStorage.removeItem(draftKey)
+    } catch {}
+  }, [draftKey])
+
+  /* ---------- Stage/도형 핸들러 ---------- */
+  const onDown = (e: any) => {
     if (e.target === e.target.getStage()) setSelectedId(null)
-    if (activeTool !== "draw") return
+    if (tool !== "draw") return
     setIsDrawing(true)
     const pos = e.target.getStage().getPointerPosition()
     if (!pos) return
     setLines((prev) => prev.concat({ points: [pos.x, pos.y], color: brushColor, size: brushSize }))
   }
-  const handleMouseMove = (e: any) => {
-    if (activeTool !== "draw" || !isDrawing) return
-    const stage = e.target.getStage()
-    const point = stage.getPointerPosition()
-    if (!point) return
+  const onMove = (e: any) => {
+    if (tool !== "draw" || !isDrawing) return
+    const pos = e.target.getStage().getPointerPosition()
+    if (!pos) return
     setLines((prev) => {
       const last = prev[prev.length - 1]
-      const newLast = { ...last, points: [...last.points, point.x, point.y] }
-      return prev.slice(0, prev.length - 1).concat(newLast)
+      const upd = { ...last, points: [...last.points, pos.x, pos.y] }
+      return prev.slice(0, -1).concat(upd)
     })
   }
-  const handleMouseUp = () => {
-    if (activeTool !== "draw") return
-    setIsDrawing(false)
-  }
-  useEffect(() => { if (activeTool !== "draw" && isDrawing) setIsDrawing(false) }, [activeTool, isDrawing])
+  const onUp = () => tool === "draw" && setIsDrawing(false)
+  useEffect(() => {
+    if (tool !== "draw" && isDrawing) setIsDrawing(false)
+  }, [tool, isDrawing])
 
   useEffect(() => {
     const tr = trRef.current
-    if (!tr) return
     const layer = stickerLayerRef.current
-    if (!layer) return
+    if (!tr || !layer) return
     const node = layer.findOne((n: any) => n.getAttr("nodeId") === selectedId)
-    if (node) { tr.nodes([node]); tr.getLayer()?.batchDraw() }
-    else { tr.nodes([]); tr.getLayer()?.batchDraw() }
+    if (node) tr.nodes([node])
+    else tr.nodes([])
+    tr.getLayer()?.batchDraw()
   }, [selectedId, placed])
 
-  const updatePlaced = (id: string, patch: Partial<PlacedSticker>) => {
+  const addSticker = (meta: StickerMeta) =>
+    setPlaced((p) =>
+      p.concat({
+        id: uuid(),
+        sticker_id: meta.sticker_id,
+        x: (fit?.w || 640) / 2 - 64,
+        y: (fit?.h || 480) / 2 - 64,
+        rotation: 0,
+        scale: 1,
+        url: `${API_BASE}/api/stickers/${meta.sticker_id}/binary`,
+      }),
+    )
+
+  const patchPlaced = (id: string, patch: Partial<PlacedSticker>) =>
     setPlaced((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)))
+
+  const resetAll = () => {
+    setRotation(0)
+    setBrightness(100)
+    setLines([])
+    setPlaced([])
+    setSelectedId(null)
+    setTool(null)
   }
 
-  // canvas to blob
+  /* ---------- 저장(원본 교체) & 나가기 ---------- */
   const stageToBlob = async (): Promise<Blob> => {
     const stage = stageRef.current as any
     const dataURL: string = stage.toDataURL({ pixelRatio: 1, mimeType: "image/png" })
     const res = await fetch(dataURL)
-    return await res.blob()
+    return res.blob()
   }
 
-  const resetEdits = () => {
-    setRotation(0); setBrightness(100); setLines([]); setPlaced([]); setSelectedId(null); setActiveTool(null)
-  }
-
-  const onStickerFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0]
-    if (f) handleUploadSticker(f)
-    e.currentTarget.value = ""
-  }
-
-  const onStageClick = (e: any) => { if (e.target === e.target.getStage()) setSelectedId(null) }
-
-  // ⭐ 편집본 저장: history 생성 → edited-image 업로드 → diaries 업서트
-  const handleSaveEdited = async () => {
-    if (!photoId) return alert("photoId가 없습니다.")
-    if (!musicId) return alert("musicId가 없습니다.")
-
-    setSaving(true)
-    try {
-      const me = await fetchMe()
-      if (!me?.id) { alert("로그인이 필요합니다."); setSaving(false); return }
-
-      // 1) history 확보
-      const histRes = await fetch(`${API_BASE}/api/history`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user_id: me.id,
-          photo_id: Number(photoId),
-          music_id: Number(musicId),
-          selected_from: (selectedFromParam === "main" || selectedFromParam === "sub") ? selectedFromParam : null,
-        }),
-      })
-      if (!histRes.ok) throw new Error("history 저장 실패")
-      const hist = await histRes.json()
-      const historyId = hist?.history_id
-      if (!historyId) throw new Error("history_id 없음")
-
-      // 2) 캔버스 blob 업로드
-      const blob = await stageToBlob()
+  const uploadEdited = async (blob: Blob) => {
+    if (!photoId) throw new Error("photoId is missing")
+    const urls = [
+      `${API_BASE}/api/photos/${photoId}/binary`,
+      `${API_BASE}/photos/${photoId}/binary`,
+    ]
+    const form = () => {
       const fd = new FormData()
-      fd.append("file", blob, `edited_${Date.now()}.png`)
-      const up = await fetch(`${API_BASE}/api/history/${historyId}/edited-image`, {
-        method: "POST",
-        credentials: "include",
-        body: fd,
-      })
-      if (!up.ok) throw new Error("편집본 업로드 실패")
-      const upJson = await up.json() // { edited_image_url }
+      fd.append("file", blob, "edited.png")
+      return fd
+    }
+    for (const u of urls) {
+      try {
+        let r = await fetch(u, { method: "PUT", body: form(), credentials: "include" })
+        if (r.ok) return true
+        r = await fetch(u, { method: "POST", body: form(), credentials: "include" })
+        if (r.ok) return true
+      } catch {}
+    }
+    return false
+  }
 
-      // 3) diaries 업서트
-      const diaRes = await fetch(`${API_BASE}/api/diaries`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user_id: me.id,
-          photo_id: Number(photoId),
-          music_id: Number(musicId),
-          subject: "편집한 사진",
-          content: `편집본: ${upJson.edited_image_url || ""}`,
-        }),
-      })
-      if (!diaRes.ok) throw new Error("다이어리 저장 실패")
-
-      router.push("/diary")
+  const handleConfirm = async () => {
+    if (!imgUrl) return
+    setSaving(true)
+    setErr(null)
+    try {
+      const blob = await stageToBlob()
+      const ok = await uploadEdited(blob) // ✅ 원본 교체
+      if (!ok) throw new Error("편집본 업로드에 실패했습니다.")
+      clearDraft()                        // ✅ 드래프트 삭제
+      router.push("/")                    // ✅ 메인으로 이동
     } catch (e: any) {
-      console.error(e)
-      alert(e?.message || "편집 저장 중 오류가 발생했습니다.")
+      setErr(e?.message || "저장 중 오류가 발생했습니다.")
     } finally {
       setSaving(false)
     }
   }
 
+  const handleCancel = () => {
+    clearDraft()          // ✅ 취소 시 드래프트 삭제
+    router.back()
+  }
+
+  /* ---------- 레이아웃/뷰 ---------- */
+  const maxW = Math.max(320, box.width - 8)
+  const maxH = Math.max(240, box.height - 8)
+  const fit = useMemo(
+    () => (natural ? fitRect(natural.w, natural.h, maxW, maxH) : { w: 640, h: 480, s: 1 }),
+    [natural, maxW, maxH],
+  )
+
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
+      {/* Top Bar */}
       <header className="flex items-center justify-between px-4 h-14 border-b border-border bg-background">
-        <Button variant="ghost" size="icon" onClick={() => router.back()} className="text-foreground hover:bg-accent">
+        <Button variant="ghost" size="icon" onClick={handleCancel} className="hover:bg-accent" aria-label="취소">
           <X className="h-6 w-6" />
         </Button>
         <h1 className="text-base font-medium">편집</h1>
         <Button
           variant="ghost"
           size="icon"
-          onClick={handleSaveEdited}
+          onClick={handleConfirm}
           disabled={saving || !imgUrl}
-          className="text-primary hover:bg-accent disabled:text-muted-foreground"
+          className="text-primary hover:bg-accent disabled:opacity-50"
+          aria-label="저장하고 메인으로"
         >
           <Check className="h-6 w-6" />
         </Button>
       </header>
 
-      <div ref={canvasBoxRef} className="flex-1 flex items-center justify-center p-2 sm:p-4 overflow-hidden bg-muted/30">
+      {/* Canvas */}
+      <div ref={boxRef} className="flex-1 flex items-center justify-center p-2 sm:p-4 overflow-hidden bg-muted/30">
         {loading || !imgUrl || !natural ? (
-          <div className="text-center text-muted-foreground">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4" />
-            이미지 불러오는 중...
-          </div>
+          <div className="text-muted-foreground">이미지 불러오는 중…</div>
         ) : (
           <Stage
             ref={stageRef}
             width={fit.w}
             height={fit.h}
             className="shadow-2xl bg-white rounded-lg"
-            style={{ cursor: activeTool === "draw" ? "crosshair" : "default" }}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onTouchStart={handleMouseDown}
-            onTouchMove={handleMouseMove}
-            onTouchEnd={handleMouseUp}
-            onClick={onStageClick}
+            style={{ cursor: tool === "draw" ? "crosshair" : "default" }}
+            onMouseDown={onDown}
+            onMouseMove={onMove}
+            onMouseUp={onUp}
+            onTouchStart={onDown}
+            onTouchMove={onMove}
+            onTouchEnd={onUp}
+            onClick={(e) => e.target === e.target.getStage() && setSelectedId(null)}
           >
-            <Layer ref={baseLayerRef}>
+            <Layer>
               <Group
                 x={fit.w / 2}
                 y={fit.h / 2}
                 offset={{ x: natural.w / 2, y: natural.h / 2 }}
-                scale={{ x: fit.scale, y: fit.scale }}
+                scale={{ x: fit.s, y: fit.s }}
                 rotation={rotation}
               >
-                <UseImage src={imgUrl} brightness={brightness} />
+                <BaseImage src={imgUrl} brightness={brightness} />
               </Group>
               {lines.map((l, i) => (
-                <Line key={i} points={l.points} stroke={l.color} strokeWidth={l.size} tension={0.4} lineCap="round" lineJoin="round" />
+                <Line
+                  key={i}
+                  points={l.points}
+                  stroke={l.color}
+                  strokeWidth={l.size}
+                  tension={0.4}
+                  lineCap="round"
+                  lineJoin="round"
+                />
               ))}
             </Layer>
+
             <Layer ref={stickerLayerRef}>
               {placed.map((s) => (
                 <StickerNode
@@ -386,7 +373,7 @@ export default function EditClient() {
                   scale={s.scale}
                   selected={selectedId === s.id}
                   onSelect={() => setSelectedId(s.id)}
-                  onChange={(patch) => updatePlaced(s.id, patch)}
+                  onChange={(patch) => patchPlaced(s.id, patch)}
                 />
               ))}
               <Transformer
@@ -403,99 +390,158 @@ export default function EditClient() {
         )}
       </div>
 
+      {/* Tool panel */}
       <div className="border-t border-border bg-background">
-        {activeTool && (
-          <div className="px-4 py-4 border-b border-border bg-background">
-            {activeTool === "rotate" && (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">회전</span>
-                  <span className="text-foreground font-medium">{rotation}°</span>
-                </div>
-                <input type="range" min={-180} max={180} value={rotation} onChange={(e) => setRotation(Number(e.target.value))} className="w-full h-1 bg-muted rounded-lg appearance-none cursor-pointer accent-primary" />
-              </div>
+        {tool && (
+          <div className="px-4 py-4 border-b border-border">
+            {tool === "rotate" && (
+              <SliderLabeled label="회전" value={rotation} min={-180} max={180} onChange={setRotation} suffix="°" />
             )}
-            {activeTool === "brightness" && (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">밝기</span>
-                  <span className="text-foreground font-medium">{brightness}%</span>
-                </div>
-                <input type="range" min={50} max={150} value={brightness} onChange={(e) => setBrightness(Number(e.target.value))} className="w-full h-1 bg-muted rounded-lg appearance-none cursor-pointer accent-primary" />
-              </div>
+            {tool === "brightness" && (
+              <SliderLabeled label="밝기" value={brightness} min={50} max={150} onChange={setBrightness} suffix="%" />
             )}
-            {activeTool === "draw" && (
+            {tool === "draw" && (
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <span className="text-sm text-muted-foreground">색상</span>
-                    <input type="color" value={brushColor} onChange={(e) => setBrushColor(e.target.value)} className="h-8 w-12 rounded border border-border cursor-pointer bg-transparent" />
+                    <input
+                      type="color"
+                      value={brushColor}
+                      onChange={(e) => setBrushColor(e.target.value)}
+                      className="h-8 w-12 rounded border"
+                    />
                   </div>
-                  <Button variant="ghost" size="sm" onClick={() => setLines([])} disabled={lines.length === 0} className="text-primary hover:bg-accent disabled:text-muted-foreground">
+                  <Button variant="ghost" size="sm" onClick={() => setLines([])} className="text-primary">
                     지우기
                   </Button>
                 </div>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">두께</span>
-                    <span className="text-foreground font-medium">{brushSize}px</span>
-                  </div>
-                  <input type="range" min={2} max={24} value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} className="w-full h-1 bg-muted rounded-lg appearance-none cursor-pointer accent-primary" />
-                </div>
+                <SliderLabeled label="두께" value={brushSize} min={2} max={24} onChange={setBrushSize} suffix="px" />
               </div>
             )}
-            {activeTool === "sticker" && (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">스티커</span>
-                  <label className="cursor-pointer">
-                    <Button variant="ghost" size="sm" asChild className="text-primary hover:bg-accent"><span>업로드</span></Button>
-                    <input type="file" accept="image/*" onChange={onStickerFileChange} className="hidden" />
-                  </label>
-                </div>
-                <div className="grid grid-cols-6 gap-2 max-h-[120px] overflow-y-auto">
-                  {stickerList.length === 0 ? (
-                    <div className="col-span-6 text-center py-4 text-sm text-muted-foreground">스티커가 없습니다</div>
-                  ) : (
-                    stickerList.map((s) => (
-                      <button key={s.sticker_id} onClick={() => addStickerToStage(s)} className="aspect-square bg-muted rounded-md overflow-hidden hover:ring-2 hover:ring-primary transition-all">
-                        <img src={`${API_BASE}/api/stickers/${s.sticker_id}/binary`} alt={s.name || String(s.sticker_id)} className="w-full h-full object-contain" crossOrigin="anonymous" />
-                      </button>
-                    ))
-                  )}
-                </div>
-                {selectedId && (
-                  <Button variant="ghost" size="sm" onClick={() => { setPlaced((prev) => prev.filter((p) => p.id !== selectedId)); setSelectedId(null) }} className="w-full text-destructive hover:bg-destructive/10">
-                    선택한 스티커 삭제
-                  </Button>
-                )}
-              </div>
+            {tool === "sticker" && (
+              <StickerPanel
+                stickers={stickerList}
+                onPick={(s) => addSticker(s)}
+                onUpload={async (f) => {
+                  const fd = new FormData()
+                  fd.append("file", f)
+                  fd.append("name", f.name)
+                  const r = await fetch(`${API_BASE}/api/stickers`, { method: "POST", body: fd, credentials: "include" })
+                  if (r.ok) {
+                    const list = await fetch(`${API_BASE}/api/stickers`, { credentials: "include" })
+                    if (list.ok) setStickerList(await list.json())
+                  } else {
+                    alert("스티커 업로드 실패")
+                  }
+                }}
+                onDeleteSelected={() => {
+                  if (!selectedId) return
+                  setPlaced((prev) => prev.filter((p) => p.id !== selectedId))
+                  setSelectedId(null)
+                }}
+                hasSelected={!!selectedId}
+              />
             )}
           </div>
         )}
 
+        {/* Tool icons */}
         <div className="flex items-center justify-around px-4 py-3">
-          <button onClick={() => setActiveTool(activeTool === "rotate" ? null : "rotate")} className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-colors ${activeTool === "rotate" ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}>
-            <RotateCw className="h-6 w-6" /><span className="text-xs">회전</span>
-          </button>
-          <button onClick={() => setActiveTool(activeTool === "brightness" ? null : "brightness")} className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-colors ${activeTool === "brightness" ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}>
-            <Sun className="h-6 w-6" /><span className="text-xs">밝기</span>
-          </button>
-          <button onClick={() => setActiveTool(activeTool === "draw" ? null : "draw")} className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-colors ${activeTool === "draw" ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}>
-            <Pencil className="h-6 w-6" /><span className="text-xs">그리기</span>
-          </button>
-          <button onClick={() => setActiveTool(activeTool === "sticker" ? null : "sticker")} className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-colors ${activeTool === "sticker" ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}>
-            <Sticker className="h-6 w-6" /><span className="text-xs">스티커</span>
-          </button>
-          <button onClick={resetEdits} className="flex flex-col items-center gap-1 p-2 rounded-lg text-muted-foreground hover:text-foreground transition-colors">
-            <RefreshCw className="h-6 w-6" /><span className="text-xs">초기화</span>
-          </button>
+          <ToolBtn label="회전"    active={tool === "rotate"}     onClick={() => setTool(tool === "rotate" ? null : "rotate")}    icon={<RotateCw className="h-6 w-6" />} />
+          <ToolBtn label="밝기"    active={tool === "brightness"} onClick={() => setTool(tool === "brightness" ? null : "brightness")} icon={<Sun className="h-6 w-6" />} />
+          <ToolBtn label="그리기"  active={tool === "draw"}       onClick={() => setTool(tool === "draw" ? null : "draw")}        icon={<Pencil className="h-6 w-6" />} />
+          <ToolBtn label="스티커"  active={tool === "sticker"}    onClick={() => setTool(tool === "sticker" ? null : "sticker")}  icon={<Sticker className="h-6 w-6" />} />
+          <ToolBtn label="초기화"  onClick={resetAll} icon={<RefreshCw className="h-6 w-6" />} />
         </div>
       </div>
+
+      {err && (
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 bg-destructive text-destructive-foreground px-4 py-2 rounded-lg shadow-lg text-sm">
+          {err}
+        </div>
+      )}
     </div>
   )
 }
 
+/* ---------- 보조 UI ---------- */
+function SliderLabeled({
+  label, value, min, max, onChange, suffix,
+}: { label: string; value: number; min: number; max: number; onChange: (v: number) => void; suffix?: string }) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between text-sm">
+        <span className="text-muted-foreground">{label}</span>
+        <span className="font-medium">{value}{suffix ?? ""}</span>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-full accent-primary"
+      />
+    </div>
+  )
+}
+
+function ToolBtn({ label, active, onClick, icon }: { label: string; active?: boolean; onClick: () => void; icon: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-colors ${
+        active ? "text-primary" : "text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      {icon}
+      <span className="text-xs">{label}</span>
+    </button>
+  )
+}
+
+function StickerPanel({
+  stickers, onPick, onUpload, onDeleteSelected, hasSelected,
+}: {
+  stickers: StickerMeta[]
+  onPick: (s: StickerMeta) => void
+  onUpload: (file: File) => void
+  onDeleteSelected: () => void
+  hasSelected: boolean
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="text-sm text-muted-foreground">스티커</span>
+        <label className="cursor-pointer">
+          <Button variant="ghost" size="sm" asChild className="text-primary"><span>업로드</span></Button>
+          <input type="file" accept="image/*" className="hidden"
+                 onChange={(e) => { const f = e.target.files?.[0]; if (f) onUpload(f); e.currentTarget.value = "" }} />
+        </label>
+      </div>
+      <div className="grid grid-cols-6 gap-2 max-h-[120px] overflow-y-auto">
+        {stickers.length === 0 ? (
+          <div className="col-span-6 text-center py-4 text-sm text-muted-foreground">스티커가 없습니다</div>
+        ) : (
+          stickers.map((s) => (
+            <button key={s.sticker_id} onClick={() => onPick(s)}
+              className="aspect-square bg-muted rounded-md overflow-hidden hover:ring-2 hover:ring-primary">
+              <img src={`${API_BASE}/api/stickers/${s.sticker_id}/binary`} className="w-full h-full object-contain" crossOrigin="anonymous" />
+            </button>
+          ))
+        )}
+      </div>
+      {hasSelected && (
+        <Button variant="ghost" size="sm" onClick={onDeleteSelected} className="w-full text-destructive">
+          선택한 스티커 삭제
+        </Button>
+      )}
+    </div>
+  )
+}
+
+/* ---------- 스티커 노드 ---------- */
 function StickerNode({
   nodeId, url, x, y, rotation, scale, selected, onSelect, onChange,
 }: {
@@ -507,12 +553,11 @@ function StickerNode({
   scale: number
   selected: boolean
   onSelect: () => void
-  onChange: (patch: Partial<{ x: number; y: number; rotation: number; scale: number }>) => void
+  onChange: (patch: Partial<PlacedSticker>) => void
 }) {
   const [img] = useImage(url, "anonymous")
   const ref = useRef<any>(null)
-  useEffect(() => { if (ref.current) ref.current.setAttr("nodeId", nodeId) }, [nodeId])
-
+  useEffect(() => { ref.current?.setAttr("nodeId", nodeId) }, [nodeId])
   return (
     <KImage
       ref={ref}
@@ -529,9 +574,9 @@ function StickerNode({
       onTransformEnd={() => {
         const node = ref.current
         if (!node) return
-        const scaleX = node.scaleX()
+        const sx = node.scaleX()
         node.scaleX(1); node.scaleY(1)
-        onChange({ x: node.x(), y: node.y(), rotation: node.rotation(), scale: scale * scaleX })
+        onChange({ x: node.x(), y: node.y(), rotation: node.rotation(), scale: scale * sx })
       }}
       shadowForStrokeEnabled={false}
       perfectDrawEnabled={false}
