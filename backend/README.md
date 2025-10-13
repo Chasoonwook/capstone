@@ -129,3 +129,88 @@ _music_ 테이블의 mood 칼럼과 _photo.analysis_ 테이블의 background를 
 POST /api/rankings/refresh
 해당 핸들러로 주간,월간 집계를 재계산 가능or SQL 집계 최신화를 통해 최신화가능
 
+### ranking.js 코드 수정 (1013)
+1) 엔드포인트/리밋 처리
+
+(기존) 경로 프리픽스가 rankings-simple로 사용되기도 함.
+
+(최종) 프론트 표준 경로에 맞춰 GET /api/rankings/weekly, GET /api/rankings/monthly 로 고정.
+리밋 처리도 유틸 clampLimit()로 통일해 1~100 범위 보정.
+
+2) 주간 쿼리의 “이번 주 미집계” 폴백 로직 추가
+
+(기존) 항상 “이번 주”만 딱 조회 → 해당 주차 레코드가 없으면 빈 결과.
+
+(최종) 이번 주가 비어 있으면 가장 최근 주차로 자동 폴백.
+
+-- 핵심 아이디어 (요약)
+WITH this_week AS (...),
+     target_week AS (
+       SELECT COALESCE(
+         -- 이번 주 데이터가 있으면 이번 주
+         (SELECT tw.week_start_kst FROM this_week tw WHERE EXISTS (... ranking_weekly ...)),
+         -- 없으면 가장 최근 주차
+         (SELECT (rw.week_start::date) FROM ranking_weekly rw ORDER BY 1 DESC LIMIT 1)
+       ) AS week_start_kst
+     )
+SELECT ...
+FROM ranking_weekly rw
+JOIN target_week tw ON (rw.week_start::date) = tw.week_start_kst;
+
+
+부수 효과: week_start 컬럼이 timestamp여도 (week_start::date)로 비교해 타입 미스매치를 회피.
+
+3) 메타 조인 방식 정리 (title/artist는 DB, 커버는 Spotify)
+
+(기존) LEFT JOIN musics m ON m.id = rw.music_id 하고, m.album_image까지 DB에서 반환.
+
+(최종)
+
+title/artist: 당신이 지정한 대로 music 테이블과 music_id로 LEFT JOIN해서 가져옴.
+
+LEFT JOIN music m ON m.music_id = rw.music_id
+SELECT m.title AS music_title, m.artist AS music_artist
+
+
+앨범 표지(cover): DB 컬럼 대신 Spotify Search API로 조회해서 album_image_url로 내려줌.
+
+클라이언트 크리덴셜 토큰 발급(인메모리 캐시)
+
+track:title artist:artist 쿼리로 검색 → album.images[0].url 추출
+
+(제목/가수 동일 요청) 이미지 URL 인메모리 캐시로 중복 호출 최소화
+
+(결과 스키마) 프론트에서 쓰는 music_title, music_artist, album_image_url 그대로 유지.
+(장르는 필요 시 music 테이블에서 추가하거나, 지금은 null 유지)
+
+4) 월간 쿼리도 동일 스키마로 통일
+
+(기존) 월간도 DB의 album_image를 그대로 내려줌.
+
+(최종) 주간과 동일하게 music 조인으로 title/artist를 붙이고, 커버는 Spotify로 채워 album_image_url 제공.
+
+5) 에러 로그/구조 소소한 정리
+
+콘솔 로그 태그를 rankings/weekly, rankings/monthly 등으로 일관되게 정리.
+
+실패 응답 키를 { error: "..." } 형식으로 단순화.
+
+### server.js 코드 수정 (1013)
+🔧 1️⃣ 핵심 변화 — rankings 라우터 두 경로로 등록
+✔ 기존
+[ "/api/rankings", "routes/rankings" ],
+
+
+/api/rankings/* 경로만 인식
+
+프론트가 /api/rankings-simple/*으로 요청하면 404 발생
+
+🔥 수정 후
+// rankings는 두 경로로 동시 마운트 (404 방지용)
+[ "/api/rankings", "routes/rankings" ],
+[ "/api/rankings-simple", "routes/rankings" ],
+
+
+👉 즉, 같은 라우터 파일(routes/rankings.js)을 /api/rankings와 /api/rankings-simple 둘 다에 등록해서
+프론트 요청이 어느 쪽으로 오든 정상 응답하도록 바꾼 거야.
+이게 지금 404 에러(특히 Render 배포 환경) 해결의 핵심 포인트야.
