@@ -36,19 +36,21 @@ export default function Page() {
   const [selectedGenres, setSelectedGenres] = useState<string[]>([])
   const [showUploadModal, setShowUploadModal] = useState(false)
 
+  // 계정 식별자 (없으면 guest)
   const accountId = useMemo(() => {
     const anyUser = (user ?? {}) as any
     return (
       anyUser.email?.trim() ||
-      anyUser.id?.trim() ||
-      anyUser.uid?.trim() ||
-      anyUser.userId?.trim() ||
+      anyUser.id?.toString()?.trim() ||
+      anyUser.uid?.toString()?.trim() ||
+      anyUser.userId?.toString()?.trim() ||
       "guest"
     )
   }, [user])
 
-  const dismissKey = useMemo(
-    () => `spotify_connect_modal_dismissed_until::${accountId}`,
+  // ✅ “한 번만” 표시를 위한 key
+  const seenKey = useMemo(
+    () => `spotify_connect_prompt_seen::${accountId}`,
     [accountId],
   )
 
@@ -66,7 +68,7 @@ export default function Page() {
     router.push(last)
   }
 
-  // useSearchParams 대신 클라이언트에서만 쿼리 읽기
+  // 최초 마운트: 쿼리 처리 및 status 캐시 무효화
   useEffect(() => {
     if (typeof window === "undefined") return
     const url = new URL(window.location.href)
@@ -87,7 +89,7 @@ export default function Page() {
     }
   }, [])
 
-  // Spotify 연결 상태 체크(60초 캐시 + 포커스시 강제 재조회)
+  // ✅ Spotify 연결 상태 체크 (포커스 시 재조회) — 모달은 “한 번만”
   useEffect(() => {
     let mounted = true
 
@@ -96,29 +98,35 @@ export default function Page() {
         if (force) invalidateSpotifyStatus()
         const j = await getSpotifyStatus()
         if (!mounted) return
+
         const connected = !!j?.connected
         setIsSpotifyConnected(connected)
 
-        const dismissedUntil = Number(localStorage.getItem(dismissKey) || "0")
-        const now = Date.now()
-        setShowSpotifyModal(isLoggedIn ? !connected && now > dismissedUntil : false)
+        // 이미 본 적 있으면 절대 열지 않음
+        const alreadySeen = typeof window !== "undefined" && localStorage.getItem(seenKey) === "1"
+
+        // 로그인했고, 연결 안 되었고, 이전에 보여준 적 없을 때만 한 번 띄움
+        setShowSpotifyModal(isLoggedIn && !connected && !alreadySeen)
       } catch {
         if (!mounted) return
         setIsSpotifyConnected(false)
-        setShowSpotifyModal(isLoggedIn)
+
+        const alreadySeen = typeof window !== "undefined" && localStorage.getItem(seenKey) === "1"
+        setShowSpotifyModal(isLoggedIn && !alreadySeen)
       }
     }
 
     // 최초 1회 강제 재조회
     checkConnected(true)
 
+    // 포커스 전환 시 재조회(연결됐는지 정도만 갱신)
     const onFocus = () => checkConnected(true)
     window.addEventListener("focus", onFocus)
     return () => {
       mounted = false
       window.removeEventListener("focus", onFocus)
     }
-  }, [dismissKey, isLoggedIn])
+  }, [seenKey, isLoggedIn])
 
   const toggleGenre = (genre: string) => {
     setSelectedGenres((prev) =>
@@ -216,17 +224,19 @@ export default function Page() {
         </div>
       )}
 
+      {/* ✅ “한 번만” 뜨는 스포티파이 연결 모달 */}
       <SpotifyConnectModal
         open={isLoggedIn && !isSpotifyConnected && showSpotifyModal}
         onClose={() => {
           try {
-            const sevenDaysMs = 7 * 24 * 60 * 60 * 1000
-            const expireAt = Date.now() + sevenDaysMs
-            localStorage.setItem(dismissKey, String(expireAt))
+            localStorage.setItem(seenKey, "1") // 닫으면 다시는 안 뜸
           } catch {}
           setShowSpotifyModal(false)
         }}
         onConnect={() => {
+          try {
+            localStorage.setItem(seenKey, "1") // 연결 시도해도 다시는 안 뜨게
+          } catch {}
           window.location.href = `${API_BASE}/api/spotify/authorize?return=/`
         }}
       />
@@ -234,13 +244,11 @@ export default function Page() {
       {/* 추천에서 내려왔을 때만: 미니 플레이어 스타일 하단바 */}
       {showNav && (
         <nav className="fixed bottom-0 left-0 right-0 z-40 bg-black text-white shadow-[0_-6px_18px_rgba(0,0,0,0.3)]">
-          {/* 진행바(디자인용) */}
           <div className="h-[3px] w-full bg-white/10">
             <div className="h-[3px] w-1/3 bg-white/60" />
           </div>
 
           <div className="max-w-5xl mx-auto px-4 py-2 flex items-center justify-between gap-3">
-            {/* 왼쪽: 홈 + 현재정보 (클릭시 플레이어 이동) */}
             <div className="flex items-center gap-3 min-w-0">
               <button
                 onClick={() => router.push("/")}
@@ -264,7 +272,6 @@ export default function Page() {
               </button>
             </div>
 
-            {/* 가운데: 컨트롤(누르면 플레이어) */}
             <div className="flex items-center gap-5">
               <button
                 onClick={openPlayer}
@@ -292,7 +299,6 @@ export default function Page() {
               </button>
             </div>
 
-            {/* 오른쪽: 플레이리스트/볼륨(디자인용) */}
             <div className="flex items-center gap-3">
               <button
                 onClick={openPlayer}
