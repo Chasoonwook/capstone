@@ -6,20 +6,13 @@ import Image from "next/image"
 import { Button } from "@/components/ui/button"
 import { API_BASE } from "@/lib/api"
 import { ArrowLeft, Save, Sparkles } from "lucide-react"
-
-// ✅ RecommendClient에서 쓰던 인증 유틸 그대로 사용
-import { buildAuthHeaderFromLocalStorage, fetchMe } from "@/app/recommend/hooks/useAuthMe"
+import { fetchMe } from "@/app/recommend/hooks/useAuthMe"
 
 type HistoryRow = {
   history_id: number
   user_id: number
   photo_id: number
   music_id: number
-  title?: string | null
-  artist?: string | null
-  genre?: string | null
-  label?: string | null
-  selected_from?: "main" | "sub" | null
   created_at?: string
 }
 
@@ -28,21 +21,13 @@ export default function EditorClient() {
   const router = useRouter()
 
   const photoId = searchParams.get("photoId")
-  const historyId = searchParams.get("historyId")
+  const historyId = searchParams.get("historyId") // 기존 값이 있으면 유지
   const musicId = searchParams.get("musicId")
   const selectedFromParam = searchParams.get("selected_from")
 
   const [imgUrl, setImgUrl] = useState<string | null>(null)
-  const [isEditing, setIsEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
-
-  // SearchAndRequest에서 저장한 곡 메타가 필요하면 읽어서 UI에 사용할 수 있음
-  // const [songMeta, setSongMeta] = useState<{title:string|null;artist:string|null;cover:string|null}|null>(null)
-  // useEffect(() => {
-  //   const raw = sessionStorage.getItem("editorSong")
-  //   if (raw) { try { const s = JSON.parse(raw); setSongMeta({title:s.title, artist:s.artist, cover:s.cover}); } catch {} }
-  // }, [])
 
   const candidates = useMemo(() => {
     if (!photoId) return []
@@ -64,102 +49,71 @@ export default function EditorClient() {
             setImgUrl(u)
             return
           }
-        } catch {
-          // try next
-        }
+        } catch {}
       }
       setImgUrl("/placeholder.svg")
     })()
-    return () => {
-      alive = false
-    }
+    return () => { alive = false }
   }, [photoId, candidates])
 
-  /* ---------------- 저장 로직 (RecommendClient 방식) ---------------- */
-  const saveHistory = useCallback(async (): Promise<number | null> => {
-    if (!photoId) {
-      setErrorMsg("photoId가 없습니다.")
-      return null
-    }
-    if (!musicId) {
-      setErrorMsg("musicId가 없습니다.")
-      return null
-    }
+  // history 저장(없으면 생성) → diaries 업서트
+  const saveHistoryAndDiary = useCallback(async (): Promise<number | null> => {
+    if (!photoId) { setErrorMsg("photoId가 없습니다."); return null }
+    if (!musicId) { setErrorMsg("musicId가 없습니다."); return null }
 
-    setSaving(true)
-    setErrorMsg(null)
+    setSaving(true); setErrorMsg(null)
     try {
       const me = await fetchMe()
-      if (!me?.id) {
-        const authHeader = buildAuthHeaderFromLocalStorage()
-        if (!authHeader.Authorization) {
-          setErrorMsg("로그인이 필요합니다.")
-          return null
-        }
-      }
+      if (!me?.id) { setErrorMsg("로그인이 필요합니다."); return null }
 
-      const selected_from =
-        selectedFromParam === "preferred" ? null : selectedFromParam === "sub" ? "sub" : "main"
-
-      const payload = {
-        user_id: me?.id ?? undefined,
-        photo_id: Number(photoId),
-        music_id: Number(musicId),
-        selected_from,
-      }
-
-      let res = await fetch(`${API_BASE}/api/history`, {
+      // 1) history (스냅샷)
+      const resHist = await fetch(`${API_BASE}/api/history`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          user_id: me.id,
+          photo_id: Number(photoId),
+          music_id: Number(musicId),
+          selected_from: (selectedFromParam === "main" || selectedFromParam === "sub") ? selectedFromParam : null,
+        }),
       })
+      if (!resHist.ok) throw new Error("history 저장 실패")
+      const hist: HistoryRow = await resHist.json()
+      const hid = hist?.history_id
+      if (!hid) throw new Error("history_id가 없습니다.")
 
-      if (!res.ok) {
-        const authHeader = buildAuthHeaderFromLocalStorage()
-        if (!authHeader.Authorization) {
-          const errText = await res.text().catch(() => "")
-          throw new Error(errText || `히스토리 저장 실패 (HTTP ${res.status})`)
-        }
-        res = await fetch(`${API_BASE}/api/history`, {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json", ...authHeader },
-          body: JSON.stringify({ ...payload }),
-        })
-        if (!res.ok) {
-          const errText = await res.text().catch(() => "")
-          throw new Error(errText || `히스토리 저장 실패 (HTTP ${res.status})`)
-        }
-      }
+      // 2) diaries 업서트
+      const resDia = await fetch(`${API_BASE}/api/diaries`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: me.id,
+          photo_id: Number(photoId),
+          music_id: Number(musicId),
+          subject: "사진 저장",
+          content: "편집 없이 저장된 사진입니다.",
+        }),
+      })
+      if (!resDia.ok) throw new Error("다이어리 저장 실패")
 
-      const data: HistoryRow = await res.json()
-      if (!data?.history_id) {
-        throw new Error("서버 응답에 history_id가 없습니다.")
-      }
-      return data.history_id
+      return hid
     } catch (e: any) {
-      setErrorMsg(e?.message || "네트워크 오류가 발생했습니다.")
+      setErrorMsg(e?.message || "저장 중 오류가 발생했습니다.")
       return null
     } finally {
       setSaving(false)
     }
   }, [photoId, musicId, selectedFromParam])
 
-  /* ---------------- 버튼 동작 ---------------- */
   const handleCancel = () => {
-    try {
-      router.back()
-    } catch {
-      router.push("/")
-    }
+    try { router.back() } catch { router.push("/") }
   }
 
   const handleSaveAsIs = async () => {
-    const newId = await saveHistory()
-    if (newId) {
-      router.push("/")
-    }
+    const newId = await saveHistoryAndDiary()
+    if (newId) router.push("/diary")
   }
 
   const handleGoEdit = () => {
@@ -216,12 +170,7 @@ export default function EditorClient() {
         )}
 
         <div className="flex flex-col sm:flex-row gap-3 justify-center">
-          <Button
-            variant="outline"
-            onClick={handleCancel}
-            disabled={saving}
-            className="sm:w-auto w-full bg-transparent"
-          >
+          <Button variant="outline" onClick={handleCancel} disabled={saving} className="sm:w-auto w-full bg-transparent">
             <ArrowLeft className="w-4 h-4 mr-2" />
             돌아가기
           </Button>
@@ -236,11 +185,7 @@ export default function EditorClient() {
             {saving ? "저장 중…" : "바로 저장하기"}
           </Button>
 
-          <Button
-            onClick={handleGoEdit}
-            disabled={saving}
-            className="sm:w-auto w-full bg-primary hover:bg-primary/90"
-          >
+          <Button onClick={handleGoEdit} disabled={saving} className="sm:w-auto w-full bg-primary hover:bg-primary/90">
             <Sparkles className="w-4 h-4 mr-2" />
             꾸미기
           </Button>
