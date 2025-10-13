@@ -101,10 +101,6 @@ async function attachCovers(items) {
 
 /* ──────────────────────────────────────────────────────────────
  * 2) music 메타 테이블/컬럼 자동 감지 + 메타 맵 조회
- *    - 테이블 후보: musics, music, songs
- *    - PK 후보: music_id, id
- *    - 필수 컬럼: title, artist
- *    - 선택 컬럼: genre, album_image / album_image_url
  * ──────────────────────────────────────────────────────────────*/
 async function detectMusicMeta() {
   const tSql = `
@@ -182,7 +178,6 @@ function mergeRowsWithMeta(rows, metaMap) {
       music_title: mm.title ?? null,
       music_artist: mm.artist ?? null,
       music_genre: mm.genre ?? null,
-      // 우선 DB 메타에 커버가 있으면 사용, 없으면 Spotify에서 나중에 채움
       album_image_url: mm.album_image_url ?? null,
     };
   });
@@ -214,18 +209,16 @@ router.get("/weekly", async (req, res) => {
   try {
     const { rows } = await pool.query(sql, [limit]);
 
-    // title/artist 메타 병합
     const metaMap = await fetchMusicMetaMap(rows.map((r) => r.music_id));
     let items = mergeRowsWithMeta(rows, metaMap);
 
-    // 커버가 비어있는 항목만 Spotify로 채우기
+    // 커버 없는 항목만 Spotify로 채우기
     const needCover = items.filter((it) => !it.album_image_url);
     if (needCover.length > 0) {
       const filled = await attachCovers(needCover);
-      // 병합 결과 반영
       const map = new Map(filled.map((x) => [x.music_id, x.album_image_url]));
       items = items.map((it) =>
-        it.album_image_url ? it : { ...it, album_image_url: map.get(it.music_id) ?? null }
+        it.album_image_url ? it : ({ ...it, album_image_url: map.get(it.music_id) ?? null })
       );
     }
 
@@ -262,7 +255,7 @@ router.get("/monthly", async (req, res) => {
       const filled = await attachCovers(needCover);
       const map = new Map(filled.map((x) => [x.music_id, x.album_image_url]));
       items = items.map((it) =>
-        it.album_image_url ? it : { ...it, album_image_url: map.get(it.music_id) ?? null }
+        it.album_image_url ? it : ({ ...it, album_image_url: map.get(it.music_id) ?? null })
       );
     }
 
