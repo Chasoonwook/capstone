@@ -99,79 +99,90 @@ async function attachCovers(items) {
   });
 }
 
-/** ───────── 안전한 메타 테이블 감지 (information_schema 기반) ───────── */
-async function detectMusicMeta() {
-  // 후보 테이블 중 실제 존재하고, title/artist가 있으며 PK 후보(id|music_id)가 있는 테이블만 고른다
-  const candidates = ['musics', 'music', 'songs'];
+/* ──────────────────────────────────────────────────────────────
+ * 2) music 메타 테이블/컬럼 자동 감지(캐시) + 메타 맵 조회
+ * ──────────────────────────────────────────────────────────────*/
+// 후보 순서: 운영 DB에 맞춰 'music'을 최우선
+const META_CANDIDATES = ["music", "musics", "songs"];
+let MUSIC_META_CACHE = undefined; // undefined: 미감지, null: 없음, object: 감지됨
 
-  // 테이블별 컬럼 목록 조회
+async function detectMusicMeta() {
   const q = `
     SELECT table_name, column_name
     FROM information_schema.columns
-    WHERE table_schema = 'public'
-      AND table_name = ANY($1)
+    WHERE table_schema='public' AND table_name = ANY($1)
   `;
-  const { rows } = await pool.query(q, [candidates]);
+  const { rows } = await pool.query(q, [META_CANDIDATES]);
   if (!rows?.length) return null;
 
   const byTable = new Map();
   for (const r of rows) {
-    const name = r.table_name;
-    if (!byTable.has(name)) byTable.set(name, new Set());
-    byTable.get(name).add(r.column_name);
+    const t = r.table_name;
+    if (!byTable.has(t)) byTable.set(t, new Set());
+    byTable.get(t).add(r.column_name);
   }
 
-  // 필수 컬럼 조건을 만족하는 첫 테이블 선택
-  for (const t of candidates) {
+  for (const t of META_CANDIDATES) {
     const cols = byTable.get(t);
     if (!cols) continue;
 
-    const hasId = cols.has('music_id') || cols.has('id');
-    const hasTitle = cols.has('title');
-    const hasArtist = cols.has('artist');
-
+    const hasId = cols.has("music_id") || cols.has("id");
+    const hasTitle = cols.has("title");
+    const hasArtist = cols.has("artist");
     if (!hasId || !hasTitle || !hasArtist) continue;
 
-    // 선택 컬럼
-    const genreCol = cols.has('genre') ? 'genre' : null;
-    const albumCol = cols.has('album_image_url')
-      ? 'album_image_url'
-      : (cols.has('album_image') ? 'album_image' : null);
+    const genreCol = cols.has("genre") ? "genre" : null;
+    const albumCol = cols.has("album_image_url")
+      ? "album_image_url"
+      : cols.has("album_image")
+      ? "album_image"
+      : null;
 
     return {
-      table: t,                                   // 검증된 테이블명
-      idCol: cols.has('music_id') ? 'music_id' : 'id',
-      titleCol: 'title',
-      artistCol: 'artist',
+      table: t,
+      idCol: cols.has("music_id") ? "music_id" : "id",
+      titleCol: "title",
+      artistCol: "artist",
       genreCol,
       albumCol,
     };
   }
-
-  // 어떤 후보도 조건을 만족하지 않으면 메타 없음 처리
   return null;
 }
 
-/** ───────── id 배열 → {id:{title,artist,genre,album_image_url}} 맵 ───────── */
+async function getMusicMetaOnce() {
+  if (MUSIC_META_CACHE !== undefined) return MUSIC_META_CACHE;
+  try {
+    const meta = await detectMusicMeta();
+    MUSIC_META_CACHE = meta || null;
+  } catch (e) {
+    console.warn("[rankings] detectMusicMeta failed:", e.message);
+    MUSIC_META_CACHE = null;
+  }
+  return MUSIC_META_CACHE;
+}
+
+/** id 배열 → {id:{title,artist,genre,album_image_url}} 맵 */
 async function fetchMusicMetaMap(ids) {
-  const uniq = Array.from(new Set(ids)).filter(v => Number.isFinite(Number(v)));
+  const uniq = Array.from(new Set(ids)).filter((v) => Number.isFinite(Number(v)));
   if (uniq.length === 0) return new Map();
 
-  const meta = await detectMusicMeta();
-  if (!meta) return new Map(); // 메타 테이블을 못 찾으면 조용히 스킵
+  const meta = await getMusicMetaOnce();
+  if (!meta) return new Map();
 
-  // identifier는 화이트리스트(소문자/밑줄만) 검증 후 사용
-  const identOk = /^[a-z_]+$/.test(meta.table)
-               && /^[a-z_]+$/.test(meta.idCol)
-               && /^[a-z_]+$/.test(meta.titleCol)
-               && /^[a-z_]+$/.test(meta.artistCol)
-               && (!meta.genreCol  || /^[a-z_]+$/.test(meta.genreCol))
-               && (!meta.albumCol  || /^[a-z_]+$/.test(meta.albumCol));
+  // identifier 화이트리스트 검증
+  const identOk =
+    /^[a-z_]+$/.test(meta.table) &&
+    /^[a-z_]+$/.test(meta.idCol) &&
+    /^[a-z_]+$/.test(meta.titleCol) &&
+    /^[a-z_]+$/.test(meta.artistCol) &&
+    (!meta.genreCol || /^[a-z_]+$/.test(meta.genreCol)) &&
+    (!meta.albumCol || /^[a-z_]+$/.test(meta.albumCol));
   if (!identOk) return new Map();
 
   const sql = `
     SELECT
-      ${meta.idCol}   AS id,
+      ${meta.idCol}     AS id,
       ${meta.titleCol}  AS title,
       ${meta.artistCol} AS artist
       ${meta.genreCol ? `, ${meta.genreCol} AS genre` : ``}
@@ -179,21 +190,19 @@ async function fetchMusicMetaMap(ids) {
     FROM ${meta.table}
     WHERE ${meta.idCol} = ANY($1)
   `;
-
   try {
     const { rows } = await pool.query(sql, [uniq]);
     const map = new Map();
-    rows.forEach(r => {
+    rows.forEach((r) =>
       map.set(Number(r.id), {
         title: r.title ?? null,
         artist: r.artist ?? null,
         genre: r.genre ?? null,
         album_image_url: r.album_image_url ?? null,
-      });
-    });
+      })
+    );
     return map;
   } catch (e) {
-    // 여기서 에러가 나면 전체 API가 실패하지 않도록 메타를 생략
     console.warn("[rankings] meta fetch skipped:", e.message);
     return new Map();
   }
@@ -250,7 +259,7 @@ router.get("/weekly", async (req, res) => {
       const filled = await attachCovers(needCover);
       const map = new Map(filled.map((x) => [x.music_id, x.album_image_url]));
       items = items.map((it) =>
-        it.album_image_url ? it : ({ ...it, album_image_url: map.get(it.music_id) ?? null })
+        it.album_image_url ? it : { ...it, album_image_url: map.get(it.music_id) ?? null }
       );
     }
 
@@ -287,7 +296,7 @@ router.get("/monthly", async (req, res) => {
       const filled = await attachCovers(needCover);
       const map = new Map(filled.map((x) => [x.music_id, x.album_image_url]));
       items = items.map((it) =>
-        it.album_image_url ? it : ({ ...it, album_image_url: map.get(it.music_id) ?? null })
+        it.album_image_url ? it : { ...it, album_image_url: map.get(it.music_id) ?? null }
       );
     }
 
