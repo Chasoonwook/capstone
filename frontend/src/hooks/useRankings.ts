@@ -9,15 +9,14 @@ export type RankingItem = {
   music_id: number
   play_count: number
   last_played: string | null
+  /** 직전 기간 대비 변화량: (prev_rank - rank)
+   *  양수 => 순위 상승, 음수 => 하락, null => 신규/비교 불가
+   */
+  rank_change: number | null
   music_title: string | null
   music_artist: string | null
   music_genre: string | null
   album_image_url: string | null
-}
-
-export type RankingsResponse = {
-  period: "weekly" | "monthly"
-  items: any[] // 서버 응답을 먼저 받고 아래 normalize에서 정제
 }
 
 /** 서버 응답을 UI에서 쓰기 쉬운 형태로 정규화 */
@@ -32,24 +31,45 @@ function normalizeRow(raw: any): RankingItem {
     raw?.artist ??
     null
 
-  // 장르 키 호환
   const genre =
     raw?.music_genre ??
     raw?.genre ??
     null
 
-  // 앨범 이미지 키 호환
   const albumImage =
     raw?.album_image_url ??
     raw?.album_image ??
     raw?.albumImage ??
     null
 
+  const rank = Number(raw?.rank ?? 0)
+  const musicId = Number(raw?.music_id ?? raw?.id ?? 0)
+  const playCount = Number(raw?.play_count ?? raw?.count ?? 0)
+  const lastPlayed = raw?.last_played ?? null
+
+  // 백엔드가 내려주는 우선 키: rank_change
+  // 호환: change, delta, diff 등(혹시 다른 이름을 썼을 경우 대비)
+  const rc =
+    raw?.rank_change ??
+    raw?.change ??
+    raw?.delta ??
+    raw?.diff ??
+    null
+
+  // 숫자 이외 값 방어
+  const rankChange =
+    rc === null || rc === undefined
+      ? null
+      : Number.isFinite(Number(rc))
+      ? Number(rc)
+      : null
+
   return {
-    rank: Number(raw?.rank ?? 0),
-    music_id: Number(raw?.music_id ?? raw?.id ?? 0),
-    play_count: Number(raw?.play_count ?? raw?.count ?? 0),
-    last_played: raw?.last_played ?? null,
+    rank,
+    music_id: musicId,
+    play_count: playCount,
+    last_played: lastPlayed,
+    rank_change: rankChange, // 없으면 null
     music_title: title ?? "제목 없음",
     music_artist: artist ?? "",
     music_genre: genre,
@@ -61,10 +81,11 @@ async function fetchRankings(
   period: "weekly" | "monthly",
   limit: number,
 ): Promise<RankingItem[]> {
-  // 1순위: /api/rankings/*  2순위: /api/rankings-simple/*
+  // 1순위: /api/rankings/* (신규, rank_change 포함)
+  // 2순위: /api/rankings-simple/* (구형, 변화량 없음)
   const paths = [
-    `/api/rankings/${period}?limit=${limit}`,
-    `/api/rankings-simple/${period}?limit=${limit}`,
+    `/api/rankings/${period}?limit=${Math.max(1, Math.min(limit, 100))}`,
+    `/api/rankings-simple/${period}?limit=${Math.max(1, Math.min(limit, 100))}`,
   ]
 
   let lastErr: unknown = null
@@ -78,8 +99,9 @@ async function fetchRankings(
       }
       if (!r.ok) throw new Error(`HTTP_${r.status}`)
 
-      const j: RankingsResponse = await r.json()
-      const rows = Array.isArray(j?.items) ? j.items : []
+      // 응답이 배열이거나 {items: [...]} 둘 다 수용
+      const j = await r.json()
+      const rows = Array.isArray(j) ? j : Array.isArray(j?.items) ? j.items : []
       return rows.map(normalizeRow)
     } catch (e) {
       lastErr = e
@@ -89,7 +111,7 @@ async function fetchRankings(
   throw lastErr ?? new Error("failed_to_fetch_rankings")
 }
 
-export function useRankings(period: "weekly" | "monthly", limit = 50) {
+export function useRankings(period: "weekly" | "monthly", limit = 100) {
   const [items, setItems] = useState<RankingItem[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)

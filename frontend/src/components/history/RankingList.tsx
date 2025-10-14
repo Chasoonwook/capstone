@@ -4,7 +4,17 @@
 import Image from "next/image"
 import { useState, useRef, useEffect } from "react"
 import { useRankings } from "@/hooks/useRankings"
-import { Play, TrendingUp, TrendingDown, Minus, Heart, MoreVertical, ChevronLeft, ChevronRight } from "lucide-react"
+import {
+  Play,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  Heart,
+  MoreVertical,
+  ChevronLeft,
+  ChevronRight,
+  Sparkles,
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
 
 function timeAgo(iso?: string | null) {
@@ -22,28 +32,61 @@ function timeAgo(iso?: string | null) {
   return `${day}d ago`
 }
 
-function RankChange({ rank }: { rank: number }) {
-  // Simulate rank change (in real app, this would come from data)
-  const change = Math.floor(Math.random() * 10) - 3
+/** API 아이템 타입(일간 변동은 선택적) */
+type RankingItem = {
+  rank: number
+  music_id: number
+  play_count: number
+  last_played: string | null
+  rank_change: number | null          // 주/월 기준 변동
+  day_rank_change?: number | null     // 어제 vs 오늘 (선택)
+  day_is_new?: boolean                // 오늘 NEW 여부 (선택, 백엔드에서 제공)
+  music_title: string | null
+  music_artist: string | null
+  music_genre: string | null
+  album_image_url: string | null
+}
 
-  if (change > 0) {
+/** 하루 변동값 우선, 없으면 기존 주/월 변동으로 폴백 */
+function getDayChange(it: RankingItem): number | null {
+  if (typeof it.day_rank_change !== "undefined") return it.day_rank_change ?? null
+  return it.rank_change ?? null
+}
+
+/** 표시 규칙:
+ *  - NEW: day_is_new === true 일 때만
+ *  - 숫자: change > 0 상승 / change < 0 하락
+ *  - 0 또는 기타: 변동 없음('-')
+ */
+function RankChange({ change, isNew }: { change: number | null, isNew?: boolean }) {
+  if (isNew) {
     return (
-      <div className="flex items-center gap-0.5 text-[10px] font-semibold text-blue-500">
-        <TrendingUp className="w-3 h-3" />
-        <span>{change}</span>
+      <div className="flex items-center gap-1 text-sm font-semibold text-purple-600">
+        <Sparkles className="w-4 h-4" />
+        <span className="tracking-wide">NEW</span>
       </div>
     )
-  } else if (change < 0) {
+  }
+  if (!change) { // null 또는 0 모두 '-'
     return (
-      <div className="flex items-center gap-0.5 text-[10px] font-semibold text-red-500">
-        <TrendingDown className="w-3 h-3" />
-        <span>{Math.abs(change)}</span>
+      <div className="flex items-center gap-1 text-sm text-muted-foreground">
+        <Minus className="w-4 h-4" />
+        <span>변동 없음</span>
+      </div>
+    )
+  }
+  if (change > 0) {
+    return (
+      <div className="flex items-center gap-1 text-sm font-semibold text-blue-500">
+        <TrendingUp className="w-4 h-4" />
+        <span className="tabular-nums">{change}위 상승</span>
       </div>
     )
   }
   return (
-    <div className="flex items-center text-[10px] text-muted-foreground">
-      <Minus className="w-3 h-3" />
+    <div className="flex items-center gap-1 text-sm font-semibold text-red-500">
+      <TrendingDown className="w-4 h-4" />
+      <span className="tabular-nums">{Math.abs(change)}위 하락</span>
     </div>
   )
 }
@@ -55,8 +98,10 @@ export default function RankingsList() {
   const [period, setPeriod] = useState<"weekly" | "monthly">("weekly")
   const { items, loading, error } = useRankings(period, TOTAL_ITEMS)
 
+  const allItems: RankingItem[] = (items as RankingItem[] | undefined) ?? []
+
   const [currentPage, setCurrentPage] = useState(0)
-  const totalPages = Math.ceil((items?.length || 0) / ITEMS_PER_PAGE)
+  const totalPages = Math.ceil(allItems.length / ITEMS_PER_PAGE)
 
   const containerRef = useRef<HTMLDivElement>(null)
   const startXRef = useRef(0)
@@ -92,7 +137,10 @@ export default function RankingsList() {
     setTranslateX(0)
   }
 
-  const currentItems = items?.slice(currentPage * ITEMS_PER_PAGE, (currentPage + 1) * ITEMS_PER_PAGE) || []
+  const currentItems = allItems.slice(
+    currentPage * ITEMS_PER_PAGE,
+    (currentPage + 1) * ITEMS_PER_PAGE
+  )
 
   return (
     <section className="px-4 py-6 max-w-5xl mx-auto">
@@ -131,16 +179,16 @@ export default function RankingsList() {
       {loading && <div className="text-sm text-muted-foreground px-1 py-12 text-center">차트를 불러오는 중…</div>}
       {error && <div className="text-sm text-red-500 px-1 py-12 text-center">불러오기 실패: {error}</div>}
 
-      {!loading && !error && items && items.length === 0 && (
+      {!loading && !error && allItems.length === 0 && (
         <div className="text-sm text-muted-foreground px-1 py-12 text-center">집계된 차트가 없습니다.</div>
       )}
 
-      {!loading && !error && items && items.length > 0 && (
+      {!loading && !error && allItems.length > 0 && (
         <>
           <div className="flex items-center justify-between mb-4">
             <div className="text-sm text-muted-foreground">
-              {currentPage * ITEMS_PER_PAGE + 1} - {Math.min((currentPage + 1) * ITEMS_PER_PAGE, items.length)} /{" "}
-              {items.length}곡
+              {currentPage * ITEMS_PER_PAGE + 1} - {Math.min((currentPage + 1) * ITEMS_PER_PAGE, allItems.length)} /{" "}
+              {allItems.length}곡
             </div>
             <div className="flex items-center gap-2">
               <Button
@@ -189,11 +237,9 @@ export default function RankingsList() {
           >
             <ul
               className="space-y-1 transition-transform duration-300 ease-out"
-              style={{
-                transform: `translateX(${translateX}px)`,
-              }}
+              style={{ transform: `translateX(${translateX}px)` }}
             >
-              {currentItems.map((it, idx) => {
+              {currentItems.map((it) => {
                 const isTopThree = it.rank <= 3
 
                 return (
@@ -201,13 +247,12 @@ export default function RankingsList() {
                     key={`${period}-${it.rank}-${it.music_id}`}
                     className="group flex items-center gap-4 rounded-xl px-4 py-3 hover:bg-accent/50 transition-all cursor-pointer"
                   >
-                    <div className="flex flex-col items-center gap-1 w-12">
+                    <div className="flex items-center justify-center w-12">
                       <div
                         className={`text-xl tabular-nums font-bold ${isTopThree ? "text-primary" : "text-foreground"}`}
                       >
                         {it.rank}
                       </div>
-                      <RankChange rank={it.rank} />
                     </div>
 
                     <div className="relative w-16 h-16 rounded-lg overflow-hidden bg-muted flex-shrink-0 shadow-md">
@@ -241,22 +286,15 @@ export default function RankingsList() {
                       </h3>
                       <div className="flex items-center gap-2 text-sm text-muted-foreground">
                         <span className="truncate">{it.music_artist || "아티스트"}</span>
-                        {it.music_genre && (
-                          <>
-                            <span className="text-xs">•</span>
-                            <span className="text-xs">{it.music_genre}</span>
-                          </>
-                        )}
                       </div>
                     </div>
 
                     <div className="flex items-center gap-4">
-                      <div className="text-right hidden sm:block">
-                        <p className="text-sm font-medium tabular-nums">{it.play_count.toLocaleString()}회</p>
-                        <p className="text-xs text-muted-foreground">{timeAgo(it.last_played)}</p>
+                      <div className="flex items-center justify-center w-28">
+                        <RankChange change={getDayChange(it)} isNew={it.day_is_new} />
                       </div>
 
-                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="flex items-center gap-1">
                         <Button size="icon" variant="ghost" className="w-9 h-9 hover:text-red-500">
                           <Heart className="w-4 h-4" />
                         </Button>
