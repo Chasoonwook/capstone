@@ -101,10 +101,8 @@ async function attachCovers(items) {
 
 /** ───────── 안전한 메타 테이블 감지 (information_schema 기반) ───────── */
 async function detectMusicMeta() {
-  // 후보 테이블 중 실제 존재하고, title/artist가 있으며 PK 후보(id|music_id)가 있는 테이블만 고른다
   const candidates = ['musics', 'music', 'songs'];
 
-  // 테이블별 컬럼 목록 조회
   const q = `
     SELECT table_name, column_name
     FROM information_schema.columns
@@ -121,7 +119,6 @@ async function detectMusicMeta() {
     byTable.get(name).add(r.column_name);
   }
 
-  // 필수 컬럼 조건을 만족하는 첫 테이블 선택
   for (const t of candidates) {
     const cols = byTable.get(t);
     if (!cols) continue;
@@ -132,14 +129,13 @@ async function detectMusicMeta() {
 
     if (!hasId || !hasTitle || !hasArtist) continue;
 
-    // 선택 컬럼
     const genreCol = cols.has('genre') ? 'genre' : null;
     const albumCol = cols.has('album_image_url')
       ? 'album_image_url'
       : (cols.has('album_image') ? 'album_image' : null);
 
     return {
-      table: t,                                   // 검증된 테이블명
+      table: t,
       idCol: cols.has('music_id') ? 'music_id' : 'id',
       titleCol: 'title',
       artistCol: 'artist',
@@ -148,7 +144,6 @@ async function detectMusicMeta() {
     };
   }
 
-  // 어떤 후보도 조건을 만족하지 않으면 메타 없음 처리
   return null;
 }
 
@@ -158,9 +153,8 @@ async function fetchMusicMetaMap(ids) {
   if (uniq.length === 0) return new Map();
 
   const meta = await detectMusicMeta();
-  if (!meta) return new Map(); // 메타 테이블을 못 찾으면 조용히 스킵
+  if (!meta) return new Map();
 
-  // identifier는 화이트리스트(소문자/밑줄만) 검증 후 사용
   const identOk = /^[a-z_]+$/.test(meta.table)
                && /^[a-z_]+$/.test(meta.idCol)
                && /^[a-z_]+$/.test(meta.titleCol)
@@ -193,7 +187,6 @@ async function fetchMusicMetaMap(ids) {
     });
     return map;
   } catch (e) {
-    // 여기서 에러가 나면 전체 API가 실패하지 않도록 메타를 생략
     console.warn("[rankings] meta fetch skipped:", e.message);
     return new Map();
   }
@@ -207,6 +200,8 @@ function mergeRowsWithMeta(rows, metaMap) {
       music_id: r.music_id,
       play_count: r.play_count,
       last_played: r.last_played,
+      // ▲ 양수: 상승, ▼ 음수: 하락, null: 신규/비교불가(주/월)
+      rank_change: r.rank_change ?? null,
       music_title: mm.title ?? null,
       music_artist: mm.artist ?? null,
       music_genre: mm.genre ?? null,
@@ -216,13 +211,16 @@ function mergeRowsWithMeta(rows, metaMap) {
 }
 
 /* ──────────────────────────────────────────────────────────────
- * 3) 주간: 이번 주 없으면 최신 주차 폴백 + 타입 캐스팅(::date)
+ * 3) 주간: 목표 주차 선택 + 직전 주차 랭크 대비 변화량 + 일간 NEW/변동
+ *    - 이번 주 랭킹이 없으면 최신 주차로 폴백
  * ──────────────────────────────────────────────────────────────*/
 // GET /api/rankings/weekly?limit=50
 router.get("/weekly", async (req, res) => {
   const limit = clampLimit(req.query.limit);
   const sql = `
     WITH kst AS (SELECT now() AT TIME ZONE 'Asia/Seoul' AS now_kst),
+
+    -- 주간 타겟 주간 선택
     this_week AS (SELECT date_trunc('week', (SELECT now_kst FROM kst))::date AS ws),
     target_week AS (
       SELECT COALESCE(
@@ -231,18 +229,99 @@ router.get("/weekly", async (req, res) => {
         )),
         (SELECT (rw1.week_start::date) FROM ranking_weekly rw1 ORDER BY 1 DESC LIMIT 1)
       ) AS ws
+    ),
+
+    -- 이번 주 랭킹
+    cur AS (
+      SELECT
+        rw.rank,
+        rw.music_id,
+        rw.play_count,
+        rw.last_played,
+        (rw.week_start::date) AS week_start
+      FROM ranking_weekly rw
+      JOIN target_week t ON (rw.week_start::date) = t.ws
+    ),
+
+    -- 직전 주 랭킹(주간 변동 계산용)
+    prev AS (
+      SELECT
+        rwp.music_id,
+        rwp.rank AS prev_rank
+      FROM ranking_weekly rwp
+      JOIN target_week t ON (rwp.week_start::date) = (t.ws - INTERVAL '7 day')::date
+    ),
+
+    -- ▼▼ 일간 랭킹(오늘/어제, KST) ▼▼
+    today_day      AS ( SELECT date_trunc('day', (SELECT now_kst FROM kst))::date AS ds ),
+    yesterday_day  AS ( SELECT (SELECT ds FROM today_day) - INTERVAL '1 day' AS ds ),
+
+    day_today AS (
+      SELECT
+        h.music_id,
+        COUNT(*) AS play_count,
+        MAX(h.created_at) AS last_played,
+        ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC, MAX(h.created_at) DESC, h.music_id ASC) AS rank_today
+      FROM history h
+      JOIN today_day d ON TRUE
+      WHERE h.created_at >= (d.ds::timestamptz AT TIME ZONE 'Asia/Seoul')
+        AND h.created_at <  ((d.ds + INTERVAL '1 day')::timestamptz AT TIME ZONE 'Asia/Seoul')
+      GROUP BY h.music_id
+    ),
+
+    day_yesterday AS (
+      SELECT
+        h.music_id,
+        COUNT(*) AS play_count,
+        MAX(h.created_at) AS last_played,
+        ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC, MAX(h.created_at) DESC, h.music_id ASC) AS rank_yesterday
+      FROM history h
+      JOIN yesterday_day d ON TRUE
+      WHERE h.created_at >= (d.ds::timestamptz AT TIME ZONE 'Asia/Seoul')
+        AND h.created_at <  ((d.ds + INTERVAL '1 day')::timestamptz AT TIME ZONE 'Asia/Seoul')
+      GROUP BY h.music_id
     )
-    SELECT rank, music_id, play_count, last_played
-    FROM ranking_weekly rw
-    JOIN target_week t ON (rw.week_start::date) = t.ws
-    ORDER BY rank ASC
+
+    SELECT
+      c.rank,
+      c.music_id,
+      c.play_count,
+      c.last_played,
+
+      -- 주간 변동: prev_week - curr_week
+      (p.prev_rank - c.rank) AS rank_change,
+
+      -- NEW: 오늘은 있고 어제는 없을 때만 true
+      CASE
+        WHEN dt.rank_today IS NOT NULL AND dy.rank_yesterday IS NULL THEN TRUE
+        ELSE FALSE
+      END AS day_is_new,
+
+      -- 일간 변동:
+      --  * NEW(오늘 O, 어제 X) → null (숫자 대신 NEW 배지)
+      --  * 오늘 X → 0 (표시상 '-')
+      --  * 그 외 → (어제 - 오늘)
+      CASE
+        WHEN dt.rank_today IS NOT NULL AND dy.rank_yesterday IS NULL THEN NULL
+        WHEN dt.rank_today IS NULL THEN 0
+        ELSE (dy.rank_yesterday - dt.rank_today)
+      END AS day_rank_change
+    FROM cur c
+    LEFT JOIN prev p ON p.music_id = c.music_id
+    LEFT JOIN day_today dt ON dt.music_id = c.music_id
+    LEFT JOIN day_yesterday dy ON dy.music_id = c.music_id
+    ORDER BY c.rank ASC
     LIMIT $1
   `;
   try {
     const { rows } = await pool.query(sql, [limit]);
 
     const metaMap = await fetchMusicMetaMap(rows.map((r) => r.music_id));
-    let items = mergeRowsWithMeta(rows, metaMap);
+    let items = mergeRowsWithMeta(rows, metaMap).map((r) => ({
+      ...r,
+      day_is_new: r.day_is_new === true,
+      day_rank_change: r.day_rank_change ?? null,
+    }));
 
     // 커버 없는 항목만 Spotify로 채우기
     const needCover = items.filter((it) => !it.album_image_url);
@@ -261,26 +340,111 @@ router.get("/weekly", async (req, res) => {
   }
 });
 
+
 /* ──────────────────────────────────────────────────────────────
- * 4) 월간: month_start ::date 비교 + 메타/커버 동일 처리
+ * 4) 월간: 이번 달 기준 + 직전 달 랭크 대비 변화량 + 일간 NEW/변동
+ *    - 이번 달이 비어있으면 최신 달로 폴백
  * ──────────────────────────────────────────────────────────────*/
 // GET /api/rankings/monthly?limit=50
 router.get("/monthly", async (req, res) => {
   const limit = clampLimit(req.query.limit);
   const sql = `
     WITH kst AS (SELECT now() AT TIME ZONE 'Asia/Seoul' AS now_kst),
-    mon AS (SELECT date_trunc('month', (SELECT now_kst FROM kst))::date AS ms)
-    SELECT rank, music_id, play_count, last_played
-    FROM ranking_monthly rm
-    JOIN mon ON (rm.month_start::date) = ms
-    ORDER BY rank ASC
+
+    this_month AS (SELECT date_trunc('month', (SELECT now_kst FROM kst))::date AS ms),
+    target_month AS (
+      SELECT COALESCE(
+        (SELECT ms FROM this_month tm WHERE EXISTS (
+           SELECT 1 FROM ranking_monthly rm0 WHERE (rm0.month_start::date) = tm.ms
+        )),
+        (SELECT (rm1.month_start::date) FROM ranking_monthly rm1 ORDER BY 1 DESC LIMIT 1)
+      ) AS ms
+    ),
+
+    cur AS (
+      SELECT
+        rm.rank,
+        rm.music_id,
+        rm.play_count,
+        rm.last_played,
+        (rm.month_start::date) AS month_start
+      FROM ranking_monthly rm
+      JOIN target_month t ON (rm.month_start::date) = t.ms
+    ),
+
+    prev AS (
+      SELECT
+        rmp.music_id,
+        rmp.rank AS prev_rank
+      FROM ranking_monthly rmp
+      JOIN target_month t ON (rmp.month_start::date) = (t.ms - INTERVAL '1 month')::date
+    ),
+
+    -- ▼▼ 일간 랭킹(오늘/어제, KST) ▼▼
+    today_day      AS ( SELECT date_trunc('day', (SELECT now_kst FROM kst))::date AS ds ),
+    yesterday_day  AS ( SELECT (SELECT ds FROM today_day) - INTERVAL '1 day' AS ds ),
+
+    day_today AS (
+      SELECT
+        h.music_id,
+        COUNT(*) AS play_count,
+        MAX(h.created_at) AS last_played,
+        ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC, MAX(h.created_at) DESC, h.music_id ASC) AS rank_today
+      FROM history h
+      JOIN today_day d ON TRUE
+      WHERE h.created_at >= (d.ds::timestamptz AT TIME ZONE 'Asia/Seoul')
+        AND h.created_at <  ((d.ds + INTERVAL '1 day')::timestamptz AT TIME ZONE 'Asia/Seoul')
+      GROUP BY h.music_id
+    ),
+
+    day_yesterday AS (
+      SELECT
+        h.music_id,
+        COUNT(*) AS play_count,
+        MAX(h.created_at) AS last_played,
+        ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC, MAX(h.created_at) DESC, h.music_id ASC) AS rank_yesterday
+      FROM history h
+      JOIN yesterday_day d ON TRUE
+      WHERE h.created_at >= (d.ds::timestamptz AT TIME ZONE 'Asia/Seoul')
+        AND h.created_at <  ((d.ds + INTERVAL '1 day')::timestamptz AT TIME ZONE 'Asia/Seoul')
+      GROUP BY h.music_id
+    )
+
+    SELECT
+      c.rank,
+      c.music_id,
+      c.play_count,
+      c.last_played,
+      (p.prev_rank - c.rank) AS rank_change,
+
+      -- NEW: 오늘은 있고 어제는 없을 때만 true
+      CASE
+        WHEN dt.rank_today IS NOT NULL AND dy.rank_yesterday IS NULL THEN TRUE
+        ELSE FALSE
+      END AS day_is_new,
+
+      -- 일간 변동 규칙(weekly와 동일)
+      CASE
+        WHEN dt.rank_today IS NOT NULL AND dy.rank_yesterday IS NULL THEN NULL
+        WHEN dt.rank_today IS NULL THEN 0
+        ELSE (dy.rank_yesterday - dt.rank_today)
+      END AS day_rank_change
+    FROM cur c
+    LEFT JOIN prev p ON p.music_id = c.music_id
+    LEFT JOIN day_today dt ON dt.music_id = c.music_id
+    LEFT JOIN day_yesterday dy ON dy.music_id = c.music_id
+    ORDER BY c.rank ASC
     LIMIT $1
   `;
   try {
     const { rows } = await pool.query(sql, [limit]);
 
     const metaMap = await fetchMusicMetaMap(rows.map((r) => r.music_id));
-    let items = mergeRowsWithMeta(rows, metaMap);
+    let items = mergeRowsWithMeta(rows, metaMap).map((r) => ({
+      ...r,
+      day_is_new: r.day_is_new === true,
+      day_rank_change: r.day_rank_change ?? null,
+    }));
 
     const needCover = items.filter((it) => !it.album_image_url);
     if (needCover.length > 0) {
@@ -298,14 +462,16 @@ router.get("/monthly", async (req, res) => {
   }
 });
 
+
 /* ──────────────────────────────────────────────────────────────
- * 5) 집계 리프레시 (그대로 유지)
+ * 5) 집계 리프레시
+ *    - 랭크 계산을 ROW_NUMBER()로 변경해 '중복 랭크' 영구 차단
  * ──────────────────────────────────────────────────────────────*/
 router.post("/refresh", async (_req, res) => {
   try {
     await pool.query("BEGIN");
 
-    // 주간
+    // 주간 (이번 주)
     await pool.query(`
       WITH kst AS ( SELECT now() AT TIME ZONE 'Asia/Seoul' AS now_kst ),
       w AS (
@@ -327,7 +493,9 @@ router.post("/refresh", async (_req, res) => {
       ),
       ranked AS (
         SELECT a.*,
-               DENSE_RANK() OVER (ORDER BY a.play_count DESC, a.last_played DESC) AS rnk
+               ROW_NUMBER() OVER (
+                 ORDER BY a.play_count DESC, a.last_played DESC, a.music_id ASC
+               ) AS rnk
         FROM agg a
       )
       INSERT INTO ranking_weekly (week_start, music_id, play_count, last_played, rank, generated_at)
@@ -341,7 +509,7 @@ router.post("/refresh", async (_req, res) => {
         generated_at = now();
     `);
 
-    // 월간
+    // 월간 (이번 달)
     await pool.query(`
       WITH kst AS ( SELECT now() AT TIME ZONE 'Asia/Seoul' AS now_kst ),
       m AS (
@@ -363,7 +531,9 @@ router.post("/refresh", async (_req, res) => {
       ),
       ranked AS (
         SELECT a.*,
-               DENSE_RANK() OVER (ORDER BY a.play_count DESC, a.last_played DESC) AS rnk
+               ROW_NUMBER() OVER (
+                 ORDER BY a.play_count DESC, a.last_played DESC, a.music_id ASC
+               ) AS rnk
         FROM agg a
       )
       INSERT INTO ranking_monthly (month_start, music_id, play_count, last_played, rank, generated_at)
