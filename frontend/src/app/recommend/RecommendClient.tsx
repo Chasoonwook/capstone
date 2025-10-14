@@ -8,8 +8,7 @@ import { Slider } from "@/components/ui/slider"
 import {
   Play, Pause, SkipBack, SkipForward,
   ChevronDown, MoreVertical, Heart, ThumbsDown,
-  ListMusic, Share2,
-  Upload
+  ListMusic, Upload,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { API_BASE } from "@/lib/api"
@@ -37,12 +36,12 @@ const normalizeTrack = (raw: any, idx: number): Track | null => {
   const artist = raw?.artist ?? raw?.music_artist ?? raw?.singer ?? "Unknown"
   const preview = raw?.audio_url ?? raw?.preview_url ?? raw?.stream_url ?? null
   const audioUrl = preview === "EMPTY" ? null : preview
-  const coverUrl = raw?.cover_url ?? raw?.album_image ?? raw?.image ?? null
+  const coverUrl =
+    raw?.cover_url ?? raw?.album_image ?? raw?.image ?? null
   const duration =
     Number(raw?.duration ?? raw?.length_seconds ?? raw?.preview_duration ?? 0) || null
   const spotify_track_id = raw?.spotify_track_id ?? null
   const selected_from = raw?.selected_from ?? null
-
   if (!title) return null
   return {
     id: raw?.id ?? raw?.music_id ?? idx,
@@ -67,7 +66,6 @@ export default function RecommendClient() {
     const id = sp.get("photoId") || sp.get("photoID") || sp.get("id")
     setPhotoId(id)
   }, [])
-
   const analyzedPhotoUrl = useMemo(() => buildPhotoSrc(photoId), [photoId])
 
   const userNameFallback =
@@ -89,9 +87,11 @@ export default function RecommendClient() {
   const [dislikedTracks, setDislikedTracks] = useState<Set<string | number>>(new Set())
 
   const audioRef = useRef<HTMLAudioElement>(null)
+  const lastSpUriRef = useRef<string | null>(null) // ⭐ 첫 재생 여부 판단용
 
   const currentTrack = playlist[currentTrackIndex]
 
+  // 마지막 플레이어 경로 저장(홈 하단바에서 복귀)
   useEffect(() => {
     if (typeof window !== "undefined") {
       const route = `${window.location.pathname}${window.location.search}`
@@ -99,6 +99,7 @@ export default function RecommendClient() {
     }
   }, [])
 
+  // 추천 목록 불러오기
   useEffect(() => {
     const fetchPlaylist = async () => {
       setLoading(true)
@@ -124,11 +125,13 @@ export default function RecommendClient() {
 
         setPlaylist(list)
         setCurrentTrackIndex(0)
+        lastSpUriRef.current = null // 새 목록 로드 시 초기화
       } catch (e: any) {
         console.error(e)
         setError("추천 목록을 불러오지 못했습니다.")
         setPlaylist([])
         setCurrentTrackIndex(0)
+        lastSpUriRef.current = null
       } finally {
         setLoading(false)
       }
@@ -136,46 +139,41 @@ export default function RecommendClient() {
     if (photoId !== null) void fetchPlaylist()
   }, [photoId])
 
+  // <audio> 미리듣기용 로더
   const loadCurrentTrack = useCallback(
     async (autoplay = false) => {
       const audio = audioRef.current
       if (!audio || !currentTrack) return
-      if (!currentTrack.audioUrl) { // Spotify-only
+      if (!currentTrack.audioUrl) {
         setDuration(0)
         return
       }
       setCurrentTime(0)
       audio.src = currentTrack.audioUrl
       audio.load()
-
       const onLoaded = () => {
         const d = Math.floor(audio.duration || 0)
         setDuration(currentTrack.duration ?? d)
       }
       audio.addEventListener("loadedmetadata", onLoaded, { once: true })
-
       if (autoplay) {
-        try {
-          await audio.play()
-          setIsPlaying(true)
-        } catch {
-          setIsPlaying(false)
-        }
+        try { await audio.play(); setIsPlaying(true) } catch { setIsPlaying(false) }
       }
     },
     [currentTrack],
   )
 
+  // 트랙 변경 시 미리듣기 로드
   useEffect(() => {
     if (currentTrack) void loadCurrentTrack(isPlaying)
   }, [currentTrackIndex, loadCurrentTrack]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // <audio> 이벤트
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
     const onTime = () => setCurrentTime(audio.currentTime)
     const onEnded = () => {
-      // 자연스러운 다음 곡
       setCurrentTrackIndex((prev) => {
         const next = prev + 1
         if (next < playlist.length) return next
@@ -197,19 +195,39 @@ export default function RecommendClient() {
     }
   }, [playlist.length])
 
+  // ⭐ Spotify: 현재 트랙을 URI로 명확히 재생(첫 재생/트랙 선택 시)
+  const playCurrentSpotify = useCallback(async () => {
+    const t = playlist[currentTrackIndex]
+    if (!t?.spotify_track_id) return
+    if (!sp.deviceId || !sp.ready) {
+      alert("Spotify 연결 중입니다. (Premium 필요) 잠시 후 다시 시도하세요.")
+      return
+    }
+    const uri = `spotify:track:${t.spotify_track_id}`
+    lastSpUriRef.current = uri
+    await sp.playUris([uri]) // transfer → play
+    setIsPlaying(true)
+  }, [playlist, currentTrackIndex, sp])
+
   const togglePlay = async () => {
-    const audio = audioRef.current
-    if (!audio) return
     const t = playlist[currentTrackIndex]
     if (t?.spotify_track_id) {
-      if (isPlaying) { await sp.pause(); setIsPlaying(false); return }
-      await sp.resume(); setIsPlaying(true); return
+      if (isPlaying) {
+        await sp.pause()
+        setIsPlaying(false)
+      } else {
+        // 첫 재생(큐 없음) → URI로 시작 / 그 외 → resume
+        if (!lastSpUriRef.current) await playCurrentSpotify()
+        else { await sp.resume(); setIsPlaying(true) }
+      }
+      return
     }
+
+    // <audio> 미리듣기
+    const audio = audioRef.current
+    if (!audio) return
     if (isPlaying) { audio.pause(); setIsPlaying(false) }
-    else {
-      try { await audio.play(); setIsPlaying(true) }
-      catch { setIsPlaying(false) }
-    }
+    else { try { await audio.play(); setIsPlaying(true) } catch { setIsPlaying(false) } }
   }
 
   const handlePrevious = () => {
@@ -235,7 +253,7 @@ export default function RecommendClient() {
   const handleSeek = (value: number[]) => {
     const v = Math.min(Math.max(value[0], 0), (duration || 0))
     const t = playlist[currentTrackIndex]
-    if (t?.spotify_track_id) { sp.seek(v * 1000); setCurrentTime(v); return }
+    if (t?.spotify_track_id) { sp.seek(v * 1000); return }
     const audio = audioRef.current
     if (!audio) return
     audio.currentTime = v
@@ -273,23 +291,20 @@ export default function RecommendClient() {
     setDislikedTracks(next)
   }
 
+  // 리스트에서 트랙 선택
   const selectTrack = async (index: number) => {
     setCurrentTrackIndex(index)
     const t = playlist[index]
     if (t?.spotify_track_id) {
-      if (!sp.deviceId || !sp.ready) {
-        alert("Spotify 연결 중입니다. (Premium 필요) 잠시 후 다시 시도하세요.")
-      } else {
-        await sp.playUris([`spotify:track:${t.spotify_track_id}`])
-        setIsPlaying(true)
-      }
+      await playCurrentSpotify()
       setShowPlaylist(false)
       return
     }
+    // 미리듣기 트랙은 loadCurrentTrack가 처리
     setShowPlaylist(false)
   }
 
-  // 👉 편집/공유 버튼: 에디터로 이동
+  // 편집 페이지로 이동
   const goEdit = () => {
     if (!photoId) return alert("사진 정보가 없습니다.")
     const cur = playlist[currentTrackIndex]
@@ -300,8 +315,10 @@ export default function RecommendClient() {
     router.push(`/editor?${q.toString()}`)
   }
 
-  const artUrl = analyzedPhotoUrl || currentTrack?.coverUrl || "/placeholder.svg"
+  // 아트워크: 커버가 있으면 우선 사용(Spotify/메타) → 분석 이미지 → placeholder
+  const artUrl = currentTrack?.coverUrl ?? analyzedPhotoUrl ?? "/placeholder.svg"
 
+  // 진행바 시간: Spotify는 훅 상태 사용
   const isSp = !!playlist[currentTrackIndex]?.spotify_track_id
   const curSec = isSp ? Math.floor((sp.state.position || 0) / 1000) : currentTime
   const durSec = isSp ? Math.floor((sp.state.duration || 0) / 1000) : duration
@@ -309,6 +326,7 @@ export default function RecommendClient() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-black via-neutral-900 to-black flex items-center justify-center p-4">
       <div className="w-full max-w-md mx-auto">
+        {/* 헤더 */}
         <div className="relative flex items-center mb-6 text-white">
           <Button
             variant="ghost"
@@ -331,6 +349,7 @@ export default function RecommendClient() {
           </div>
         </div>
 
+        {/* 아트워크 */}
         <div className="mb-8">
           <div
             className="relative w-full aspect-square rounded-lg overflow-hidden shadow-2xl mb-6 bg-neutral-800"
@@ -338,10 +357,11 @@ export default function RecommendClient() {
             role="button"
             aria-label="재생목록 열기"
           >
-            <img src={artUrl ?? "/placeholder.svg"} alt="analyzed" className="w-full h-full object-cover" />
+            <img src={artUrl ?? "/placeholder.svg"} alt="artwork" className="w-full h-full object-cover" />
             <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-black/10" />
           </div>
 
+          {/* 타이틀 영역 */}
           <div className="flex items-start justify-between text-white mb-6">
             <div className="flex-1">
               <h1 className="text-2xl font-bold mb-1">
@@ -389,17 +409,17 @@ export default function RecommendClient() {
 
           {/* 진행 바 */}
           <div className="mb-6">
-            <Slider value={[curSec]} max={durSec || 0} step={1} onValueChange={handleSeek} className="mb-2" />
+            <Slider value={[Math.min(curSec, durSec || 0)]} max={durSec || 0} step={1} onValueChange={handleSeek} className="mb-2" />
             <div className="flex justify-between text-sm text-white/60">
               <span>{formatTime(curSec)}</span>
-              <span>{`-${formatTime(Math.max(durSec - curSec, 0))}`}</span>
+              <span>{`-${formatTime(Math.max((durSec || 0) - curSec, 0))}`}</span>
             </div>
           </div>
 
           {/* 컨트롤 */}
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
-              {/* 공유(편집) */}
+              {/* 편집/공유 */}
               <Button
                 variant="ghost"
                 size="icon"
@@ -494,7 +514,7 @@ export default function RecommendClient() {
                   )}
                 >
                   <img
-                    src={track.coverUrl || analyzedPhotoUrl || "/placeholder.svg"}
+                    src={track.coverUrl || "/placeholder.svg"}
                     alt={track.title}
                     className="w-14 h-14 rounded object-cover flex-shrink-0"
                   />
