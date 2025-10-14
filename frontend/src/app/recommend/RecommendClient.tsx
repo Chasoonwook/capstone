@@ -31,18 +31,46 @@ const buildPhotoSrc = (photoId?: string | null) => {
   return `${API_BASE}/api/photos/${id}/binary`
 }
 
+/** 🔧 서버 응답 키들까지 전부 흡수해서 정규화 */
 const normalizeTrack = (raw: any, idx: number): Track | null => {
-  const title = raw?.title ?? raw?.music_title ?? raw?.name ?? null
-  const artist = raw?.artist ?? raw?.music_artist ?? raw?.singer ?? "Unknown"
-  const preview = raw?.audio_url ?? raw?.preview_url ?? raw?.stream_url ?? null
+  const title =
+    raw?.title ??
+    raw?.music_title ??
+    raw?.name ??
+    null
+
+  const artist =
+    raw?.artist ??
+    raw?.music_artist ??
+    raw?.singer ??
+    "Unknown"
+
+  // 미리듣기 URL
+  const preview =
+    raw?.audio_url ??       // 내부에서 쓸 수도 있음
+    raw?.preview_url ??     // ✅ 백엔드 spotify/search 응답
+    raw?.stream_url ?? null
   const audioUrl = preview === "EMPTY" ? null : preview
+
+  // 커버 이미지 (백엔드 albumImage 대응)
   const coverUrl =
-    raw?.cover_url ?? raw?.album_image ?? raw?.image ?? null
+    raw?.cover_url ??
+    raw?.albumImage ??      // ✅ 핵심: 백엔드 키
+    raw?.album_image ??     // (혹시 다른 라우트)
+    raw?.image ?? null
+
   const duration =
     Number(raw?.duration ?? raw?.length_seconds ?? raw?.preview_duration ?? 0) || null
-  const spotify_track_id = raw?.spotify_track_id ?? null
+
+  // Spotify 트랙 ID 매핑 (id/trackId도 흡수)
+  const spotify_track_id =
+    raw?.spotify_track_id ??
+    raw?.id ??              // ✅ 백엔드 검색 응답의 id
+    raw?.trackId ?? null
+
   const selected_from = raw?.selected_from ?? null
   if (!title) return null
+
   return {
     id: raw?.id ?? raw?.music_id ?? idx,
     title,
@@ -55,6 +83,35 @@ const normalizeTrack = (raw: any, idx: number): Track | null => {
   }
 }
 
+/** 부족한 필드를 스포티파이 검색으로 보강 (커버/프리뷰/id) */
+async function enrichTrackBySpotify(t: Track): Promise<Track> {
+  // 이미 다 있으면 스킵
+  if (t.coverUrl && (t.audioUrl || t.spotify_track_id)) return t
+
+  const params = new URLSearchParams({
+    title: t.title || "",
+    artist: t.artist || "",
+    limit: "1",
+  }).toString()
+
+  try {
+    const r = await fetch(`/api/spotify/search?${params}`, { credentials: "include" })
+    if (!r.ok) return t
+    const j = await r.json()
+    const first = j?.items?.[0]
+    if (!first) return t
+
+    return {
+      ...t,
+      coverUrl: t.coverUrl || first.albumImage || null,
+      audioUrl: t.audioUrl || first.preview_url || null,
+      spotify_track_id: t.spotify_track_id || first.id || null,
+    }
+  } catch {
+    return t
+  }
+}
+
 export default function RecommendClient() {
   const router = useRouter()
   const sp = useSpotifyPlayer()
@@ -62,8 +119,8 @@ export default function RecommendClient() {
   const [photoId, setPhotoId] = useState<string | null>(null)
   useEffect(() => {
     if (typeof window === "undefined") return
-    const sp = new URLSearchParams(window.location.search)
-    const id = sp.get("photoId") || sp.get("photoID") || sp.get("id")
+    const spm = new URLSearchParams(window.location.search)
+    const id = spm.get("photoId") || spm.get("photoID") || spm.get("id")
     setPhotoId(id)
   }, [])
   const analyzedPhotoUrl = useMemo(() => buildPhotoSrc(photoId), [photoId])
@@ -87,11 +144,11 @@ export default function RecommendClient() {
   const [dislikedTracks, setDislikedTracks] = useState<Set<string | number>>(new Set())
 
   const audioRef = useRef<HTMLAudioElement>(null)
-  const lastSpUriRef = useRef<string | null>(null) // ⭐ 첫 재생 여부 판단용
+  const lastSpUriRef = useRef<string | null>(null) // 첫 재생 여부 판단용
 
   const currentTrack = playlist[currentTrackIndex]
 
-  // 마지막 플레이어 경로 저장(홈 하단바에서 복귀)
+  // 마지막 플레이어 경로 저장
   useEffect(() => {
     if (typeof window !== "undefined") {
       const route = `${window.location.pathname}${window.location.search}`
@@ -123,9 +180,12 @@ export default function RecommendClient() {
           list = all.map((r, i) => normalizeTrack(r, i)).filter(Boolean) as Track[]
         }
 
-        setPlaylist(list)
+        // ✅ 커버/프리뷰/ID가 비어있는 항목은 백그라운드 보강
+        const filled = await Promise.all(list.map(enrichTrackBySpotify))
+
+        setPlaylist(filled)
         setCurrentTrackIndex(0)
-        lastSpUriRef.current = null // 새 목록 로드 시 초기화
+        lastSpUriRef.current = null
       } catch (e: any) {
         console.error(e)
         setError("추천 목록을 불러오지 못했습니다.")
@@ -197,15 +257,37 @@ export default function RecommendClient() {
 
   // ⭐ Spotify: 현재 트랙을 URI로 명확히 재생(첫 재생/트랙 선택 시)
   const playCurrentSpotify = useCallback(async () => {
-    const t = playlist[currentTrackIndex]
-    if (!t?.spotify_track_id) return
+    let t = playlist[currentTrackIndex]
+    if (!t) return
+    // 필요하면 한 번 더 보강 (직접 선택 직후 등을 대비)
+    if (!t.spotify_track_id || !t.coverUrl || !t.audioUrl) {
+      t = await enrichTrackBySpotify(t)
+      // 리스트에도 반영
+      setPlaylist((prev) => {
+        const c = prev.slice()
+        c[currentTrackIndex] = t
+        return c
+      })
+    }
+    if (!t.spotify_track_id) {
+      // 스포티파이 연결인데 id가 끝내 없으면 미리듣기로 폴백
+      if (t.audioUrl) {
+        const audio = audioRef.current
+        if (audio) { audio.src = t.audioUrl; await audio.play(); setIsPlaying(true) }
+      } else {
+        alert("재생 가능한 소스를 찾지 못했습니다.")
+      }
+      return
+    }
+
     if (!sp.deviceId || !sp.ready) {
       alert("Spotify 연결 중입니다. (Premium 필요) 잠시 후 다시 시도하세요.")
       return
     }
+
     const uri = `spotify:track:${t.spotify_track_id}`
     lastSpUriRef.current = uri
-    await sp.playUris([uri]) // transfer → play
+    await sp.playUris([uri]) // 내부에서 transfer → play
     setIsPlaying(true)
   }, [playlist, currentTrackIndex, sp])
 
@@ -216,7 +298,6 @@ export default function RecommendClient() {
         await sp.pause()
         setIsPlaying(false)
       } else {
-        // 첫 재생(큐 없음) → URI로 시작 / 그 외 → resume
         if (!lastSpUriRef.current) await playCurrentSpotify()
         else { await sp.resume(); setIsPlaying(true) }
       }
@@ -227,7 +308,21 @@ export default function RecommendClient() {
     const audio = audioRef.current
     if (!audio) return
     if (isPlaying) { audio.pause(); setIsPlaying(false) }
-    else { try { await audio.play(); setIsPlaying(true) } catch { setIsPlaying(false) } }
+    else {
+      // 미리듣기 없으면 보강 시도 후 재생
+      if (!t?.audioUrl) {
+        const filled = await enrichTrackBySpotify(t)
+        if (filled.audioUrl) {
+          setPlaylist((prev) => {
+            const c = prev.slice(); c[currentTrackIndex] = filled; return c
+          })
+          audio.src = filled.audioUrl
+          try { await audio.play(); setIsPlaying(true) } catch { setIsPlaying(false) }
+          return
+        }
+      }
+      try { await audio.play(); setIsPlaying(true) } catch { setIsPlaying(false) }
+    }
   }
 
   const handlePrevious = () => {
@@ -300,11 +395,14 @@ export default function RecommendClient() {
       setShowPlaylist(false)
       return
     }
-    // 미리듣기 트랙은 loadCurrentTrack가 처리
+    // 미리듣기 트랙은 보강 후 재생 시도
+    const filled = await enrichTrackBySpotify(t)
+    setPlaylist((prev) => {
+      const c = prev.slice(); c[index] = filled; return c
+    })
     setShowPlaylist(false)
   }
 
-  // 편집 페이지로 이동
   const goEdit = () => {
     if (!photoId) return alert("사진 정보가 없습니다.")
     const cur = playlist[currentTrackIndex]
@@ -315,7 +413,7 @@ export default function RecommendClient() {
     router.push(`/editor?${q.toString()}`)
   }
 
-  // 아트워크: 커버가 있으면 우선 사용(Spotify/메타) → 분석 이미지 → placeholder
+  // 아트워크: 커버가 우선 → 분석 이미지 → placeholder
   const artUrl = currentTrack?.coverUrl ?? analyzedPhotoUrl ?? "/placeholder.svg"
 
   // 진행바 시간: Spotify는 훅 상태 사용
