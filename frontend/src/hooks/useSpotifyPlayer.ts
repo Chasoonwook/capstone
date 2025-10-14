@@ -1,202 +1,117 @@
-"use client";
-
-import { useEffect, useRef, useState, useCallback } from "react";
-import { API_BASE } from "@/lib/api";
+// src/hooks/useSpotifyPlayer.ts
+"use client"
+import { useEffect, useRef, useState, useCallback } from "react"
+import { API_BASE } from "@/lib/api"
 
 type SpState = {
-  position: number;
-  duration: number;
-  paused: boolean;
-  trackUri?: string | null;
-};
-
-type PlayerRef = Spotify.Player | null;
-
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
+  deviceId: string | null
+  position: number
+  duration: number
+  paused: boolean
 }
 
 export function useSpotifyPlayer() {
-  const playerRef = useRef<PlayerRef>(null);
-  const [ready, setReady] = useState(false);
-  const [deviceId, setDeviceId] = useState<string | null>(null);
-  const [state, setState] = useState<SpState>({ position: 0, duration: 0, paused: true });
+  const [ready, setReady] = useState(false)
+  const [deviceId, setDeviceId] = useState<string | null>(null)
+  const [state, setState] = useState<SpState>({ deviceId: null, position: 0, duration: 0, paused: true })
+  const tick = useRef<number | null>(null)
 
-  // SDK 로드
+  // SDK 준비 + 디바이스 아이디 주기적으로 확인
   useEffect(() => {
-    let canceled = false;
+    let alive = true
 
-    const ensureSDK = () =>
-      new Promise<void>((resolve) => {
-        if ((window as any).Spotify?.Player) return resolve();
-        const s = document.createElement("script");
-        s.src = "https://sdk.scdn.co/spotify-player.js";
-        s.async = true;
-        (window as any).onSpotifyWebPlaybackSDKReady = () => resolve();
-        document.body.appendChild(s);
-      });
-
-    (async () => {
-      await ensureSDK();
-      if (canceled) return;
-
-      // 토큰은 서버가 세션에서 주도록 구현되어 있다고 가정
-      const tokRes = await fetch(`${API_BASE}/api/spotify/token`, { credentials: "include" });
-      if (!tokRes.ok) return;
-      const { access_token } = await tokRes.json();
-
-      const player = new (window as any).Spotify.Player({
-        name: "Web Player",
-        getOAuthToken: (cb: (t: string) => void) => cb(access_token),
-        volume: 0.7,
-      }) as Spotify.Player;
-
-      player.addListener("ready", ({ device_id }) => {
-        setDeviceId(device_id);
-        setReady(true);
-      });
-
-      player.addListener("not_ready", () => {
-        setReady(false);
-      });
-
-      player.addListener("player_state_changed", (s) => {
-        if (!s) return;
-        setState({
-          position: s.position,
-          duration: s.duration,
-          paused: s.paused,
-          trackUri: s.track_window.current_track?.uri ?? null,
-        });
-      });
-
-      player.addListener("initialization_error", ({ message }) => console.warn("[sp init]", message));
-      player.addListener("authentication_error", ({ message }) => console.warn("[sp auth]", message));
-      player.addListener("account_error", ({ message }) => console.warn("[sp account]", message));
-
-      await player.connect();
-      playerRef.current = player;
-    })();
-
-    return () => {
-      canceled = true;
-      if (playerRef.current) {
-        try { playerRef.current.disconnect(); } catch {}
+    const pollDevice = async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/spotify/devices`, { credentials: "include" })
+        if (!r.ok) throw new Error(String(r.status))
+        const j = await r.json()
+        const active = (j?.devices || []).find((d: any) => d.is_active) || j?.devices?.[0] || null
+        if (!alive) return
+        setDeviceId(active?.id ?? null)
+        setReady(!!active?.id)
+      } catch {
+        if (!alive) return
+        setReady(false)
+        setDeviceId(null)
       }
-    };
-  }, []);
+    }
 
-  /** 서버 -> Spotify /transfer 호출. 404면 약간 기다렸다 재시도. */
-  const ensureTransfer = useCallback(
-    async (retries = 3) => {
-      if (!deviceId) return false;
-      for (let i = 0; i < retries; i++) {
-        const r = await fetch(`${API_BASE}/api/spotify/transfer`, {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ device_id: deviceId }),
-        });
-        if (r.ok || r.status === 204) return true;
+    pollDevice()
+    const id = window.setInterval(pollDevice, 5000)
+    return () => { alive = false; window.clearInterval(id) }
+  }, [])
 
-        // Spotify가 {"status":404,"message":"Device not found"} 줄 때
-        if (r.status === 404) {
-          await sleep(400 + i * 400); // 점점 늘려서 대기 후 재시도
-          continue;
-        }
-        // 기타 오류는 탈출
-        break;
-      }
-      return false;
-    },
-    [deviceId]
-  );
+  // position 업데이트 (간단 폴링)
+  useEffect(() => {
+    if (tick.current) window.clearInterval(tick.current)
+    tick.current = window.setInterval(() => {
+      setState((s) => s.paused ? s : { ...s, position: Math.min(s.position + 1000, s.duration) })
+    }, 1000) as unknown as number
+    return () => { if (tick.current) window.clearInterval(tick.current) }
+  }, [])
 
-  /** 재생 */
-  const playUris = useCallback(
-    async (uris: string[]) => {
-      if (!ready || !deviceId) {
-        alert("Spotify 준비 중입니다. 잠시 후 다시 시도하세요. (Premium 필요)");
-        return;
-      }
+  const syncFromPlayer = useCallback((posMs: number, durMs: number, paused: boolean) => {
+    setState((s) => ({ ...s, position: posMs, duration: durMs, paused }))
+  }, [])
 
-      // 먼저 transfer 보장
-      await ensureTransfer();
+  const transfer = useCallback(async (play = false) => {
+    if (!deviceId) return
+    await fetch(`${API_BASE}/api/spotify/transfer`, {
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device_id: deviceId, play }),
+    })
+  }, [deviceId])
 
-      const tryPlay = async () =>
-        fetch(`${API_BASE}/api/spotify/play`, {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ device_id: deviceId, uris }),
-        });
+  const playUris = useCallback(async (uris: string[]) => {
+    if (!uris?.length) return
+    // 장치 전송 보장
+    await transfer(true)
+    await fetch(`${API_BASE}/api/spotify/play`, {
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ uris, device_id: deviceId }),
+    })
+    syncFromPlayer(0, state.duration || 0, false)
+  }, [deviceId, transfer, state.duration, syncFromPlayer])
 
-      let res = await tryPlay();
-
-      // 404(Device not found)면 한번 더 transfer → 재시도
-      if (res.status === 404) {
-        await ensureTransfer();
-        await sleep(300);
-        res = await tryPlay();
-      }
-
-      if (!res.ok && res.status !== 204) {
-        const txt = await res.text().catch(() => "");
-        console.warn("[/api/spotify/play] fail:", res.status, txt);
-        alert("Spotify 재생을 시작하지 못했습니다. Spotify 앱을 켜 두었는지 확인해주세요.");
-      }
-    },
-    [deviceId, ready, ensureTransfer]
-  );
+  const pause = useCallback(async () => {
+    await fetch(`${API_BASE}/api/spotify/pause`, { method: "PUT", credentials: "include" })
+    syncFromPlayer(state.position, state.duration, true)
+  }, [state.position, state.duration, syncFromPlayer])
 
   const resume = useCallback(async () => {
-    // 재생 재시작도 동일하게 보강
-    const r = await fetch(`${API_BASE}/api/spotify/play`, {
-      method: "POST",
+    // resume은 서버에서 현재 큐 기준으로 play
+    await fetch(`${API_BASE}/api/spotify/play`, {
+      method: "PUT",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ device_id: deviceId }),
-    });
-    if (r.status === 404) {
-      await ensureTransfer();
-      await sleep(300);
-      await fetch(`${API_BASE}/api/spotify/play`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ device_id: deviceId }),
-      });
-    }
-  }, [deviceId, ensureTransfer]);
-
-  const pause = useCallback(async () => {
-    await fetch(`${API_BASE}/api/spotify/pause`, { method: "POST", credentials: "include" });
-  }, []);
+    })
+    syncFromPlayer(state.position, state.duration, false)
+  }, [deviceId, state.position, state.duration, syncFromPlayer])
 
   const next = useCallback(async () => {
-    await fetch(`${API_BASE}/api/spotify/next`, { method: "POST", credentials: "include" });
-  }, []);
+    await fetch(`${API_BASE}/api/spotify/next`, { method: "POST", credentials: "include" })
+    syncFromPlayer(0, state.duration, false)
+  }, [state.duration, syncFromPlayer])
 
   const prev = useCallback(async () => {
-    await fetch(`${API_BASE}/api/spotify/previous`, { method: "POST", credentials: "include" });
-  }, []);
+    await fetch(`${API_BASE}/api/spotify/previous`, { method: "POST", credentials: "include" })
+    syncFromPlayer(0, state.duration, false)
+  }, [state.duration, syncFromPlayer])
 
   const seek = useCallback(async (ms: number) => {
-    await fetch(`${API_BASE}/api/spotify/seek?position_ms=${Math.max(0, Math.floor(ms))}`, {
-      method: "POST",
-      credentials: "include",
-    });
-  }, []);
+    // Spotify의 seek는 /me/player/seek?position_ms= 이지만
+    // 서버 프록시(spotify.js)에서 지원하지 않는다면 생략 또는 구현 필요
+    // 여기서는 클라이언트 측 위치값만 맞춰줍니다.
+    syncFromPlayer(ms, state.duration, state.paused)
+  }, [state.duration, state.paused, syncFromPlayer])
 
   return {
-    ready,
-    deviceId,
-    state,
-    playUris,
-    resume,
-    pause,
-    next,
-    prev,
-    seek,
-  };
+    ready, deviceId, state,
+    playUris, pause, resume, next, prev, seek,
+  }
 }
