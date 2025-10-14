@@ -214,3 +214,6 @@ track:title artist:artist 쿼리로 검색 → album.images[0].url 추출
 👉 즉, 같은 라우터 파일(routes/rankings.js)을 /api/rankings와 /api/rankings-simple 둘 다에 등록해서
 프론트 요청이 어느 쪽으로 오든 정상 응답하도록 바꾼 거야.
 이게 지금 404 에러(특히 Render 배포 환경) 해결의 핵심 포인트야.
+
+### rankings.js 코드 수정 (1014)
+하루 통계로 순위 변동을 계산하는 로직으로 변경

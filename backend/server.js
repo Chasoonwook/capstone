@@ -11,21 +11,23 @@ const pool = require("./db");
 const app = express();
 app.set("trust proxy", 1);
 
-// ---- parsers
+/* =======================================================================
+   Body parsers (JSON/폼) — req.body가 비는 문제 방지
+   ======================================================================= */
 app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
 /* =======================================================================
-   요청별 응답 타임아웃 120초 (분석/외부 API 지연 대비)
+   요청별 응답 타임아웃 120초 (외부 API 지연 대비)
    ======================================================================= */
 app.use((req, res, next) => {
-  res.setTimeout(120000); // 120s
+  res.setTimeout(120000);
   next();
 });
 
 /* =======================================================================
-   CORS (credentials 허용 + 안정화)
+   CORS (credentials 허용 + 허용 도메인 정규화)
    ======================================================================= */
 const trim = (s) => (s ? s.replace(/\/+$/, "") : s);
 const envAllow = (process.env.CORS_ORIGINS || "")
@@ -33,6 +35,7 @@ const envAllow = (process.env.CORS_ORIGINS || "")
   .map((s) => trim(s.trim()))
   .filter(Boolean);
 
+// 기본 허용 Origin
 const defaultAllow = new Set([
   "http://localhost:3000",
   "http://127.0.0.1:3000",
@@ -40,6 +43,7 @@ const defaultAllow = new Set([
   "https://capstone-app-back.onrender.com",
 ]);
 
+// 자기 자신 도메인/배포 URL도 허용(백엔드 내부 호출 대비)
 const selfOrigin =
   process.env.RENDER_EXTERNAL_URL ||
   (process.env.RENDER_EXTERNAL_HOSTNAME
@@ -47,8 +51,17 @@ const selfOrigin =
     : null);
 if (selfOrigin) defaultAllow.add(trim(selfOrigin));
 
+// BACKEND_BASE_URL이 지정되어 있으면 그것도 허용(히스토리 저장 후 /refresh 내부호출용)
+if (process.env.BACKEND_BASE_URL) {
+  try {
+    const u = new URL(process.env.BACKEND_BASE_URL);
+    defaultAllow.add(`${u.protocol}//${u.host}`);
+  } catch {}
+}
+
+// 허용 여부 판정
 function isAllowedOrigin(origin) {
-  if (!origin) return true;
+  if (!origin) return true; // 서버-서버 호출, Postman 등
   try {
     const url = new URL(origin);
     const norm = trim(origin);
@@ -67,6 +80,7 @@ function isAllowedOrigin(origin) {
   return false;
 }
 
+// vary 헤더
 app.use((_, res, next) => {
   res.header("Vary", "Origin");
   next();
@@ -75,7 +89,7 @@ app.use((_, res, next) => {
 const corsMiddleware = cors({
   origin(origin, cb) {
     if (isAllowedOrigin(origin)) return cb(null, true);
-    return cb(new Error(`Not allowed by CORS: ${origin}`));
+    return cb(new Error(`Not allowed by CORS: ${origin || "null"}`));
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -84,6 +98,14 @@ const corsMiddleware = cors({
 
 app.use(corsMiddleware);
 app.options(/.*/, corsMiddleware);
+
+// CORS 에러를 JSON으로 반환(디버깅 편의)
+app.use((err, _req, res, next) => {
+  if (err && /^Not allowed by CORS/.test(err.message)) {
+    return res.status(403).json({ error: "cors_blocked", detail: err.message });
+  }
+  return next(err);
+});
 
 /* =======================================================================
    health
@@ -210,7 +232,7 @@ app.get("/api/spotify/token", async (req, res) => {
 });
 
 /* =======================================================================
-   기타 라우터 자동 로더
+   라우터 자동 로더
    ======================================================================= */
 function loadRoute(relPath) {
   try {
@@ -234,9 +256,7 @@ function loadRoute(relPath) {
 }
 
 /**
- * ✅ 주의: rankings 라우터는 구버전 경로도 함께 마운트한다.
- *    - /api/rankings           (신규)
- *    - /api/rankings-simple    (구버전 호환)
+ * ✅ rankings 라우터는 구버전 경로도 함께 마운트
  */
 const mounts = [
   ["/api/photos", "routes/photos"],
@@ -246,12 +266,13 @@ const mounts = [
   ["/api/musics", "routes/musics"],
   ["/api/auth", "routes/auth"],
   ["/api", "routes/onboarding"],
+  // ⬇️ 저장 → 즉시 갱신 플로우에서 중요: history 먼저 마운트해도 무방
   ["/api/history", "routes/history"],
   ["/api/music-requests", "routes/musicRequests"],
   ["/api", "routes/feedback"],
   ["/api", "routes/stickers"],
   ["/api/diaries", "routes/diaries"],
-  // rankings는 두 경로로 동시 마운트 (404 방지용)
+  // rankings는 두 경로로 동시 마운트 (구버전 호환)
   ["/api/rankings", "routes/rankings"],
   ["/api/rankings-simple", "routes/rankings"],
 ];
@@ -334,4 +355,11 @@ app.use((err, _req, res, _next) => {
    start
    ======================================================================= */
 const PORT = Number(process.env.PORT || 5000);
-app.listen(PORT, () => console.log(`[server] listening on :${PORT}`));
+app.listen(PORT, () => {
+  const base =
+    process.env.BACKEND_BASE_URL ||
+    process.env.RENDER_EXTERNAL_URL ||
+    `http://localhost:${PORT}`;
+  console.log(`[server] listening on :${PORT}`);
+  console.log(`[server] base: ${base}`);
+});
