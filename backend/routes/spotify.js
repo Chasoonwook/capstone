@@ -1,5 +1,5 @@
 // routes/spotify.js
-// Spotify Web Playback + REST 프록시 라우터 (커버/미리듣기 포함 보강)
+// Spotify Web Playback + REST 프록시 라우터 (커버/미리듣기/SDK 토큰 포함)
 
 const express = require("express");
 const axios = require("axios");
@@ -272,6 +272,34 @@ router.get("/me", async (req, res) => {
   } finally {
     const c = meCache.get(access);
     if (c) meCache.set(access, { ts: c.ts, profile: c.profile });
+  }
+});
+
+/* ─────────────── SDK 전용 토큰 (중요!) ─────────────── */
+// Web Playback SDK 에 공급할 액세스 토큰 반환.
+// - sp_access가 있으면 그대로 반환
+// - 없고 sp_refresh가 있으면 refresh로 새 토큰 발급 후 반환
+router.get("/token", async (req, res) => {
+  try {
+    const access = req.cookies?.[CK_ACCESS] || null;
+    const refresh = req.cookies?.[CK_REFRESH] || null;
+
+    if (access) {
+      return res.json({ access_token: access });
+    }
+
+    if (refresh) {
+      const ref = await refreshAccessToken(refresh);
+      if (ref?.access_token) {
+        setAccessCookie(res, ref.access_token, ref.expires_in);
+        return res.json({ access_token: ref.access_token });
+      }
+    }
+
+    return res.status(401).json({ error: "not_connected" });
+  } catch (e) {
+    console.error("[/api/spotify/token]", e?.response?.data || e.message);
+    return res.status(500).json({ error: "token_failed" });
   }
 });
 
