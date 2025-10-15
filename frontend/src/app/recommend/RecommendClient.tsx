@@ -414,7 +414,7 @@ export default function RecommendClient() {
   }
 
   // 아트워크: 커버가 우선 → 분석 이미지 → placeholder
-  const artUrl = currentTrack?.coverUrl ?? analyzedPhotoUrl ?? "/placeholder.svg"
+  const artUrl = analyzedPhotoUrl ?? currentTrack?.coverUrl ?? "/placeholder.svg"
 
   // 진행바 시간: Spotify는 훅 상태 사용
   const isSp = !!playlist[currentTrackIndex]?.spotify_track_id
