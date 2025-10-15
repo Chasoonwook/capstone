@@ -4,10 +4,9 @@
 import { useEffect, useRef, useState, useCallback } from "react"
 import { API_BASE } from "@/lib/api"
 
-// ✅ 전역 Window 타입 보강 (SDK 로더가 참조함)
+// ✅ 전역 보강은 콜백만 — Spotify는 캐스팅으로 접근
 declare global {
   interface Window {
-    Spotify?: any;
     onSpotifyWebPlaybackSDKReady?: () => void;
   }
 }
@@ -29,11 +28,11 @@ export function useSpotifyPlayer() {
 
   const [state, setState] = useState<SpState>({ deviceId: null, position: 0, duration: 0, paused: true })
 
-  const playerRef = useRef<any>(null)          // ← SDK 인스턴스 (타입차이 방지용 any)
+  const playerRef = useRef<any>(null)
   const stateTimerRef = useRef<number | null>(null)
   const secTimerRef   = useRef<number | null>(null)
 
-  // 진행바 보간 기준값
+  // 진행바 보간 기준
   const basePosRef  = useRef(0)
   const durationRef = useRef(0)
   const pausedRef   = useRef(true)
@@ -45,7 +44,7 @@ export function useSpotifyPlayer() {
 
     const loadSdk = () =>
       new Promise<void>((resolve) => {
-        if (window.Spotify) return resolve()
+        if ((window as any).Spotify) return resolve()
         window.onSpotifyWebPlaybackSDKReady ||= () => {}
         const s = document.createElement("script")
         s.src = SDK_SRC
@@ -68,29 +67,26 @@ export function useSpotifyPlayer() {
       if (!t || cancelled) return
 
       await loadSdk()
-      if (cancelled || !window.Spotify?.Player) return
+      const SpotifyPlayer = (window as any).Spotify?.Player
+      if (cancelled || !SpotifyPlayer) return
 
-      const player: any = new window.Spotify.Player({
+      const player: any = new SpotifyPlayer({
         name: "Capstone Web Player",
         volume: 0.8,
-        // ✅ cb 타입 명시
         getOAuthToken: async (cb: (token: string) => void) => {
           const nt = await getToken()
           if (nt) cb(nt)
         },
       })
 
-      // ✅ device_id 타입 명시
       player.addListener("ready", ({ device_id }: { device_id: string }) => {
         if (cancelled) return
         setDeviceId(device_id)
         setReady(true)
         setState(s => ({ ...s, deviceId: device_id }))
       })
-
       player.addListener("not_ready", () => setReady(false))
 
-      // ✅ st 타입 any로 고정(Spotify SDK가 보내는 모양이 종종 달라서)
       player.addListener("player_state_changed", (st: any) => {
         if (!st) return
         const pos = Number(st.position ?? 0)
@@ -119,7 +115,7 @@ export function useSpotifyPlayer() {
       try { await player.activateElement?.() } catch {}
       playerRef.current = player
 
-      // ⭐ 상태 폴링: 1초마다 실제 재생 위치/길이 동기화
+      // 1) SDK에서 실제 상태를 1초마다 폴링해서 강제 동기화
       if (stateTimerRef.current) window.clearInterval(stateTimerRef.current)
       stateTimerRef.current = window.setInterval(async () => {
         try {
@@ -150,7 +146,7 @@ export function useSpotifyPlayer() {
     }
   }, [API_BASE])
 
-  /* ── 1초 단위 진행바 보간(시각적으로 착착 이동) ─────────── */
+  /* 2) 1초 단위 보간(화면상의 하얀점이 착착 이동) */
   useEffect(() => {
     const tick = () => {
       const now = performance.now()
@@ -169,7 +165,7 @@ export function useSpotifyPlayer() {
     return () => { if (secTimerRef.current) window.clearInterval(secTimerRef.current) }
   }, [])
 
-  /* ── 준비 대기 헬퍼 ─────────────────────────────────────── */
+  /* 준비 대기 */
   const waitReady = useCallback(async (ms = 6000) => {
     const t0 = Date.now()
     while (!(ready && deviceIdRef.current)) {
@@ -178,7 +174,7 @@ export function useSpotifyPlayer() {
     }
   }, [ready])
 
-  /* ── 컨트롤러 ──────────────────────────────────────────── */
+  /* 컨트롤러 */
   const transferToThisDevice = useCallback(async (play = false) => {
     await waitReady()
     const id = deviceIdRef.current!
@@ -232,10 +228,7 @@ export function useSpotifyPlayer() {
   }, [API_BASE])
 
   const seek = useCallback(async (ms: number) => {
-    try {
-      // ✅ 타입 정의에 없다고 뜨면 any로 안전 캐스팅
-      await (playerRef.current as any)?.seek?.(ms)
-    } finally {
+    try { await (playerRef.current as any)?.seek?.(ms) } finally {
       basePosRef.current = ms
       lastTickRef.current = performance.now()
       setState(s => ({ ...s, position: Math.floor(ms / 1000) * 1000 }))
