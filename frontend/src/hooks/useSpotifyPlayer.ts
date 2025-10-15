@@ -4,13 +4,6 @@
 import { useEffect, useRef, useState, useCallback } from "react"
 import { API_BASE } from "@/lib/api"
 
-// ✅ 전역 보강은 콜백만 — Spotify는 캐스팅으로 접근
-declare global {
-  interface Window {
-    onSpotifyWebPlaybackSDKReady?: () => void;
-  }
-}
-
 type SpState = {
   deviceId: string | null
   position: number // ms
@@ -45,7 +38,9 @@ export function useSpotifyPlayer() {
     const loadSdk = () =>
       new Promise<void>((resolve) => {
         if ((window as any).Spotify) return resolve()
-        window.onSpotifyWebPlaybackSDKReady ||= () => {}
+        // 콜백이 없어 생기는 콘솔 경고 방지 (타입 보강 없이 캐스팅)
+        const w = window as any
+        w.onSpotifyWebPlaybackSDKReady = w.onSpotifyWebPlaybackSDKReady || (() => {})
         const s = document.createElement("script")
         s.src = SDK_SRC
         s.async = true
@@ -115,7 +110,7 @@ export function useSpotifyPlayer() {
       try { await player.activateElement?.() } catch {}
       playerRef.current = player
 
-      // 1) SDK에서 실제 상태를 1초마다 폴링해서 강제 동기화
+      // 1) 1초마다 실제 상태 폴링
       if (stateTimerRef.current) window.clearInterval(stateTimerRef.current)
       stateTimerRef.current = window.setInterval(async () => {
         try {
