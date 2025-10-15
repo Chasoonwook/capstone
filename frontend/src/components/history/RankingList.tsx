@@ -32,33 +32,26 @@ function timeAgo(iso?: string | null) {
   return `${day}d ago`
 }
 
-/** API 아이템 타입(일간 변동은 선택적) */
 type RankingItem = {
   rank: number
   music_id: number
   play_count: number
   last_played: string | null
-  rank_change: number | null          // 주/월 기준 변동
-  day_rank_change?: number | null     // 어제 vs 오늘 (선택)
-  day_is_new?: boolean                // 오늘 NEW 여부 (선택, 백엔드에서 제공)
+  rank_change: number | null
+  day_rank_change?: number | null
+  day_is_new?: boolean
   music_title: string | null
   music_artist: string | null
   music_genre: string | null
   album_image_url: string | null
 }
 
-/** 하루 변동값 우선, 없으면 기존 주/월 변동으로 폴백 */
 function getDayChange(it: RankingItem): number | null {
   if (typeof it.day_rank_change !== "undefined") return it.day_rank_change ?? null
   return it.rank_change ?? null
 }
 
-/** 표시 규칙:
- *  - NEW: day_is_new === true 일 때만
- *  - 숫자: change > 0 상승 / change < 0 하락
- *  - 0 또는 기타: 변동 없음('-')
- */
-function RankChange({ change, isNew }: { change: number | null, isNew?: boolean }) {
+function RankChange({ change, isNew }: { change: number | null; isNew?: boolean }) {
   if (isNew) {
     return (
       <div className="flex items-center gap-1 text-sm font-semibold text-purple-600">
@@ -245,18 +238,20 @@ export default function RankingsList() {
                 return (
                   <li
                     key={`${period}-${it.rank}-${it.music_id}`}
-                    className="group flex items-center gap-4 rounded-xl px-4 py-3 hover:bg-accent/50 transition-all cursor-pointer"
+                    className="group flex flex-wrap items-center gap-4 rounded-xl px-4 py-3 hover:bg-accent/50 transition-all cursor-pointer"
                   >
-                    {/* 랭크 번호: 모바일에서 폭 축소 */}
+                    {/* 랭크 번호 */}
                     <div className="flex items-center justify-center w-12 max-sm:w-8">
                       <div
-                        className={`text-xl max-sm:text-base tabular-nums font-bold ${isTopThree ? "text-primary" : "text-foreground"}`}
+                        className={`text-xl max-sm:text-base tabular-nums font-bold ${
+                          isTopThree ? "text-primary" : "text-foreground"
+                        }`}
                       >
                         {it.rank}
                       </div>
                     </div>
 
-                    {/* 앨범 아트: 모바일에서 크기 축소 */}
+                    {/* 앨범 아트 */}
                     <div className="relative w-16 h-16 max-sm:w-12 max-sm:h-12 rounded-lg overflow-hidden bg-muted flex-shrink-0 shadow-md">
                       {it.album_image_url ? (
                         <Image
@@ -271,7 +266,6 @@ export default function RankingsList() {
                         <div className="w-full h-full bg-gradient-to-br from-muted to-muted-foreground/20" />
                       )}
 
-                      {/* hover overlay (웹에서만 보이고, 모바일에선 터치 대비해 opacity transition만) */}
                       <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                         <Button
                           size="icon"
@@ -284,7 +278,7 @@ export default function RankingsList() {
                       </div>
                     </div>
 
-                    {/* 제목/가수: min-w-0 유지 + 모바일 폰트 축소 */}
+                    {/* 제목/가수 */}
                     <div className="flex-1 min-w-0">
                       <h3 className="text-base max-sm:text-sm font-semibold truncate mb-1 group-hover:text-primary transition-colors">
                         {it.music_title || "제목 없음"}
@@ -294,17 +288,31 @@ export default function RankingsList() {
                       </div>
                     </div>
 
-                    {/* 오른쪽 영역: 모바일에선 기본 숨김 */}
-                    <div className="flex items-center gap-4 max-sm:hidden">
+                    {/* 데스크톱: 오른쪽 고정 영역 */}
+                    <div className="hidden sm:flex items-center gap-4">
                       <div className="flex items-center justify-center w-28">
                         <RankChange change={getDayChange(it)} isNew={it.day_is_new} />
                       </div>
-
                       <div className="flex items-center gap-1">
                         <Button size="icon" variant="ghost" className="w-9 h-9 hover:text-red-500" aria-label="좋아요">
                           <Heart className="w-4 h-4" />
                         </Button>
                         <Button size="icon" variant="ghost" className="w-9 h-9" aria-label="더 보기">
+                          <MoreVertical className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* 모바일: 아래 줄 컴팩트 바 */}
+                    <div className="flex sm:hidden items-center justify-between w-full mt-2">
+                      <div className="flex items-center">
+                        <RankChange change={getDayChange(it)} isNew={it.day_is_new} />
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Button size="icon" variant="ghost" className="w-8 h-8 hover:text-red-500" aria-label="좋아요">
+                          <Heart className="w-4 h-4" />
+                        </Button>
+                        <Button size="icon" variant="ghost" className="w-8 h-8" aria-label="더 보기">
                           <MoreVertical className="w-4 h-4" />
                         </Button>
                       </div>
