@@ -17,24 +17,20 @@ export function useSpotifyPlayer() {
   const [ready, setReady] = useState(false)
   const [deviceId, _setDeviceId] = useState<string | null>(null)
   const deviceIdRef = useRef<string | null>(null)
-  const setDeviceId = (id: string | null) => {
-    deviceIdRef.current = id
-    _setDeviceId(id)
-  }
+  const setDeviceId = (id: string | null) => { deviceIdRef.current = id; _setDeviceId(id) }
 
   const [state, setState] = useState<SpState>({
     deviceId: null, position: 0, duration: 0, paused: true,
   })
 
   const playerRef = useRef<any>(null)
-  const tokenRef  = useRef<string | null>(null)
 
-  // ⬇︎ 진행바 보간용 기준값
-  const basePosRef   = useRef(0)            // 마지막으로 SDK에서 받은 position(ms)
-  const durationRef  = useRef(0)            // 마지막으로 받은 duration(ms)
-  const pausedRef    = useRef(true)         // 마지막으로 받은 paused
-  const lastTsRef    = useRef<number | null>(null) // RAF delta 기준
-  const rafRef       = useRef<number | null>(null)
+  // 진행바 계산용 기준값들
+  const basePosRef  = useRef(0)          // 마지막 SDK position(ms)
+  const durationRef = useRef(0)          // 마지막 SDK duration(ms)
+  const pausedRef   = useRef(true)       // 마지막 SDK paused
+  const lastTickRef = useRef<number | null>(null)
+  const secTimerRef = useRef<number | null>(null)
 
   // ── SDK 로드 & 초기화 ─────────────────────────────────────
   useEffect(() => {
@@ -43,7 +39,7 @@ export function useSpotifyPlayer() {
     const loadSdk = () =>
       new Promise<void>((resolve) => {
         if ((window as any).Spotify) return resolve()
-        // 경고 방지: 스포티파이 스크립트가 이 콜백을 참조하므로 미리 no-op 지정
+        // 콘솔의 onSpotifyWebPlaybackSDKReady 에러 방지
         if (!(window as any).onSpotifyWebPlaybackSDKReady) {
           (window as any).onSpotifyWebPlaybackSDKReady = () => {}
         }
@@ -63,6 +59,7 @@ export function useSpotifyPlayer() {
 
     const getToken = async (): Promise<string | null> => {
       try {
+        // ✅ 반드시 절대경로로 (쿠키 포함)
         const r = await fetch(`${API_BASE}/api/spotify/token`, { credentials: "include" })
         if (!r.ok) return null
         const j = await r.json()
@@ -73,20 +70,19 @@ export function useSpotifyPlayer() {
     const init = async () => {
       const token = await getToken()
       if (!token || cancelled) return
-      tokenRef.current = token
 
       await loadSdk()
       if (cancelled) return
 
       const Spotify = (window as any).Spotify
-      if (!Spotify || !Spotify.Player) return
+      if (!Spotify?.Player) return
 
       const player = new Spotify.Player({
         name: "Capstone Web Player",
         volume: 0.8,
         getOAuthToken: async (cb: (t: string) => void) => {
           const t = await getToken()
-          if (t) { tokenRef.current = t; cb(t) }
+          if (t) cb(t)
         },
       })
 
@@ -96,7 +92,7 @@ export function useSpotifyPlayer() {
         setReady(true)
         setState(s => ({ ...s, deviceId: device_id }))
       })
-      player.addListener("not_ready", () => { setReady(false) })
+      player.addListener("not_ready", () => setReady(false))
 
       player.addListener("player_state_changed", (st: any) => {
         if (!st) return
@@ -104,11 +100,10 @@ export function useSpotifyPlayer() {
         const dur = st.duration ?? 0
         const paused = !!st.paused
 
-        // 기준값 갱신
         basePosRef.current  = pos
         durationRef.current = dur
         pausedRef.current   = paused
-        lastTsRef.current   = performance.now()
+        lastTickRef.current = performance.now()
 
         setState({
           deviceId: deviceIdRef.current,
@@ -133,85 +128,88 @@ export function useSpotifyPlayer() {
     return () => {
       cancelled = true
       try { playerRef.current?.disconnect?.() } catch {}
-      if (rafRef.current) cancelAnimationFrame(rafRef.current)
+      if (secTimerRef.current) window.clearInterval(secTimerRef.current)
     }
   }, [])
 
-  // ── 진행바 보간 루프 (requestAnimationFrame) ───────────────
+  // ── 1초 단위 진행바 갱신(보간 + 라운딩) ───────────────────
   useEffect(() => {
     const tick = () => {
       const now = performance.now()
-      const last = lastTsRef.current
-      let newPos = basePosRef.current
+      const last = lastTickRef.current
+      let pos = basePosRef.current
 
       if (!pausedRef.current && last != null) {
-        newPos += now - last // ms 단위
-        if (durationRef.current > 0) {
-          newPos = Math.min(newPos, durationRef.current)
-        }
-        // 화면 업데이트
-        setState((s) => ({
-          deviceId: s.deviceId,
-          position: newPos,
-          duration: durationRef.current,
-          paused: false,
-        }))
+        pos += now - last
       }
-      lastTsRef.current = now
-      rafRef.current = requestAnimationFrame(tick)
+      // 1초 단위로 깔끔하게
+      const rounded = Math.min(
+        durationRef.current || 0,
+        Math.max(0, Math.floor(pos / 1000) * 1000),
+      )
+
+      // 필요할 때만 업데이트
+      setState((s) =>
+        s.position !== rounded || s.duration !== durationRef.current || s.paused !== pausedRef.current
+          ? { deviceId: s.deviceId, position: rounded, duration: durationRef.current, paused: pausedRef.current }
+          : s
+      )
+
+      lastTickRef.current = now
     }
 
-    rafRef.current = requestAnimationFrame(tick)
-    return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current)
-      rafRef.current = null
-    }
+    secTimerRef.current = window.setInterval(tick, 1000) as unknown as number
+    return () => { if (secTimerRef.current) window.clearInterval(secTimerRef.current) }
   }, [])
+
+  // ── 준비될 때까지 대기(최대 6초) ──────────────────────────
+  const waitReady = useCallback(async (ms = 6000) => {
+    const start = Date.now()
+    while (!(ready && deviceIdRef.current)) {
+      if (Date.now() - start > ms) throw new Error("spotify_not_ready")
+      await new Promise(r => setTimeout(r, 150))
+    }
+  }, [ready])
 
   // ── REST 헬퍼 ────────────────────────────────────────────
   const transferToThisDevice = useCallback(async (play = false) => {
-    const id = deviceIdRef.current
-    if (!id) throw new Error("no_device")
+    await waitReady()
+    const id = deviceIdRef.current!
     await fetch(`${API_BASE}/api/spotify/transfer`, {
       method: "PUT",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ device_id: id, play }),
     })
-  }, [])
+  }, [waitReady])
 
   // ── 컨트롤 API ───────────────────────────────────────────
   const playUris = useCallback(async (uris: string[]) => {
     if (!uris?.length) return
-    const id = deviceIdRef.current
-    if (!id) throw new Error("no_device")
     await transferToThisDevice(false)
+    const id = deviceIdRef.current!
     await fetch(`${API_BASE}/api/spotify/play`, {
       method: "PUT",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ device_id: id, uris }),
     })
-    // 재생 시작 기준값 리셋
+    // 시작 기준값 리셋
     basePosRef.current = 0
-    durationRef.current = durationRef.current // 유지
     pausedRef.current = false
-    lastTsRef.current = performance.now()
+    lastTickRef.current = performance.now()
     setState(s => ({ ...s, position: 0, paused: false }))
   }, [transferToThisDevice])
 
   const pause = useCallback(async () => {
-    await fetch(`${API_BASE}/api/spotify/pause`, {
-      method: "PUT", credentials: "include",
-    })
+    await fetch(`${API_BASE}/api/spotify/pause`, { method: "PUT", credentials: "include" })
     pausedRef.current = true
     setState(s => ({ ...s, paused: true }))
   }, [])
 
   const resume = useCallback(async () => {
-    const id = deviceIdRef.current
-    if (!id) throw new Error("no_device")
     await transferToThisDevice(false)
+    const id = deviceIdRef.current!
     await fetch(`${API_BASE}/api/spotify/play`, {
       method: "PUT",
       credentials: "include",
@@ -219,13 +217,12 @@ export function useSpotifyPlayer() {
       body: JSON.stringify({ device_id: id }),
     })
     pausedRef.current = false
-    lastTsRef.current = performance.now()
+    lastTickRef.current = performance.now()
     setState(s => ({ ...s, paused: false }))
   }, [transferToThisDevice])
 
   const next = useCallback(async () => {
     await fetch(`${API_BASE}/api/spotify/next`, { method: "POST", credentials: "include" })
-    // 다음 곡으로 넘어가면 SDK가 state_changed를 쏴서 기준값이 갱신됨
   }, [])
 
   const prev = useCallback(async () => {
@@ -233,20 +230,17 @@ export function useSpotifyPlayer() {
   }, [])
 
   const seek = useCallback(async (ms: number) => {
-    try {
-      await playerRef.current?.seek?.(ms)
-    } finally {
-      // 사용자 시킹 → 기준값 갱신
+    try { await playerRef.current?.seek?.(ms) } finally {
       basePosRef.current = ms
-      lastTsRef.current = performance.now()
-      setState(s => ({ ...s, position: ms }))
+      lastTickRef.current = performance.now()
+      setState(s => ({ ...s, position: Math.floor(ms / 1000) * 1000 }))
     }
   }, [])
 
   return {
     ready,
     deviceId: deviceIdRef.current,
-    state,             // position/duration(ms), paused
+    state,             // position/duration(ms), paused (1초 단위로 갱신)
     playUris,
     pause,
     resume,
