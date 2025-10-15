@@ -2,7 +2,6 @@
 const path = require("path");
 const fs = require("fs");
 const express = require("express");
-const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const axios = require("axios");
 require("dotenv").config({ debug: true });
@@ -28,83 +27,59 @@ app.use((req, res, next) => {
 
 /* =======================================================================
    CORS (credentials 허용 + 허용 도메인 정규화)
+   - 프리플라이트는 즉시 204
+   - 에러 응답에도 CORS 헤더가 항상 나가도록 수동으로 세팅
    ======================================================================= */
-const trim = (s) => (s ? s.replace(/\/+$/, "") : s);
-const envAllow = (process.env.CORS_ORIGINS || "")
-  .split(",")
-  .map((s) => trim(s.trim()))
-  .filter(Boolean);
+const FRONT_BASE = process.env.FRONT_BASE || "https://capstone-front-tau.vercel.app";
 
-// 기본 허용 Origin
-const defaultAllow = new Set([
+const trim = (s) => (s ? s.replace(/\/+$/, "") : s);
+const allowed = new Set([
   "http://localhost:3000",
   "http://127.0.0.1:3000",
-  "https://capstone-front-tau.vercel.app",
-  "https://capstone-app-back.onrender.com",
+  trim(FRONT_BASE),
 ]);
 
-// 자기 자신 도메인/배포 URL도 허용(백엔드 내부 호출 대비)
+// 자기 자신(배포 주소)도 허용
 const selfOrigin =
   process.env.RENDER_EXTERNAL_URL ||
-  (process.env.RENDER_EXTERNAL_HOSTNAME
-    ? `https://${process.env.RENDER_EXTERNAL_HOSTNAME}`
-    : null);
-if (selfOrigin) defaultAllow.add(trim(selfOrigin));
+  (process.env.RENDER_EXTERNAL_HOSTNAME ? `https://${process.env.RENDER_EXTERNAL_HOSTNAME}` : null);
+if (selfOrigin) allowed.add(trim(selfOrigin));
 
-// BACKEND_BASE_URL이 지정되어 있으면 그것도 허용(히스토리 저장 후 /refresh 내부호출용)
-if (process.env.BACKEND_BASE_URL) {
-  try {
-    const u = new URL(process.env.BACKEND_BASE_URL);
-    defaultAllow.add(`${u.protocol}//${u.host}`);
-  } catch {}
-}
-
-// 허용 여부 판정
 function isAllowedOrigin(origin) {
-  if (!origin) return true; // 서버-서버 호출, Postman 등
+  if (!origin) return true; // 서버-서버 호출
   try {
-    const url = new URL(origin);
-    const norm = trim(origin);
-    if (envAllow.length) {
-      if (envAllow.includes(norm)) return true;
-      if (url.hostname.endsWith(".vercel.app")) return true;
-      if (url.hostname.endsWith(".onrender.com")) return true;
-      if (url.hostname === "localhost" || url.hostname === "127.0.0.1") return true;
-      return false;
-    }
-    if (defaultAllow.has(norm)) return true;
-    if (url.hostname.endsWith(".vercel.app")) return true;
-    if (url.hostname.endsWith(".onrender.com")) return true;
-    if (url.hostname === "localhost" || url.hostname === "127.0.0.1") return true;
+    const u = new URL(origin);
+    const norm = `${u.protocol}//${u.host}`;
+    if (allowed.has(norm)) return true;
+    // 서브도메인 허용 (vercel / onrender)
+    if (u.hostname.endsWith(".vercel.app")) return true;
+    if (u.hostname.endsWith(".onrender.com")) return true;
+    if (u.hostname === "localhost" || u.hostname === "127.0.0.1") return true;
   } catch {}
   return false;
 }
 
-// vary 헤더
-app.use((_, res, next) => {
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
   res.header("Vary", "Origin");
-  next();
-});
 
-const corsMiddleware = cors({
-  origin(origin, cb) {
-    if (isAllowedOrigin(origin)) return cb(null, true);
-    return cb(new Error(`Not allowed by CORS: ${origin || "null"}`));
-  },
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  optionsSuccessStatus: 204,
-});
-
-app.use(corsMiddleware);
-app.options(/.*/, corsMiddleware);
-
-// CORS 에러를 JSON으로 반환(디버깅 편의)
-app.use((err, _req, res, next) => {
-  if (err && /^Not allowed by CORS/.test(err.message)) {
-    return res.status(403).json({ error: "cors_blocked", detail: err.message });
+  if (isAllowedOrigin(origin)) {
+    if (origin) res.header("Access-Control-Allow-Origin", origin);
+    res.header("Access-Control-Allow-Credentials", "true");
+    res.header(
+      "Access-Control-Allow-Methods",
+      "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS"
+    );
+    res.header(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization"
+    );
   }
-  return next(err);
+
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+  next();
 });
 
 /* =======================================================================
@@ -266,13 +241,11 @@ const mounts = [
   ["/api/musics", "routes/musics"],
   ["/api/auth", "routes/auth"],
   ["/api", "routes/onboarding"],
-  // ⬇️ 저장 → 즉시 갱신 플로우에서 중요: history 먼저 마운트해도 무방
   ["/api/history", "routes/history"],
   ["/api/music-requests", "routes/musicRequests"],
   ["/api", "routes/feedback"],
   ["/api", "routes/stickers"],
   ["/api/diaries", "routes/diaries"],
-  // rankings는 두 경로로 동시 마운트 (구버전 호환)
   ["/api/rankings", "routes/rankings"],
   ["/api/rankings-simple", "routes/rankings"],
 ];
