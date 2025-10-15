@@ -67,7 +67,7 @@ function RankChange({ change, isNew }: { change: number | null, isNew?: boolean 
       </div>
     )
   }
-  if (!change) { // null 또는 0 모두 '-'
+  if (!change) {
     return (
       <div className="flex items-center gap-1 text-sm text-muted-foreground">
         <Minus className="w-4 h-4" />
@@ -247,58 +247,64 @@ export default function RankingsList() {
                     key={`${period}-${it.rank}-${it.music_id}`}
                     className="group flex items-center gap-4 rounded-xl px-4 py-3 hover:bg-accent/50 transition-all cursor-pointer"
                   >
-                    <div className="flex items-center justify-center w-12">
+                    {/* 랭크 번호: 모바일에서 폭 축소 */}
+                    <div className="flex items-center justify-center w-12 max-sm:w-8">
                       <div
-                        className={`text-xl tabular-nums font-bold ${isTopThree ? "text-primary" : "text-foreground"}`}
+                        className={`text-xl max-sm:text-base tabular-nums font-bold ${isTopThree ? "text-primary" : "text-foreground"}`}
                       >
                         {it.rank}
                       </div>
                     </div>
 
-                    <div className="relative w-16 h-16 rounded-lg overflow-hidden bg-muted flex-shrink-0 shadow-md">
+                    {/* 앨범 아트: 모바일에서 크기 축소 */}
+                    <div className="relative w-16 h-16 max-sm:w-12 max-sm:h-12 rounded-lg overflow-hidden bg-muted flex-shrink-0 shadow-md">
                       {it.album_image_url ? (
                         <Image
-                          src={it.album_image_url || "/placeholder.svg"}
+                          src={it.album_image_url}
                           alt={it.music_title || "album"}
-                          width={64}
-                          height={64}
-                          className="w-full h-full object-cover"
+                          fill
+                          sizes="(max-width: 640px) 48px, 64px"
+                          className="object-cover"
                           unoptimized
                         />
                       ) : (
                         <div className="w-full h-full bg-gradient-to-br from-muted to-muted-foreground/20" />
                       )}
 
+                      {/* hover overlay (웹에서만 보이고, 모바일에선 터치 대비해 opacity transition만) */}
                       <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                         <Button
                           size="icon"
                           variant="ghost"
                           className="w-10 h-10 rounded-full bg-white/90 hover:bg-white text-black hover:scale-110 transition-transform"
+                          aria-label="미리듣기"
                         >
                           <Play className="w-5 h-5 fill-current" />
                         </Button>
                       </div>
                     </div>
 
+                    {/* 제목/가수: min-w-0 유지 + 모바일 폰트 축소 */}
                     <div className="flex-1 min-w-0">
-                      <h3 className="text-base font-semibold truncate mb-1 group-hover:text-primary transition-colors">
+                      <h3 className="text-base max-sm:text-sm font-semibold truncate mb-1 group-hover:text-primary transition-colors">
                         {it.music_title || "제목 없음"}
                       </h3>
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <div className="flex items-center gap-2 text-sm max-sm:text-xs text-muted-foreground">
                         <span className="truncate">{it.music_artist || "아티스트"}</span>
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-4">
+                    {/* 오른쪽 영역: 모바일에선 기본 숨김 */}
+                    <div className="flex items-center gap-4 max-sm:hidden">
                       <div className="flex items-center justify-center w-28">
                         <RankChange change={getDayChange(it)} isNew={it.day_is_new} />
                       </div>
 
                       <div className="flex items-center gap-1">
-                        <Button size="icon" variant="ghost" className="w-9 h-9 hover:text-red-500">
+                        <Button size="icon" variant="ghost" className="w-9 h-9 hover:text-red-500" aria-label="좋아요">
                           <Heart className="w-4 h-4" />
                         </Button>
-                        <Button size="icon" variant="ghost" className="w-9 h-9">
+                        <Button size="icon" variant="ghost" className="w-9 h-9" aria-label="더 보기">
                           <MoreVertical className="w-4 h-4" />
                         </Button>
                       </div>
