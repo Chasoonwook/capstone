@@ -51,9 +51,20 @@ function getDayChange(it: RankingItem): number | null {
   return it.rank_change ?? null
 }
 
-function RankChange({ change, isNew }: { change: number | null; isNew?: boolean }) {
+/** compact=true 면 모바일용: 아이콘(+숫자만)으로 아주 짧게 표기 */
+function RankChange({
+  change,
+  isNew,
+  compact,
+}: {
+  change: number | null
+  isNew?: boolean
+  compact?: boolean
+}) {
   if (isNew) {
-    return (
+    return compact ? (
+      <Sparkles className="w-4 h-4 text-purple-600" />
+    ) : (
       <div className="flex items-center gap-1 text-sm font-semibold text-purple-600">
         <Sparkles className="w-4 h-4" />
         <span className="tracking-wide">NEW</span>
@@ -61,25 +72,29 @@ function RankChange({ change, isNew }: { change: number | null; isNew?: boolean 
     )
   }
   if (!change) {
-    return (
+    return compact ? (
+      <Minus className="w-4 h-4 text-muted-foreground" />
+    ) : (
       <div className="flex items-center gap-1 text-sm text-muted-foreground">
         <Minus className="w-4 h-4" />
         <span>변동 없음</span>
       </div>
     )
   }
-  if (change > 0) {
+  const up = change > 0
+  const abs = Math.abs(change)
+  if (compact) {
     return (
-      <div className="flex items-center gap-1 text-sm font-semibold text-blue-500">
-        <TrendingUp className="w-4 h-4" />
-        <span className="tabular-nums">{change}위 상승</span>
+      <div className={`flex items-center ${up ? "text-blue-500" : "text-red-500"}`}>
+        {up ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+        <span className="ml-0.5 text-[11px] tabular-nums">{up ? `+${abs}` : `-${abs}`}</span>
       </div>
     )
   }
   return (
-    <div className="flex items-center gap-1 text-sm font-semibold text-red-500">
-      <TrendingDown className="w-4 h-4" />
-      <span className="tabular-nums">{Math.abs(change)}위 하락</span>
+    <div className={`flex items-center gap-1 text-sm font-semibold ${up ? "text-blue-500" : "text-red-500"}`}>
+      {up ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+      <span className="tabular-nums">{abs}위 {up ? "상승" : "하락"}</span>
     </div>
   )
 }
@@ -120,7 +135,6 @@ export default function RankingsList() {
   const handleEnd = () => {
     if (!isDraggingRef.current) return
     isDraggingRef.current = false
-
     const threshold = 80
     if (translateX > threshold && currentPage > 0) {
       setCurrentPage((prev) => prev - 1)
@@ -238,12 +252,13 @@ export default function RankingsList() {
                 return (
                   <li
                     key={`${period}-${it.rank}-${it.music_id}`}
-                    className="group flex flex-wrap items-center gap-4 rounded-xl px-4 py-3 hover:bg-accent/50 transition-all cursor-pointer"
+                    className="group flex items-center gap-3 sm:gap-4 rounded-xl px-3 py-2 hover:bg-accent/50 transition-all"
+                    /* 중요: 한 줄 유지 */
                   >
-                    {/* 랭크 번호 */}
-                    <div className="flex items-center justify-center w-12 max-sm:w-8">
+                    {/* 랭크 번호 (축소) */}
+                    <div className="flex items-center justify-center w-8 sm:w-12 shrink-0">
                       <div
-                        className={`text-xl max-sm:text-base tabular-nums font-bold ${
+                        className={`text-base sm:text-xl tabular-nums font-bold ${
                           isTopThree ? "text-primary" : "text-foreground"
                         }`}
                       >
@@ -251,8 +266,8 @@ export default function RankingsList() {
                       </div>
                     </div>
 
-                    {/* 앨범 아트 */}
-                    <div className="relative w-16 h-16 max-sm:w-12 max-sm:h-12 rounded-lg overflow-hidden bg-muted flex-shrink-0 shadow-md">
+                    {/* 앨범 아트 (48/64) */}
+                    <div className="relative w-12 h-12 sm:w-16 sm:h-16 rounded-lg overflow-hidden bg-muted shrink-0 shadow-md">
                       {it.album_image_url ? (
                         <Image
                           src={it.album_image_url}
@@ -270,49 +285,51 @@ export default function RankingsList() {
                         <Button
                           size="icon"
                           variant="ghost"
-                          className="w-10 h-10 rounded-full bg-white/90 hover:bg-white text-black hover:scale-110 transition-transform"
+                          className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-white/90 hover:bg-white text-black hover:scale-110 transition-transform"
                           aria-label="미리듣기"
                         >
-                          <Play className="w-5 h-5 fill-current" />
+                          <Play className="w-4 h-4 sm:w-5 sm:h-5 fill-current" />
                         </Button>
                       </div>
                     </div>
 
-                    {/* 제목/가수 */}
+                    {/* 제목/가수 (가운데, 말줄임) */}
                     <div className="flex-1 min-w-0">
-                      <h3 className="text-base max-sm:text-sm font-semibold truncate mb-1 group-hover:text-primary transition-colors">
+                      <h3 className="text-sm sm:text-base font-semibold truncate group-hover:text-primary transition-colors">
                         {it.music_title || "제목 없음"}
                       </h3>
-                      <div className="flex items-center gap-2 text-sm max-sm:text-xs text-muted-foreground">
+                      <div className="flex items-center gap-2 text-xs sm:text-sm text-muted-foreground">
                         <span className="truncate">{it.music_artist || "아티스트"}</span>
                       </div>
                     </div>
 
-                    {/* 데스크톱: 오른쪽 고정 영역 */}
-                    <div className="hidden sm:flex items-center gap-4">
-                      <div className="flex items-center justify-center w-28">
-                        <RankChange change={getDayChange(it)} isNew={it.day_is_new} />
+                    {/* 오른쪽: 순위 변동 + 버튼 (항상 한 줄, 고정폭/축소) */}
+                    <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+                      {/* 모바일: 초컴팩트 변동, 데스크톱: 일반 */}
+                      <div className="flex items-center justify-center w-[54px] sm:w-28">
+                        <div className="sm:hidden">
+                          <RankChange change={getDayChange(it)} isNew={it.day_is_new} compact />
+                        </div>
+                        <div className="hidden sm:block">
+                          <RankChange change={getDayChange(it)} isNew={it.day_is_new} />
+                        </div>
                       </div>
-                      <div className="flex items-center gap-1">
-                        <Button size="icon" variant="ghost" className="w-9 h-9 hover:text-red-500" aria-label="좋아요">
-                          <Heart className="w-4 h-4" />
-                        </Button>
-                        <Button size="icon" variant="ghost" className="w-9 h-9" aria-label="더 보기">
-                          <MoreVertical className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    </div>
 
-                    {/* 모바일: 아래 줄 컴팩트 바 */}
-                    <div className="flex sm:hidden items-center justify-between w-full mt-2">
-                      <div className="flex items-center">
-                        <RankChange change={getDayChange(it)} isNew={it.day_is_new} />
-                      </div>
                       <div className="flex items-center gap-1">
-                        <Button size="icon" variant="ghost" className="w-8 h-8 hover:text-red-500" aria-label="좋아요">
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="w-8 h-8 sm:w-9 sm:h-9 hover:text-red-500"
+                          aria-label="좋아요"
+                        >
                           <Heart className="w-4 h-4" />
                         </Button>
-                        <Button size="icon" variant="ghost" className="w-8 h-8" aria-label="더 보기">
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="w-8 h-8 sm:w-9 sm:h-9"
+                          aria-label="더 보기"
+                        >
                           <MoreVertical className="w-4 h-4" />
                         </Button>
                       </div>
