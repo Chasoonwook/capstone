@@ -4,7 +4,7 @@ import { Suspense, useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 
 import PhotoUpload from "@/components/upload/PhotoUpload"
-import MoodBadges from "@/components/mood/MoodBadges"
+// import MoodBadges from "@/components/mood/MoodBadges" // 삭제
 import { useAuthUser } from "@/hooks/useAuthUser"
 import { useMusics } from "@/hooks/useMusics"
 import { useHistory } from "@/hooks/useHistory"
@@ -16,7 +16,6 @@ import HistorySwitch from "@/components/history/HistorySwitch"
 import {
   Camera,
   Home,
-  Music2,
   SkipBack,
   Play,
   SkipForward,
@@ -33,6 +32,7 @@ export default function Page() {
   const { musics, loading: musicsLoading, error: musicsError } = useMusics()
   const { history, loading: historyLoading, error: historyError } = useHistory(isLoggedIn)
 
+  // 선택 장르는 PhotoUpload에 전달만 하도록 유지(무드 UI는 제거됨)
   const [selectedGenres, setSelectedGenres] = useState<string[]>([])
   const [showUploadModal, setShowUploadModal] = useState(false)
 
@@ -128,12 +128,6 @@ export default function Page() {
     }
   }, [seenKey, isLoggedIn])
 
-  const toggleGenre = (genre: string) => {
-    setSelectedGenres((prev) =>
-      prev.includes(genre) ? prev.filter((g) => g !== genre) : [...prev, genre],
-    )
-  }
-
   return (
     <>
       <div className={`min-h-screen bg-background ${showNav ? "pb-20" : "pb-6"}`}>
@@ -163,6 +157,7 @@ export default function Page() {
             </Suspense>
           </div>
 
+          {/* 업로드 CTA 섹션 */}
           <section className="px-4 pb-4">
             <div className="bg-gradient-to-br from-primary/10 via-accent/5 to-primary/10 rounded-2xl p-6 mb-6">
               <h2 className="text-xl font-bold text-foreground mb-2 text-balance">
@@ -183,10 +178,11 @@ export default function Page() {
             </div>
           </section>
 
-          <section className="px-4 mb-6">
+          {/* ▼▼▼ ‘지금 기분은?’(무드 배지) 섹션 제거됨 ▼▼▼ */}
+          {/* <section className="px-4 mb-6">
             <h2 className="text-sm font-semibold text-foreground mb-3">지금 기분은?</h2>
             <MoodBadges selected={selectedGenres} onToggle={toggleGenre} />
-          </section>
+          </section> */}
         </main>
 
         {!showNav && (
