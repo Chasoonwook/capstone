@@ -15,7 +15,13 @@ const SDK_SRC = "https://sdk.scdn.co/spotify-player.js"
 
 export function useSpotifyPlayer() {
   const [ready, setReady] = useState(false)
-  const [deviceId, setDeviceId] = useState<string | null>(null)
+  const [deviceId, _setDeviceId] = useState<string | null>(null)
+  const deviceIdRef = useRef<string | null>(null)
+  const setDeviceId = (id: string | null) => {
+    deviceIdRef.current = id
+    _setDeviceId(id)
+  }
+
   const [state, setState] = useState<SpState>({
     deviceId: null, position: 0, duration: 0, paused: true,
   })
@@ -33,7 +39,6 @@ export function useSpotifyPlayer() {
         if ((window as any).Spotify) return resolve()
         const exist = document.querySelector<HTMLScriptElement>(`script[src="${SDK_SRC}"]`)
         if (exist) {
-          // 이미 추가되어 있으면 로드 완료를 약간 뒤에 확인
           const t = window.setInterval(() => {
             if ((window as any).Spotify) { window.clearInterval(t); resolve() }
           }, 50)
@@ -48,7 +53,8 @@ export function useSpotifyPlayer() {
 
     const getToken = async (): Promise<string | null> => {
       try {
-        const r = await fetch("/api/spotify/token", { credentials: "include" })
+        // ✅ 절대경로로 호출 (쿠키 포함)
+        const r = await fetch(`${API_BASE}/api/spotify/token`, { credentials: "include" })
         if (!r.ok) return null
         const j = await r.json()
         return j?.access_token || null
@@ -81,11 +87,13 @@ export function useSpotifyPlayer() {
         setReady(true)
         setState(s => ({ ...s, deviceId: device_id }))
       })
-      player.addListener("not_ready", () => setReady(false))
+      player.addListener("not_ready", () => {
+        setReady(false)
+      })
       player.addListener("player_state_changed", (st: any) => {
         if (!st) return
         setState({
-          deviceId,
+          deviceId: deviceIdRef.current,
           position: st.position ?? 0,
           duration: st.duration ?? 0,
           paused: st.paused ?? true,
@@ -97,6 +105,9 @@ export function useSpotifyPlayer() {
       player.addListener("playback_error", (e: any) => console.error("playback_error", e))
 
       await player.connect()
+      // 일부 브라우저는 사용자 제스처 후 활성 필요
+      try { await player.activateElement?.() } catch {}
+
       playerRef.current = player
     }
 
@@ -116,41 +127,44 @@ export function useSpotifyPlayer() {
         const r = await fetch(`${API_BASE}/api/spotify/devices`, { credentials: "include" })
         if (!r.ok) return
         const j = await r.json()
-        const exists = (j?.devices || []).some((d: any) => d.id === deviceId)
+        const exists = (j?.devices || []).some((d: any) => d.id === deviceIdRef.current)
         if (!exists && j?.devices?.[0]) setDeviceId(j.devices[0].id)
       } catch {}
     }
-    if (deviceId) {
+    if (deviceIdRef.current) {
       poll()
       pollRef.current = window.setInterval(poll, 15000) as unknown as number
     }
     return () => { if (pollRef.current) window.clearInterval(pollRef.current) }
-  }, [deviceId])
+  }, [deviceIdRef.current])
 
   // ── REST 헬퍼 ────────────────────────────────────────────
   const transferToThisDevice = useCallback(async (play = false) => {
-    if (!deviceId) throw new Error("no_device")
+    const id = deviceIdRef.current
+    if (!id) throw new Error("no_device")
     await fetch(`${API_BASE}/api/spotify/transfer`, {
       method: "PUT",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ device_id: deviceId, play }),
+      body: JSON.stringify({ device_id: id, play }),
     })
-  }, [deviceId])
+  }, [])
 
   // ── 컨트롤 API ───────────────────────────────────────────
   const playUris = useCallback(async (uris: string[]) => {
     if (!uris?.length) return
-    if (!deviceId) throw new Error("no_device")
-    await transferToThisDevice(false) // 항상 transfer → play
+    const id = deviceIdRef.current
+    if (!id) throw new Error("no_device")
+    // 항상 transfer → play
+    await transferToThisDevice(false)
     await fetch(`${API_BASE}/api/spotify/play`, {
       method: "PUT",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ device_id: deviceId, uris }),
+      body: JSON.stringify({ device_id: id, uris }),
     })
     setState(s => ({ ...s, position: 0, paused: false }))
-  }, [deviceId, transferToThisDevice])
+  }, [transferToThisDevice])
 
   const pause = useCallback(async () => {
     await fetch(`${API_BASE}/api/spotify/pause`, {
@@ -160,16 +174,17 @@ export function useSpotifyPlayer() {
   }, [])
 
   const resume = useCallback(async () => {
-    if (!deviceId) throw new Error("no_device")
+    const id = deviceIdRef.current
+    if (!id) throw new Error("no_device")
     await transferToThisDevice(false)
     await fetch(`${API_BASE}/api/spotify/play`, {
       method: "PUT",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ device_id: deviceId }),
+      body: JSON.stringify({ device_id: id }),
     })
     setState(s => ({ ...s, paused: false }))
-  }, [deviceId, transferToThisDevice])
+  }, [transferToThisDevice])
 
   const next = useCallback(async () => {
     await fetch(`${API_BASE}/api/spotify/next`, { method: "POST", credentials: "include" })
@@ -186,7 +201,7 @@ export function useSpotifyPlayer() {
 
   return {
     ready,
-    deviceId,
+    deviceId: deviceIdRef.current,
     state,             // position/duration(ms), paused
     playUris,
     pause,
