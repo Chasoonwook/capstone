@@ -4,6 +4,12 @@
 import { useEffect, useRef, useState, useCallback } from "react"
 import { API_BASE } from "@/lib/api"
 
+declare global {
+  interface Window {
+    onSpotifyWebPlaybackSDKReady?: () => void;
+  }
+}
+
 type SpState = {
   deviceId: string | null
   position: number // ms
@@ -25,22 +31,18 @@ export function useSpotifyPlayer() {
   const stateTimerRef = useRef<number | null>(null)
   const secTimerRef   = useRef<number | null>(null)
 
-  // 진행바 보간 기준
   const basePosRef  = useRef(0)
   const durationRef = useRef(0)
   const pausedRef   = useRef(true)
   const lastTickRef = useRef<number | null>(null)
 
-  /* ── SDK 로드 & 초기화 ─────────────────────────────────── */
   useEffect(() => {
     let cancelled = false
 
     const loadSdk = () =>
       new Promise<void>((resolve) => {
         if ((window as any).Spotify) return resolve()
-        // 콜백이 없어 생기는 콘솔 경고 방지 (타입 보강 없이 캐스팅)
-        const w = window as any
-        w.onSpotifyWebPlaybackSDKReady = w.onSpotifyWebPlaybackSDKReady || (() => {})
+        window.onSpotifyWebPlaybackSDKReady ||= () => {}
         const s = document.createElement("script")
         s.src = SDK_SRC
         s.async = true
@@ -110,7 +112,6 @@ export function useSpotifyPlayer() {
       try { await player.activateElement?.() } catch {}
       playerRef.current = player
 
-      // 1) 1초마다 실제 상태 폴링
       if (stateTimerRef.current) window.clearInterval(stateTimerRef.current)
       stateTimerRef.current = window.setInterval(async () => {
         try {
@@ -141,7 +142,6 @@ export function useSpotifyPlayer() {
     }
   }, [API_BASE])
 
-  /* 2) 1초 단위 보간(화면상의 하얀점이 착착 이동) */
   useEffect(() => {
     const tick = () => {
       const now = performance.now()
@@ -160,7 +160,6 @@ export function useSpotifyPlayer() {
     return () => { if (secTimerRef.current) window.clearInterval(secTimerRef.current) }
   }, [])
 
-  /* 준비 대기 */
   const waitReady = useCallback(async (ms = 6000) => {
     const t0 = Date.now()
     while (!(ready && deviceIdRef.current)) {
@@ -169,7 +168,6 @@ export function useSpotifyPlayer() {
     }
   }, [ready])
 
-  /* 컨트롤러 */
   const transferToThisDevice = useCallback(async (play = false) => {
     await waitReady()
     const id = deviceIdRef.current!
@@ -230,5 +228,23 @@ export function useSpotifyPlayer() {
     }
   }, [])
 
-  return { ready, deviceId: deviceIdRef.current, state, playUris, pause, resume, next, prev, seek }
+  /** ⭐ 추가: SDK 볼륨 제어 노출 */
+  const setVolume = useCallback(async (v01: number) => {
+    const v = Math.min(1, Math.max(0, v01))
+    try { await (playerRef.current as any)?.setVolume?.(v) } catch {}
+  }, [])
+
+  // setVolume 포함해서 반환
+  return {
+    ready,
+    deviceId: deviceIdRef.current,
+    state,
+    playUris,
+    pause,
+    resume,
+    next,
+    prev,
+    seek,
+    setVolume,   // ← 이것 때문에 RecommendClient의 sp.setVolume?.(...) 타입 에러가 사라짐
+  }
 }
