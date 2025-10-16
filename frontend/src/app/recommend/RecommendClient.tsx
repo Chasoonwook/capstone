@@ -22,6 +22,7 @@ type Track = {
   coverUrl?: string | null
   duration?: number | null
   spotify_track_id?: string | null
+  spotify_uri?: string | null   // ← 백엔드가 주는 URI
   selected_from?: "main" | "sub" | "preferred" | null
 }
 
@@ -35,39 +36,30 @@ const buildPhotoSrc = (photoId?: string | null) => {
 const normalizeTrack = (raw: any, idx: number): Track | null => {
   // 제목/아티스트
   const title =
-    raw?.title ?? raw?.music_title ?? raw?.name ?? null;
+    raw?.title ?? raw?.music_title ?? raw?.name ?? null
   const artist =
-    raw?.artist ?? raw?.music_artist ?? raw?.singer ?? "Unknown";
+    raw?.artist ?? raw?.music_artist ?? raw?.singer ?? "Unknown"
+  if (!title) return null
 
-  // 미리듣기 URL
+  // 미리듣기 URL (백엔드: preview_url)
   const preview =
-    raw?.audio_url ?? raw?.preview_url ?? raw?.previewUrl ?? raw?.stream_url ?? null;
-  const audioUrl = preview === "EMPTY" ? null : preview;
+    raw?.audio_url ?? raw?.preview_url ?? raw?.previewUrl ?? raw?.stream_url ?? null
+  const audioUrl = preview === "EMPTY" ? null : preview
 
-  // 앨범 이미지 (백엔드가 albumImage 로 줄 때가 있음)
+  // 커버 (백엔드: albumImage)
   const coverUrl =
-    raw?.cover_url ?? raw?.album_image ?? raw?.albumImage ?? raw?.image ?? null;
+    raw?.cover_url ?? raw?.album_image ?? raw?.albumImage ?? raw?.image ?? null
 
-  // 길이(초 단위 숫자로 통일)
+  // 길이(초 단위 대응)
   const duration =
-    Number(raw?.duration ?? raw?.length_seconds ?? raw?.preview_duration ?? 0) || null;
+    Number(raw?.duration ?? raw?.length_seconds ?? raw?.preview_duration ?? 0) || null
 
-  // Spotify 식별자/URI 흡수
-  const spotify_uri: string | null =
-    raw?.spotify_uri ?? null;
-
-  // track id는 우선순위: 명시적 spotify_track_id → spotify_uri 마지막 파트 → (원본이 스포티 API면) id
-  let spotify_track_id: string | null =
-    raw?.spotify_track_id ?? null;
+  // Spotify 식별자/URI
+  const spotify_uri: string | null = raw?.spotify_uri ?? null
+  let spotify_track_id: string | null = raw?.spotify_track_id ?? null
   if (!spotify_track_id && typeof spotify_uri === "string" && spotify_uri.startsWith("spotify:track:")) {
-    spotify_track_id = spotify_uri.split(":").pop() || null;
+    spotify_track_id = spotify_uri.split(":").pop() || null
   }
-  if (!spotify_track_id && raw?.source === "spotify" && typeof raw?.id === "string") {
-    // 혹시 서버가 source 정보를 넣어줬다면
-    spotify_track_id = raw.id;
-  }
-
-  if (!title) return null;
 
   return {
     id: raw?.id ?? raw?.music_id ?? idx,
@@ -77,9 +69,10 @@ const normalizeTrack = (raw: any, idx: number): Track | null => {
     coverUrl,
     duration,
     spotify_track_id,
+    spotify_uri,
     selected_from: raw?.selected_from ?? null,
-  };
-};
+  }
+}
 
 // 간단 디바운스
 function debounce<T extends (...a: any[]) => void>(fn: T, delay = 150) {
@@ -165,6 +158,12 @@ export default function RecommendClient() {
           ]
           list = all.map((r, i) => normalizeTrack(r, i)).filter(Boolean) as Track[]
         }
+
+        console.log(
+          "[raw first]",
+          data?.main_songs?.[0] ?? data?.sub_songs?.[0] ?? data?.preferred_songs?.[0]
+        )
+        console.log("[normalized first]", list[0])
 
         setPlaylist(list)
         setCurrentTrackIndex(0)
@@ -252,36 +251,35 @@ export default function RecommendClient() {
 
   // ⭐ Spotify: 명시적 재생
   const playCurrentSpotify = useCallback(async () => {
-    const t = playlist[currentTrackIndex];
-    if (!t) return;
+    const t = playlist[currentTrackIndex]
+    if (!t) return
 
     if (!sp.deviceId || !sp.ready) {
-      alert("Spotify 연결 중입니다. (Premium 필요) 잠시 후 다시 시도하세요.");
-      return;
+      alert("Spotify 연결 중입니다. (Premium 필요) 잠시 후 다시 시도하세요.")
+      return
     }
 
-    // 재생할 URI 결정: 우선 spotify_uri(이미 완성된 URI) → track_id로 구성
-    const rawUri =
-      (t as any)?.spotify_uri as string | undefined;
-    const uri =
-      rawUri && rawUri.startsWith("spotify:")
-        ? rawUri
-        : (t.spotify_track_id ? `spotify:track:${t.spotify_track_id}` : null);
+    // spotify_uri 우선, 없으면 track_id로 구성
+    const rawUri = t.spotify_uri
+    const uri = rawUri && rawUri.startsWith("spotify:")
+      ? rawUri
+      : (t.spotify_track_id ? `spotify:track:${t.spotify_track_id}` : null)
 
     if (!uri) {
-      // 이 트랙은 미리듣기만 가능한 경우일 수 있음
-      console.warn("[spotify] no uri on track, fallback to preview if available");
-      return;
+      console.warn("[spotify] no uri on track, preview only:", t.title)
+      return
     }
 
-    lastSpUriRef.current = uri;
-    await sp.playUris([uri]); // transfer → play
-    setIsPlaying(true);
-  }, [playlist, currentTrackIndex, sp]);
+    lastSpUriRef.current = uri
+    await sp.playUris([uri])        // transfer → play
+    setIsPlaying(true)
+  }, [playlist, currentTrackIndex, sp])
 
   const togglePlay = async () => {
     const t = playlist[currentTrackIndex]
-    if (t?.spotify_track_id) {
+    const isSpotify = !!(t?.spotify_track_id || t?.spotify_uri)
+
+    if (isSpotify) {
       if (isPlaying) {
         await sp.pause()
         setIsPlaying(false)
