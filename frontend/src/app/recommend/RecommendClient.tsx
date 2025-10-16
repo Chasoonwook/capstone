@@ -33,11 +33,7 @@ const buildPhotoSrc = (photoId?: string | null) => {
   return `${API_BASE}/api/photos/${id}/binary`
 }
 
-/** 제목/아티스트 → 키 */
-const keyOf = (title?: string | null, artist?: string | null) =>
-  `${String(title||"").trim().toLowerCase()} - ${String(artist||"").trim().toLowerCase()}`
-
-/** 응답 정규화 */
+/** 커버/스포티파이 ID 필드 보강 (서버 응답 형식 다양성 대응) */
 const normalizeTrack = (raw: any, idx: number): Track | null => {
   const title = raw?.title ?? raw?.music_title ?? raw?.name ?? null
   const artist = raw?.artist ?? raw?.music_artist ?? raw?.singer ?? "Unknown"
@@ -72,12 +68,74 @@ const normalizeTrack = (raw: any, idx: number): Track | null => {
   }
 }
 
-// 간단 디바운스
+/** 간단 디바운스 */
 function debounce<T extends (...a: any[]) => void>(fn: T, delay = 150) {
   let t: number | undefined
   return (...args: Parameters<T>) => {
     if (t) window.clearTimeout(t)
     t = window.setTimeout(() => fn(...args), delay) as unknown as number
+  }
+}
+
+/** 🔁 추천목록 로드 직후: 커버/URI 한 번에 보강 */
+async function prefetchCoversAndUris(list: Track[]): Promise<Track[]> {
+  if (!list?.length) return list
+
+  const norm = (s?: string | null) =>
+    (s || "")
+      .replace(/\s+/g, " ")
+      .replace(/[[(（【].*?[)\]）】]/g, "")
+      .trim()
+      .toLowerCase()
+
+  const pairs = list.map(t => ({
+    title: norm(t.title),
+    artist: norm(t.artist),
+  }))
+
+  try {
+    const res = await fetch(`${API_BASE}/api/spotify/search/batch`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pairs }),
+    })
+    if (!res.ok) {
+      console.warn("[batch] http", res.status)
+      return list
+    }
+    const j = await res.json()
+    const items: Array<{
+      key: string
+      id: string | null
+      title: string | null
+      artist: string | null
+      album: string | null
+      albumImage: string | null
+      preview_url: string | null
+      spotify_uri: string | null
+    }> = j?.items || []
+
+    const keyOf = (t: Track) => `${norm(t.title)} - ${norm(t.artist)}`
+    const map = new Map(items.map(it => [ (it.key || `${norm(it.title)} - ${norm(it.artist)}`), it ]))
+
+    const enriched = list.map(t => {
+      const k = keyOf(t)
+      const hit = map.get(k)
+      if (!hit) return t
+      const spotify_uri = hit.spotify_uri || (hit.id ? `spotify:track:${hit.id}` : null)
+      return {
+        ...t,
+        coverUrl: t.coverUrl || hit.albumImage || null,
+        audioUrl: t.audioUrl || hit.preview_url || null,
+        spotify_uri: t.spotify_uri || spotify_uri || null,
+        spotify_track_id: t.spotify_track_id || hit.id || (spotify_uri?.split(":").pop() || null),
+      } as Track
+    })
+    return enriched
+  } catch (e) {
+    console.warn("[batch] error", e)
+    return list
   }
 }
 
@@ -115,7 +173,7 @@ export default function RecommendClient() {
   const audioRef = useRef<HTMLAudioElement>(null)
   const lastSpUriRef = useRef<string | null>(null)
 
-  // 🔊 볼륨 상태(0~1)
+  // 🔊 볼륨
   const [volume, setVolume] = useState<number>(() => {
     const saved = Number(
       (typeof window !== "undefined" && localStorage.getItem("player_volume")) || "0.8",
@@ -133,7 +191,7 @@ export default function RecommendClient() {
     }
   }, [])
 
-  // 추천 목록 불러오기 (+ 배치 보강)
+  // 추천 목록 불러오기 (+ 일괄 보강)
   useEffect(() => {
     const fetchPlaylist = async () => {
       setLoading(true)
@@ -145,7 +203,6 @@ export default function RecommendClient() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const data: any = await res.json()
 
-        // 1) 1차 정규화
         let list: Track[] = []
         if (data && (data.main_songs || data.sub_songs || data.preferred_songs)) {
           const tag = (arr: any[], tagName: Track["selected_from"]) =>
@@ -158,48 +215,8 @@ export default function RecommendClient() {
           list = all.map((r, i) => normalizeTrack(r, i)).filter(Boolean) as Track[]
         }
 
-        // 2) 보강이 필요한 트랙을 모아 batch 조회
-        try {
-          const needs = list.filter(t =>
-            !t.coverUrl || !(t.spotify_uri || t.spotify_track_id) || !t.audioUrl
-          )
-          if (needs.length) {
-            const pairs = needs.map(t => ({ title: t.title, artist: t.artist }))
-            const r = await fetch(`${API_BASE}/api/spotify/search/batch`, {
-              method: "POST",
-              credentials: "include",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ pairs }),
-            })
-            if (r.ok) {
-              const j = await r.json()
-              const map = new Map<string, any>()
-              for (const it of j?.items || []) {
-                map.set(keyOf(it?.title, it?.artist), it)
-              }
-              list = list.map(t => {
-                const m = map.get(keyOf(t.title, t.artist))
-                if (!m) return t
-                return {
-                  ...t,
-                  coverUrl: t.coverUrl ?? m.albumImage ?? null,
-                  audioUrl: t.audioUrl ?? m.preview_url ?? null,
-                  spotify_uri: t.spotify_uri ?? m.spotify_uri ?? null,
-                  spotify_track_id:
-                    t.spotify_track_id ??
-                    m.id ??
-                    (typeof m.spotify_uri === "string" && m.spotify_uri.startsWith("spotify:track:")
-                      ? m.spotify_uri.split(":").pop()!
-                      : null),
-                }
-              })
-            }
-          }
-        } catch (e) {
-          console.warn("[batch enrich] skipped:", e)
-        }
-
-        setPlaylist(list)
+        const enhanced = await prefetchCoversAndUris(list)   // ← 여기서 한 번에 커버/URI 보강
+        setPlaylist(enhanced)
         setCurrentTrackIndex(0)
         lastSpUriRef.current = null
       } catch (e: any) {
@@ -232,10 +249,7 @@ export default function RecommendClient() {
     async (autoplay = false) => {
       const audio = audioRef.current
       if (!audio || !currentTrack) return
-      if (!currentTrack.audioUrl) {
-        setDuration(0)
-        return
-      }
+      if (!currentTrack.audioUrl) { setDuration(0); return }
       setCurrentTime(0)
       audio.src = currentTrack.audioUrl
       audio.load()
@@ -283,7 +297,7 @@ export default function RecommendClient() {
     }
   }, [playlist.length])
 
-  // ⭐ Spotify: 명시적 재생
+  // ⭐ Spotify: 명시적 재생 (URI 없으면 즉석 보강 후 재생)
   const playCurrentSpotify = useCallback(async () => {
     const t = playlist[currentTrackIndex]
     if (!t) return
@@ -293,10 +307,37 @@ export default function RecommendClient() {
       return
     }
 
-    const rawUri = t.spotify_uri
-    const uri = rawUri && rawUri.startsWith("spotify:")
-      ? rawUri
+    let uri = t.spotify_uri && t.spotify_uri.startsWith("spotify:")
+      ? t.spotify_uri
       : (t.spotify_track_id ? `spotify:track:${t.spotify_track_id}` : null)
+
+    if (!uri) {
+      try {
+        const q = new URLSearchParams({ title: t.title, artist: t.artist })
+        const r = await fetch(`${API_BASE}/api/spotify/search?${q.toString()}`, { credentials: "include" })
+        if (r.ok) {
+          const j = await r.json()
+          const item = j?.items?.[0] || j?.item || j
+          const foundUri = item?.spotify_uri || (item?.id ? `spotify:track:${item.id}` : null)
+          if (foundUri) {
+            uri = foundUri
+            setPlaylist(prev => {
+              const copy = [...prev]
+              copy[currentTrackIndex] = {
+                ...copy[currentTrackIndex],
+                spotify_uri: foundUri,
+                spotify_track_id: foundUri.split(":").pop() || null,
+                coverUrl: copy[currentTrackIndex].coverUrl || item?.albumImage || null,
+                audioUrl: copy[currentTrackIndex].audioUrl || item?.preview_url || null,
+              }
+              return copy
+            })
+          }
+        }
+      } catch (e) {
+        console.warn("[search on-demand] failed", e)
+      }
+    }
 
     if (!uri) {
       console.warn("[spotify] no uri on track, preview only:", t.title)
@@ -304,7 +345,7 @@ export default function RecommendClient() {
     }
 
     lastSpUriRef.current = uri
-    await sp.playUris([uri])        // transfer → play
+    await sp.playUris([uri]) // transfer → play
     setIsPlaying(true)
   }, [playlist, currentTrackIndex, sp])
 
@@ -323,7 +364,6 @@ export default function RecommendClient() {
       return
     }
 
-    // <audio> 미리듣기
     const audio = audioRef.current
     if (!audio) return
     if (isPlaying) { audio.pause(); setIsPlaying(false) }
