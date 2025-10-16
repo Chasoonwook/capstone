@@ -1,4 +1,3 @@
-// src/app/recommend/RecommendClient.tsx
 "use client"
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react"
@@ -9,9 +8,8 @@ import {
   Play, Pause, SkipBack, SkipForward,
   ChevronDown, MoreVertical, Heart, ThumbsDown,
   ListMusic, Upload,
-  // [VOL] 볼륨 아이콘
 } from "lucide-react"
-import { VolumeX, Volume1, Volume2 } from "lucide-react" // [VOL]
+import { VolumeX, Volume1, Volume2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { API_BASE } from "@/lib/api"
 import { useSpotifyPlayer } from "@/hooks/useSpotifyPlayer"
@@ -33,17 +31,36 @@ const buildPhotoSrc = (photoId?: string | null) => {
   return `${API_BASE}/api/photos/${id}/binary`
 }
 
+/** ✅ 커버/스포티파이 ID 필드 보강 */
 const normalizeTrack = (raw: any, idx: number): Track | null => {
   const title = raw?.title ?? raw?.music_title ?? raw?.name ?? null
   const artist = raw?.artist ?? raw?.music_artist ?? raw?.singer ?? "Unknown"
+
+  // 미리듣기 URL
   const preview = raw?.audio_url ?? raw?.preview_url ?? raw?.stream_url ?? null
   const audioUrl = preview === "EMPTY" ? null : preview
+
+  // 커버 이미지 후보들(여러 소스 혼재 대비)
   const coverUrl =
-    raw?.cover_url ?? raw?.album_image ?? raw?.image ?? null
+    raw?.coverUrl ??
+    raw?.cover_url ??
+    raw?.albumImage ??
+    raw?.album_image ??
+    raw?.image ??
+    null
+
   const duration =
     Number(raw?.duration ?? raw?.length_seconds ?? raw?.preview_duration ?? 0) || null
-  const spotify_track_id = raw?.spotify_track_id ?? null
+
+  // spotify id/uri 혼재 대비
+  const fromUri =
+    typeof raw?.spotify_uri === "string" && raw.spotify_uri.startsWith("spotify:track:")
+      ? raw.spotify_uri.split(":")[2]
+      : null
+
+  const spotify_track_id = raw?.spotify_track_id ?? fromUri ?? null
   const selected_from = raw?.selected_from ?? null
+
   if (!title) return null
   return {
     id: raw?.id ?? raw?.music_id ?? idx,
@@ -54,6 +71,15 @@ const normalizeTrack = (raw: any, idx: number): Track | null => {
     duration,
     spotify_track_id,
     selected_from,
+  }
+}
+
+// 간단 디바운스
+function debounce<T extends (...a: any[]) => void>(fn: T, delay = 150) {
+  let t: number | undefined
+  return (...args: Parameters<T>) => {
+    if (t) window.clearTimeout(t)
+    t = window.setTimeout(() => fn(...args), delay) as unknown as number
   }
 }
 
@@ -89,9 +115,9 @@ export default function RecommendClient() {
   const [dislikedTracks, setDislikedTracks] = useState<Set<string | number>>(new Set())
 
   const audioRef = useRef<HTMLAudioElement>(null)
-  const lastSpUriRef = useRef<string | null>(null) // ⭐ 첫 재생 여부 판단용
+  const lastSpUriRef = useRef<string | null>(null)
 
-  // [VOL] 볼륨 상태(0~1) + 이전 볼륨
+  // 🔊 볼륨 상태(0~1)
   const [volume, setVolume] = useState<number>(() => {
     const saved = Number(
       (typeof window !== "undefined" && localStorage.getItem("player_volume")) || "0.8",
@@ -102,7 +128,6 @@ export default function RecommendClient() {
 
   const currentTrack = playlist[currentTrackIndex]
 
-  // 마지막 플레이어 경로 저장(홈 하단바에서 복귀)
   useEffect(() => {
     if (typeof window !== "undefined") {
       const route = `${window.location.pathname}${window.location.search}`
@@ -136,7 +161,7 @@ export default function RecommendClient() {
 
         setPlaylist(list)
         setCurrentTrackIndex(0)
-        lastSpUriRef.current = null // 새 목록 로드 시 초기화
+        lastSpUriRef.current = null
       } catch (e: any) {
         console.error(e)
         setError("추천 목록을 불러오지 못했습니다.")
@@ -150,19 +175,19 @@ export default function RecommendClient() {
     if (photoId !== null) void fetchPlaylist()
   }, [photoId])
 
-  // [VOL] 최초 볼륨 동기화 (Spotify & <audio>)
+  /** 🔊 초기 볼륨 동기화(Spotify & <audio>) - 준비 전 호출은 훅에서 안전하게 무시됨 */
   useEffect(() => {
     sp.setVolume?.(volume)
     if (audioRef.current) audioRef.current.volume = volume
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // [VOL] Spotify가 준비되면 다시 볼륨 반영(안정화)
+  /** 🔊 Spotify 준비되면 한 번 더 반영 */
   useEffect(() => {
     if (sp.ready) sp.setVolume?.(volume)
   }, [sp.ready, volume, sp])
 
-  // <audio> 미리듣기용 로더
+  // <audio> 미리듣기 로더
   const loadCurrentTrack = useCallback(
     async (autoplay = false) => {
       const audio = audioRef.current
@@ -174,7 +199,7 @@ export default function RecommendClient() {
       setCurrentTime(0)
       audio.src = currentTrack.audioUrl
       audio.load()
-      audio.volume = volume // [VOL] 미리듣기 볼륨 반영
+      audio.volume = volume
       const onLoaded = () => {
         const d = Math.floor(audio.duration || 0)
         setDuration(currentTrack.duration ?? d)
@@ -187,7 +212,6 @@ export default function RecommendClient() {
     [currentTrack, volume],
   )
 
-  // 트랙 변경 시 미리듣기 로드
   useEffect(() => {
     if (currentTrack) void loadCurrentTrack(isPlaying)
   }, [currentTrackIndex, loadCurrentTrack]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -219,7 +243,7 @@ export default function RecommendClient() {
     }
   }, [playlist.length])
 
-  // ⭐ Spotify: 현재 트랙을 URI로 명확히 재생(첫 재생/트랙 선택 시)
+  // ⭐ Spotify: 명시적 재생
   const playCurrentSpotify = useCallback(async () => {
     const t = playlist[currentTrackIndex]
     if (!t?.spotify_track_id) return
@@ -240,7 +264,6 @@ export default function RecommendClient() {
         await sp.pause()
         setIsPlaying(false)
       } else {
-        // 첫 재생(큐 없음) → URI로 시작 / 그 외 → resume
         if (!lastSpUriRef.current) await playCurrentSpotify()
         else { await sp.resume(); setIsPlaying(true) }
       }
@@ -315,7 +338,6 @@ export default function RecommendClient() {
     setDislikedTracks(next)
   }
 
-  // 리스트에서 트랙 선택
   const selectTrack = async (index: number) => {
     setCurrentTrackIndex(index)
     const t = playlist[index]
@@ -324,11 +346,9 @@ export default function RecommendClient() {
       setShowPlaylist(false)
       return
     }
-    // 미리듣기 트랙은 loadCurrentTrack가 처리
     setShowPlaylist(false)
   }
 
-  // 편집 페이지로 이동
   const goEdit = () => {
     if (!photoId) return alert("사진 정보가 없습니다.")
     const cur = playlist[currentTrackIndex]
@@ -339,28 +359,29 @@ export default function RecommendClient() {
     router.push(`/editor?${q.toString()}`)
   }
 
-  // 아트워크: 분석 이미지 고정(요청사항) → 리스트 썸네일은 앨범커버
+  // 대표 아트워크는 분석 이미지 유지
   const artUrl = analyzedPhotoUrl ?? "/placeholder.svg"
 
-  // 진행바 시간: Spotify는 훅 상태 사용
+  // 진행바 시간: Spotify는 훅(state) 사용
   const isSp = !!playlist[currentTrackIndex]?.spotify_track_id
   const curSec = isSp ? Math.floor((sp.state.position || 0) / 1000) : currentTime
   const durSec = isSp ? Math.floor((sp.state.duration || 0) / 1000) : duration
 
-  // [VOL] 볼륨 핸들러
-  const applyVolume = useCallback((v01: number) => {
+  // 🔊 볼륨 핸들러(디바운스)
+  const _applyVolume = useCallback((v01: number) => {
     const v = Math.min(1, Math.max(0, v01))
     setVolume(v)
     if (typeof window !== "undefined") localStorage.setItem("player_volume", String(v))
-    sp.setVolume?.(v)
+    sp.setVolume?.(v)                // 준비 전이면 훅에서 안전히 무시
     if (audioRef.current) audioRef.current.volume = v
     if (v > 0) setLastNonZeroVol(v)
   }, [sp])
+  const applyVolume = useMemo(() => debounce(_applyVolume, 120), [_applyVolume])
 
   const toggleMute = useCallback(() => {
-    if (volume === 0) applyVolume(lastNonZeroVol || 0.8)
-    else applyVolume(0)
-  }, [volume, lastNonZeroVol, applyVolume])
+    if (volume === 0) _applyVolume(lastNonZeroVol || 0.8)
+    else _applyVolume(0)
+  }, [volume, lastNonZeroVol, _applyVolume])
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-black via-neutral-900 to-black flex items-center justify-center p-4">
@@ -400,7 +421,7 @@ export default function RecommendClient() {
             <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-black/10" />
           </div>
 
-          {/* 타이틀 영역 */}
+          {/* 제목 영역 */}
           <div className="flex items-start justify-between text-white mb-6">
             <div className="flex-1">
               <h1 className="text-2xl font-bold mb-1">
@@ -448,7 +469,13 @@ export default function RecommendClient() {
 
           {/* 진행 바 */}
           <div className="mb-6">
-            <Slider value={[Math.min(curSec, durSec || 0)]} max={durSec || 0} step={1} onValueChange={handleSeek} className="mb-2" />
+            <Slider
+              value={[Math.min(curSec, durSec || 0)]}
+              max={durSec || 0}
+              step={1}
+              onValueChange={handleSeek}
+              className="mb-2"
+            />
             <div className="flex justify-between text-sm text-white/60">
               <span>{formatTime(curSec)}</span>
               <span>{`-${formatTime(Math.max((durSec || 0) - curSec, 0))}`}</span>
@@ -458,7 +485,6 @@ export default function RecommendClient() {
           {/* 컨트롤 */}
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-3">
-              {/* 편집/공유 */}
               <Button
                 variant="ghost"
                 size="icon"
@@ -510,7 +536,7 @@ export default function RecommendClient() {
             </div>
           </div>
 
-          {/* [VOL] 볼륨 컨트롤 (수평 슬라이더) */}
+          {/* 🔊 볼륨 컨트롤 */}
           <div className="mt-2 mb-2">
             <div className="flex items-center gap-3 text-white">
               <button

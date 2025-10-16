@@ -1,4 +1,3 @@
-// src/hooks/useSpotifyPlayer.ts
 "use client"
 
 import { useEffect, useRef, useState, useCallback } from "react"
@@ -36,7 +35,7 @@ export function useSpotifyPlayer() {
     const loadSdk = () =>
       new Promise<void>((resolve) => {
         if ((window as any).Spotify) return resolve()
-        window.onSpotifyWebPlaybackSDKReady ||= () => {}
+        ;(window as any).onSpotifyWebPlaybackSDKReady ||= () => {}
         const s = document.createElement("script")
         s.src = SDK_SRC
         s.async = true
@@ -106,6 +105,7 @@ export function useSpotifyPlayer() {
       try { await player.activateElement?.() } catch {}
       playerRef.current = player
 
+      // 1초마다 실제 상태 동기화
       if (stateTimerRef.current) window.clearInterval(stateTimerRef.current)
       stateTimerRef.current = window.setInterval(async () => {
         try {
@@ -136,13 +136,17 @@ export function useSpotifyPlayer() {
     }
   }, [API_BASE])
 
+  // 1초 단위 보간(화면 진행점 이동)
   useEffect(() => {
     const tick = () => {
       const now = performance.now()
       const last = lastTickRef.current
       let pos = basePosRef.current
       if (!pausedRef.current && last != null) pos += now - last
-      const rounded = Math.min(durationRef.current || 0, Math.max(0, Math.floor(pos / 1000) * 1000))
+      const rounded = Math.min(
+        durationRef.current || 0,
+        Math.max(0, Math.floor(pos / 1000) * 1000)
+      )
       setState(s =>
         s.position !== rounded || s.duration !== durationRef.current || s.paused !== pausedRef.current
           ? { deviceId: s.deviceId, position: rounded, duration: durationRef.current, paused: pausedRef.current }
@@ -170,7 +174,7 @@ export function useSpotifyPlayer() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ device_id: id, play }),
     })
-  }, [waitReady, API_BASE])
+  }, [waitReady])
 
   const playUris = useCallback(async (uris: string[]) => {
     if (!uris?.length) return
@@ -185,13 +189,13 @@ export function useSpotifyPlayer() {
     pausedRef.current = false
     lastTickRef.current = performance.now()
     setState(s => ({ ...s, position: 0, paused: false }))
-  }, [transferToThisDevice, API_BASE])
+  }, [transferToThisDevice])
 
   const pause = useCallback(async () => {
     await fetch(`${API_BASE}/api/spotify/pause`, { method: "PUT", credentials: "include" })
     pausedRef.current = true
     setState(s => ({ ...s, paused: true }))
-  }, [API_BASE])
+  }, [])
 
   const resume = useCallback(async () => {
     await transferToThisDevice(false)
@@ -204,15 +208,15 @@ export function useSpotifyPlayer() {
     pausedRef.current = false
     lastTickRef.current = performance.now()
     setState(s => ({ ...s, paused: false }))
-  }, [transferToThisDevice, API_BASE])
+  }, [transferToThisDevice])
 
   const next = useCallback(async () => {
     await fetch(`${API_BASE}/api/spotify/next`, { method: "POST", credentials: "include" })
-  }, [API_BASE])
+  }, [])
 
   const prev = useCallback(async () => {
     await fetch(`${API_BASE}/api/spotify/previous`, { method: "POST", credentials: "include" })
-  }, [API_BASE])
+  }, [])
 
   const seek = useCallback(async (ms: number) => {
     try { await (playerRef.current as any)?.seek?.(ms) } finally {
@@ -222,13 +226,12 @@ export function useSpotifyPlayer() {
     }
   }, [])
 
-  /** ⭐ 추가: SDK 볼륨 제어 노출 */
+  /** 🔊 SDK 볼륨 제어(준비 전이면 조용히 무시) */
   const setVolume = useCallback(async (v01: number) => {
     const v = Math.min(1, Math.max(0, v01))
     try { await (playerRef.current as any)?.setVolume?.(v) } catch {}
   }, [])
 
-  // setVolume 포함해서 반환
   return {
     ready,
     deviceId: deviceIdRef.current,
@@ -239,6 +242,6 @@ export function useSpotifyPlayer() {
     next,
     prev,
     seek,
-    setVolume,   // ← 이것 때문에 RecommendClient의 sp.setVolume?.(...) 타입 에러가 사라짐
+    setVolume,
   }
 }
