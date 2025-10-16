@@ -370,30 +370,66 @@ export default function RecommendClient() {
     else { try { await audio.play(); setIsPlaying(true) } catch { setIsPlaying(false) } }
   }
 
-  const handlePrevious = () => {
+  const handlePrevious = async () => {
     const t = playlist[currentTrackIndex]
-    if (t?.spotify_track_id || t?.spotify_uri) { sp.prev(); return }
+    // Spotify 재생인 경우
+    if (t?.spotify_track_id || t?.spotify_uri) {
+      // 3초 이내면 이전 트랙, 아니면 처음으로
+      if ((sp.state.position || 0) > 3000) {
+        sp.seek(0)
+        return
+      }
+      const prev = currentTrackIndex === 0 ? Math.max(playlist.length - 1, 0) : currentTrackIndex - 1
+      setCurrentTrackIndex(prev)
+      await Promise.resolve()
+      await playCurrentSpotify()
+      return
+    }
+
+    // 미리듣기 재생인 경우
     const audio = audioRef.current
     if (!audio) return
-    if (audio.currentTime > 3) { audio.currentTime = 0; setCurrentTime(0); return }
+    if (audio.currentTime > 3) {
+      audio.currentTime = 0
+      setCurrentTime(0)
+      return
+    }
     setCurrentTrackIndex((prev) => (prev === 0 ? Math.max(playlist.length - 1, 0) : prev - 1))
   }
 
-  const handleNext = () => {
+  const handleNext = async () => {
     const t = playlist[currentTrackIndex]
-    if (t?.spotify_track_id || t?.spotify_uri) { sp.next(); return }
+    // Spotify 재생인 경우: 인덱스를 우리가 옮기고 다음 곡을 명시적으로 재생
+    if (t?.spotify_track_id || t?.spotify_uri) {
+      const next = (currentTrackIndex + 1) % playlist.length
+      setCurrentTrackIndex(next)
+      // state 반영 후 재생
+      await Promise.resolve()
+      await playCurrentSpotify()
+      return
+    }
+
+    // 미리듣기 재생인 경우: 기존 로직
     setCurrentTrackIndex((prev) => {
-      const next = prev + 1
-      if (next < playlist.length) return next
+      const n = prev + 1
+      if (n < playlist.length) return n
       setIsPlaying(false)
       return prev
     })
   }
 
   const handleSeek = (value: number[]) => {
-    const v = Math.min(Math.max(value[0], 0), (duration || 0))
+    // 현재 모드에 맞는 최대값 사용
+    const max = isSp ? (durSec || 0) : (duration || 0)
+    const v = Math.min(Math.max(value[0], 0), max)
+
     const t = playlist[currentTrackIndex]
-    if (t?.spotify_track_id || t?.spotify_uri) { sp.seek(v * 1000); return }
+    if (t?.spotify_track_id || t?.spotify_uri) {
+      // Spotify는 ms 단위
+      sp.seek(v * 1000)
+      return
+    }
+    // 미리듣기 <audio>
     const audio = audioRef.current
     if (!audio) return
     audio.currentTime = v
