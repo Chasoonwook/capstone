@@ -298,56 +298,43 @@ export default function RecommendClient() {
   }, [playlist.length])
 
   // ⭐ Spotify: 명시적 재생 (URI 없으면 즉석 보강 후 재생)
-  const playCurrentSpotify = useCallback(async () => {
-    const t = playlist[currentTrackIndex]
-    if (!t) return
+  const playCurrentSpotify = useCallback(
+    async (index?: number) => {
+      const idx = typeof index === "number" ? index : currentTrackIndex
+      const t = playlist[idx]
+      if (!t) return
 
-    if (!sp.deviceId || !sp.ready) {
-      alert("Spotify 연결 중입니다. (Premium 필요) 잠시 후 다시 시도하세요.")
-      return
-    }
-
-    let uri = t.spotify_uri && t.spotify_uri.startsWith("spotify:")
-      ? t.spotify_uri
-      : (t.spotify_track_id ? `spotify:track:${t.spotify_track_id}` : null)
-
-    if (!uri) {
-      try {
-        const q = new URLSearchParams({ title: t.title, artist: t.artist })
-        const r = await fetch(`${API_BASE}/api/spotify/search?${q.toString()}`, { credentials: "include" })
-        if (r.ok) {
-          const j = await r.json()
-          const item = j?.items?.[0] || j?.item || j
-          const foundUri = item?.spotify_uri || (item?.id ? `spotify:track:${item.id}` : null)
-          if (foundUri) {
-            uri = foundUri
-            setPlaylist(prev => {
-              const copy = [...prev]
-              copy[currentTrackIndex] = {
-                ...copy[currentTrackIndex],
-                spotify_uri: foundUri,
-                spotify_track_id: foundUri.split(":").pop() || null,
-                coverUrl: copy[currentTrackIndex].coverUrl || item?.albumImage || null,
-                audioUrl: copy[currentTrackIndex].audioUrl || item?.preview_url || null,
-              }
-              return copy
-            })
-          }
-        }
-      } catch (e) {
-        console.warn("[search on-demand] failed", e)
+      if (!sp.deviceId || !sp.ready) {
+        alert("Spotify 연결 중입니다. (Premium 필요) 잠시 후 다시 시도하세요.")
+        return
       }
-    }
 
-    if (!uri) {
-      console.warn("[spotify] no uri on track, preview only:", t.title)
-      return
-    }
+      // 재생 전: 미리듣기 <audio>가 재생 중이면 정지
+      if (audioRef.current) {
+        audioRef.current.pause()
+        audioRef.current.currentTime = 0
+      }
 
-    lastSpUriRef.current = uri
-    await sp.playUris([uri]) // transfer → play
-    setIsPlaying(true)
-  }, [playlist, currentTrackIndex, sp])
+      // spotify_uri 우선, 없으면 track_id로 구성
+      const rawUri = t.spotify_uri
+      const uri =
+        rawUri && rawUri.startsWith("spotify:")
+          ? rawUri
+          : t.spotify_track_id
+          ? `spotify:track:${t.spotify_track_id}`
+          : null
+
+      if (!uri) {
+        console.warn("[spotify] no uri on track, preview only:", t.title)
+        return
+      }
+
+      lastSpUriRef.current = uri
+      await sp.playUris([uri]) // transfer → play
+      setIsPlaying(true)
+    },
+    [playlist, currentTrackIndex, sp]
+  )
 
   const togglePlay = async () => {
     const t = playlist[currentTrackIndex]
@@ -371,65 +358,68 @@ export default function RecommendClient() {
   }
 
   const handlePrevious = async () => {
-    const t = playlist[currentTrackIndex]
-    // Spotify 재생인 경우
-    if (t?.spotify_track_id || t?.spotify_uri) {
-      // 3초 이내면 이전 트랙, 아니면 처음으로
-      if ((sp.state.position || 0) > 3000) {
-        sp.seek(0)
-        return
-      }
-      const prev = currentTrackIndex === 0 ? Math.max(playlist.length - 1, 0) : currentTrackIndex - 1
-      setCurrentTrackIndex(prev)
-      await Promise.resolve()
-      await playCurrentSpotify()
+    const curIsSpotify =
+      !!playlist[currentTrackIndex]?.spotify_track_id ||
+      !!playlist[currentTrackIndex]?.spotify_uri
+
+    // 3초 이내면 처음으로, 아니면 이전 트랙
+    if (curIsSpotify && (sp.state.position || 0) > 3000) {
+      sp.seek(0)
       return
     }
-
-    // 미리듣기 재생인 경우
-    const audio = audioRef.current
-    if (!audio) return
-    if (audio.currentTime > 3) {
-      audio.currentTime = 0
+    if (!curIsSpotify && audioRef.current && audioRef.current.currentTime > 3) {
+      audioRef.current.currentTime = 0
       setCurrentTime(0)
       return
     }
-    setCurrentTrackIndex((prev) => (prev === 0 ? Math.max(playlist.length - 1, 0) : prev - 1))
+
+    const prevIndex =
+      currentTrackIndex === 0 ? Math.max(playlist.length - 1, 0) : currentTrackIndex - 1
+
+    setCurrentTrackIndex(prevIndex)
+
+    const t = playlist[prevIndex]
+    if (t?.spotify_track_id || t?.spotify_uri) {
+      await playCurrentSpotify(prevIndex)
+    } else {
+      if (audioRef.current) {
+        try { audioRef.current.pause() } catch {}
+      }
+      requestAnimationFrame(() => void loadCurrentTrack(isPlaying))
+    }
   }
+
 
   const handleNext = async () => {
-    const t = playlist[currentTrackIndex]
-    // Spotify 재생인 경우: 인덱스를 우리가 옮기고 다음 곡을 명시적으로 재생
-    if (t?.spotify_track_id || t?.spotify_uri) {
-      const next = (currentTrackIndex + 1) % playlist.length
-      setCurrentTrackIndex(next)
-      // state 반영 후 재생
-      await Promise.resolve()
-      await playCurrentSpotify()
-      return
-    }
+    // 다음 인덱스 계산
+    const nextIndex = (currentTrackIndex + 1) % Math.max(playlist.length, 1)
+    setCurrentTrackIndex(nextIndex)
 
-    // 미리듣기 재생인 경우: 기존 로직
-    setCurrentTrackIndex((prev) => {
-      const n = prev + 1
-      if (n < playlist.length) return n
-      setIsPlaying(false)
-      return prev
-    })
+    const t = playlist[nextIndex]
+    if (t?.spotify_track_id || t?.spotify_uri) {
+      // 인덱스를 명시적으로 넘겨 재생
+      await playCurrentSpotify(nextIndex)
+    } else {
+      // 미리듣기 곡이면 로드(+자동재생 여부는 현재 isPlaying에 맞춤)
+      if (audioRef.current) {
+        try { audioRef.current.pause() } catch {}
+      }
+      // loadCurrentTrack는 현재 currentTrackIndex를 참조하므로
+      // state 적용 후 한 틱 뒤에 호출
+      requestAnimationFrame(() => void loadCurrentTrack(isPlaying))
+    }
   }
 
+
   const handleSeek = (value: number[]) => {
-    // 현재 모드에 맞는 최대값 사용
     const max = isSp ? (durSec || 0) : (duration || 0)
     const v = Math.min(Math.max(value[0], 0), max)
 
     const t = playlist[currentTrackIndex]
     if (t?.spotify_track_id || t?.spotify_uri) {
-      // Spotify는 ms 단위
-      sp.seek(v * 1000)
+      sp.seek(v * 1000) // ms
       return
     }
-    // 미리듣기 <audio>
     const audio = audioRef.current
     if (!audio) return
     audio.currentTime = v
@@ -470,13 +460,21 @@ export default function RecommendClient() {
   const selectTrack = async (index: number) => {
     setCurrentTrackIndex(index)
     const t = playlist[index]
+
     if (t?.spotify_track_id || t?.spotify_uri) {
-      await playCurrentSpotify()
+      await playCurrentSpotify(index)
       setShowPlaylist(false)
       return
     }
+
+    // 미리듣기
+    if (audioRef.current) {
+      try { audioRef.current.pause() } catch {}
+    }
+    requestAnimationFrame(() => void loadCurrentTrack(true)) // 선택 시 자동재생 원하면 true
     setShowPlaylist(false)
   }
+
 
   const goEdit = () => {
     if (!photoId) return alert("사진 정보가 없습니다.")
