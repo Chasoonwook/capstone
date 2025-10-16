@@ -1,3 +1,4 @@
+// src/app/recommend/RecommendClient.tsx
 "use client"
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react"
@@ -14,6 +15,9 @@ import { cn } from "@/lib/utils"
 import { API_BASE } from "@/lib/api"
 import { useSpotifyPlayer } from "@/hooks/useSpotifyPlayer"
 
+/* =========================================================
+   Types
+   ========================================================= */
 type Track = {
   id: string | number
   title: string
@@ -22,42 +26,55 @@ type Track = {
   coverUrl?: string | null
   duration?: number | null
   spotify_track_id?: string | null
-  spotify_uri?: string | null   // ← 백엔드가 주는 URI
+  spotify_uri?: string | null
   selected_from?: "main" | "sub" | "preferred" | null
 }
 
+// /api/spotify/search/batch 응답 아이템 타입
+type SpotifyBatchItem = {
+  id?: string
+  title?: string
+  artist?: string
+  albumImage?: string
+  preview_url?: string
+  spotify_uri?: string
+}
+
+/* =========================================================
+   Helpers
+   ========================================================= */
 const buildPhotoSrc = (photoId?: string | null) => {
   if (!photoId) return null
   const id = encodeURIComponent(String(photoId))
   return `${API_BASE}/api/photos/${id}/binary`
 }
 
-/** ✅ 커버/스포티파이 ID 필드 보강 */
+const parseSpId = (s?: string | null): string | null => {
+  if (typeof s !== "string" || !s) return null
+  if (/^[A-Za-z0-9]{22}$/.test(s)) return s
+  if (s.startsWith("spotify:track:")) return s.split(":").pop() || null
+  return null
+}
+
+/** 커버/스포티파이 ID 필드 보강 */
 const normalizeTrack = (raw: any, idx: number): Track | null => {
-  // 제목/아티스트
-  const title =
-    raw?.title ?? raw?.music_title ?? raw?.name ?? null
-  const artist =
-    raw?.artist ?? raw?.music_artist ?? raw?.singer ?? "Unknown"
+  const title = raw?.title ?? raw?.music_title ?? raw?.name ?? null
+  const artist = raw?.artist ?? raw?.music_artist ?? raw?.singer ?? "Unknown"
   if (!title) return null
 
-  // 미리듣기 URL (백엔드: preview_url)
   const preview =
     raw?.audio_url ?? raw?.preview_url ?? raw?.previewUrl ?? raw?.stream_url ?? null
   const audioUrl = preview === "EMPTY" ? null : preview
 
-  // 커버 (백엔드: albumImage)
   const coverUrl =
     raw?.cover_url ?? raw?.album_image ?? raw?.albumImage ?? raw?.image ?? null
 
-  // 길이(초 단위 대응)
   const duration =
     Number(raw?.duration ?? raw?.length_seconds ?? raw?.preview_duration ?? 0) || null
 
-  // Spotify 식별자/URI
   const spotify_uri: string | null = raw?.spotify_uri ?? null
   let spotify_track_id: string | null = raw?.spotify_track_id ?? null
-  if (!spotify_track_id && typeof spotify_uri === "string" && spotify_uri.startsWith("spotify:track:")) {
+  if (!spotify_track_id && spotify_uri?.startsWith("spotify:track:")) {
     spotify_track_id = spotify_uri.split(":").pop() || null
   }
 
@@ -83,6 +100,9 @@ function debounce<T extends (...a: any[]) => void>(fn: T, delay = 150) {
   }
 }
 
+/* =========================================================
+   Component
+   ========================================================= */
 export default function RecommendClient() {
   const router = useRouter()
   const sp = useSpotifyPlayer()
@@ -135,7 +155,7 @@ export default function RecommendClient() {
     }
   }, [])
 
-  // 추천 목록 불러오기
+  // 추천 목록 불러오고 → Spotify 보강 검색으로 병합
   useEffect(() => {
     const fetchPlaylist = async () => {
       setLoading(true)
@@ -147,23 +167,59 @@ export default function RecommendClient() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const data: any = await res.json()
 
+        // 1) 기본 정규화
         let list: Track[] = []
         if (data && (data.main_songs || data.sub_songs || data.preferred_songs)) {
           const tag = (arr: any[], tagName: Track["selected_from"]) =>
             (arr || []).map((r) => ({ ...r, selected_from: tagName }))
           const all = [
-            ...tag(data.main_songs, "main"),
-            ...tag(data.sub_songs, "sub"),
-            ...tag(data.preferred_songs, "preferred"),
+            ...tag(data.main_songs || [], "main"),
+            ...tag(data.sub_songs || [], "sub"),
+            ...tag(data.preferred_songs || [], "preferred"),
           ]
           list = all.map((r, i) => normalizeTrack(r, i)).filter(Boolean) as Track[]
         }
 
-        console.log(
-          "[raw first]",
-          data?.main_songs?.[0] ?? data?.sub_songs?.[0] ?? data?.preferred_songs?.[0]
-        )
-        console.log("[normalized first]", list[0])
+        // 2) Spotify 보강 검색(제목/아티스트 쌍으로)
+        if (list.length) {
+          const pairs = list.map(t => ({ title: t.title, artist: t.artist }))
+          const r = await fetch(`${API_BASE}/api/spotify/search/batch`, {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ pairs }),
+          })
+
+          if (r.ok) {
+            const j = await r.json()
+
+            const keyOf = (t: { title: string; artist: string }) =>
+              `${t.title.trim().toLowerCase()} - ${t.artist.trim().toLowerCase()}`
+
+            // 🔧 값 타입을 명시해서 TS 에러 제거
+            const hit = new Map<string, SpotifyBatchItem>(
+              ((j?.items as SpotifyBatchItem[]) || []).map((it) => [
+                keyOf({ title: it.title || "", artist: it.artist || "" }),
+                it,
+              ])
+            )
+
+            list = list.map(t => {
+              const k = keyOf({ title: t.title, artist: t.artist })
+              const m = hit.get(k) // SpotifyBatchItem | undefined
+              if (!m) return t
+
+              const spId = parseSpId(m.id) ?? parseSpId(m.spotify_uri)
+              return {
+                ...t,
+                coverUrl: t.coverUrl || m.albumImage || null,
+                audioUrl: t.audioUrl || m.preview_url || null,
+                spotify_track_id: t.spotify_track_id || spId || null,
+                spotify_uri: t.spotify_uri || (spId ? `spotify:track:${spId}` : t.spotify_uri || null),
+              }
+            })
+          }
+        }
 
         setPlaylist(list)
         setCurrentTrackIndex(0)
@@ -181,7 +237,7 @@ export default function RecommendClient() {
     if (photoId !== null) void fetchPlaylist()
   }, [photoId])
 
-  /** 🔊 초기 볼륨 동기화(Spotify & <audio>) - 준비 전 호출은 훅에서 안전하게 무시됨 */
+  /** 🔊 초기 볼륨 동기화(Spotify & <audio>) */
   useEffect(() => {
     sp.setVolume?.(volume)
     if (audioRef.current) audioRef.current.volume = volume
@@ -259,7 +315,6 @@ export default function RecommendClient() {
       return
     }
 
-    // spotify_uri 우선, 없으면 track_id로 구성
     const rawUri = t.spotify_uri
     const uri = rawUri && rawUri.startsWith("spotify:")
       ? rawUri
@@ -299,7 +354,7 @@ export default function RecommendClient() {
 
   const handlePrevious = () => {
     const t = playlist[currentTrackIndex]
-    if (t?.spotify_track_id) { sp.prev(); return }
+    if (t?.spotify_track_id || t?.spotify_uri) { sp.prev(); return }
     const audio = audioRef.current
     if (!audio) return
     if (audio.currentTime > 3) { audio.currentTime = 0; setCurrentTime(0); return }
@@ -308,7 +363,7 @@ export default function RecommendClient() {
 
   const handleNext = () => {
     const t = playlist[currentTrackIndex]
-    if (t?.spotify_track_id) { sp.next(); return }
+    if (t?.spotify_track_id || t?.spotify_uri) { sp.next(); return }
     setCurrentTrackIndex((prev) => {
       const next = prev + 1
       if (next < playlist.length) return next
@@ -320,7 +375,7 @@ export default function RecommendClient() {
   const handleSeek = (value: number[]) => {
     const v = Math.min(Math.max(value[0], 0), (duration || 0))
     const t = playlist[currentTrackIndex]
-    if (t?.spotify_track_id) { sp.seek(v * 1000); return }
+    if (t?.spotify_track_id || t?.spotify_uri) { sp.seek(v * 1000); return }
     const audio = audioRef.current
     if (!audio) return
     audio.currentTime = v
@@ -361,7 +416,7 @@ export default function RecommendClient() {
   const selectTrack = async (index: number) => {
     setCurrentTrackIndex(index)
     const t = playlist[index]
-    if (t?.spotify_track_id) {
+    if (t?.spotify_track_id || t?.spotify_uri) {
       await playCurrentSpotify()
       setShowPlaylist(false)
       return
@@ -382,8 +437,8 @@ export default function RecommendClient() {
   // 대표 아트워크는 분석 이미지 유지
   const artUrl = analyzedPhotoUrl ?? "/placeholder.svg"
 
-  // 진행바 시간: Spotify는 훅(state) 사용
-  const isSp = !!playlist[currentTrackIndex]?.spotify_track_id
+  // 진행바 시간
+  const isSp = !!(playlist[currentTrackIndex]?.spotify_track_id || playlist[currentTrackIndex]?.spotify_uri)
   const curSec = isSp ? Math.floor((sp.state.position || 0) / 1000) : currentTime
   const durSec = isSp ? Math.floor((sp.state.duration || 0) / 1000) : duration
 
@@ -392,7 +447,7 @@ export default function RecommendClient() {
     const v = Math.min(1, Math.max(0, v01))
     setVolume(v)
     if (typeof window !== "undefined") localStorage.setItem("player_volume", String(v))
-    sp.setVolume?.(v)                // 준비 전이면 훅에서 안전히 무시
+    sp.setVolume?.(v)
     if (audioRef.current) audioRef.current.volume = v
     if (v > 0) setLastNonZeroVol(v)
   }, [sp])
@@ -644,7 +699,7 @@ export default function RecommendClient() {
                     <p className="text-sm text-white/60 truncate">
                       {track.artist}
                       <span className="ml-2 text-xs text-white/50">
-                        {track.spotify_track_id ? "Spotify" : (track.audioUrl ? "Preview" : "—")}
+                        {!!(track.spotify_track_id || track.spotify_uri) ? "Spotify" : (track.audioUrl ? "Preview" : "—")}
                       </span>
                     </p>
                   </div>
