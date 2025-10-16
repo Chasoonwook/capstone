@@ -4,12 +4,6 @@
 import { useEffect, useRef, useState, useCallback } from "react"
 import { API_BASE } from "@/lib/api"
 
-declare global {
-  interface Window {
-    onSpotifyWebPlaybackSDKReady?: () => void;
-  }
-}
-
 type SpState = {
   deviceId: string | null
   position: number // ms
