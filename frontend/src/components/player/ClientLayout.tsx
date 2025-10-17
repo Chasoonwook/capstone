@@ -1,25 +1,21 @@
-"use client"
+"use client";
 
-import { usePathname } from "next/navigation"
-import dynamic from "next/dynamic"
-
-// GlobalNowPlayingBar가 이 폴더에 있다면 아래 상대경로가 맞습니다.
-// 파일이 없다면 일단 이 줄을 주석처리해도 됩니다.
-const GlobalNowPlayingBar = dynamic(
-  () => import("./GlobalNowPlayingBar").then(m => m.GlobalNowPlayingBar),
-  { ssr: false }
-)
-
-const HIDE_ON: string[] = ["/recommend"] // 이 경로들에서는 전역 바 숨김
+import { usePathname } from "next/navigation";
+import { PlayerProvider } from "@/contexts/PlayerContext";
+import { GlobalNowPlayingBar } from "@/components/player/GlobalNowPlayingBar";
 
 export default function ClientLayout({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname()
-  const hideBar = HIDE_ON.some(p => pathname.startsWith(p))
+  const pathname = usePathname();
+  // recommend 페이지에서는 하단바 숨김
+  const showBar = !pathname?.startsWith("/recommend");
 
   return (
-    <>
-      {children}
-      {!hideBar && <GlobalNowPlayingBar />}
-    </>
-  )
+    <PlayerProvider>
+      {/* 페이지 콘텐츠 */}
+      <div className="min-h-screen">{children}</div>
+
+      {/* 전역 하단 내비게이션(플레이어 바) */}
+      {showBar && <GlobalNowPlayingBar />}
+    </PlayerProvider>
+  );
 }
