@@ -469,11 +469,11 @@ router.get("/search", async (req, res) => {
     const cachedData = spotifyApiCache.get(cacheKey);
 
     if (cachedData) {
-      console.log('[Cache HIT] ${cacheKey}');
+      console.log(`[Cache HIT] ${cacheKey}`);
       const items = cachedData.map(compactTrack);
       return res.json({ items });
     }
-    console.log('[Cache MISS] ${cacheKey}');
+    console.log(`[Cache MISS] ${cacheKey}`);
 
     let data;
     try {
@@ -520,10 +520,10 @@ router.get("/tracks/:id", async (req, res) => {
     const cachedData = spotifyApiCache.get(cacheKey);
 
     if (cachedData) {
-      console.log('[Cache HIT] ${cacheKey}');
+      console.log(`[Cache HIT] ${cacheKey}`);
       return res.json({ item: compactTrack(cachedData) });
     }
-    console.log('[Cache MISS] ${cacheKey}');
+    console.log(`[Cache MISS] ${cacheKey}`);
 
     let track;
     try {
@@ -582,8 +582,8 @@ router.post("/search/batch", async (req, res) => {
     // 키 생성 규칙 (프론트 keyOf와 동일)
     const makeKey = (t, a) => `${norm(t)} - ${norm(a)}`;
     const results = {};
-
     const itemsToFetch = []; // API로 조회해야 할 항목들
+
     for (const { title, artist } of pairs) {
       const key = makeKey(title, artist);
       const cacheKey = `search:q=track:${String(title||'').trim()} artist:${String(artist||'').trim()}:limit=1`;
@@ -594,7 +594,7 @@ router.post("/search/batch", async (req, res) => {
         results[key] = { key, ...compactTrack(cachedItem) };
       } else {
         console.log(`[Batch Cache MISS] ${cacheKey}`);
-        itemsToFetch.push({ title, artist, key, cacheKey }); // 캐시에 없으면 조회 목록에 추가
+        itemsToFetch.push({ title, artist, cacheKey }); // 캐시에 없으면 조회 목록에 추가
       }
     }
 
@@ -604,9 +604,9 @@ router.post("/search/batch", async (req, res) => {
     const groups = chunk(pairs, 5);
     
     for (const g of groups) {
-      const tasks = g.map(async ({ title, artist, key, cacheKey }) => {
+      const tasks = g.map(async ({ title, artist, cacheKey }) => {
         const q = `${title ? `track:${title}` : ""}${artist ? ` artist:${artist}` : ""}`.trim();
-        if (!q) return { key, cacheKey, trackData: null, originalTitle: title, originalArtist: artist }; // 검색어 없으면 null
+        if (!q) return { cacheKey, trackData: null, originalTitle: title, originalArtist: artist }; // 검색어 없으면 null
 
         try {
           const r = await axios.get("https://api.spotify.com/v1/search", {
@@ -615,10 +615,10 @@ router.post("/search/batch", async (req, res) => {
             timeout: 10000,
           });
           const trackData = r?.data?.tracks?.items?.[0] || null;
-          return { key, cacheKey, trackData, originalTitle: title, originalArtist: artist };
+          return { cacheKey, trackData, originalTitle: title, originalArtist: artist };
         } catch (err) {
           console.error(`[Batch API Error] q=${q}:`, err?.response?.status || err.message);
-          return { key, cacheKey, trackData: null, originalTitle: title, originalArtist: artist }; // API 오류 시 null
+          return { cacheKey, trackData: null, originalTitle: title, originalArtist: artist }; // API 오류 시 null
         }
       });
 
@@ -631,17 +631,19 @@ router.post("/search/batch", async (req, res) => {
             continue; // 다음 항목으로 건너뛰기
         }
 
-        const { key, cacheKey, trackData, originalTitle, originalArtist } = responseItem;
+        const { cacheKey, trackData, originalTitle, originalArtist } = responseItem;
         
+        const key = makeKey(originalTitle, originalArtist);
+
         if (typeof key !== 'string' || !key) {
-            console.error("[Batch Processing Error] Invalid or missing key in response item:", responseItem);
+            console.error(`[Batch Processing Error] Generated key is invalid. Original: title='${originalTitle}', artist='${originalArtist}'. Response item:`, responseItem);
             // key가 없으면 results에 추가할 수 없으므로 건너뛰거나 기본값 처리
             continue;
         }
         
         // API 호출 결과를 캐시에 저장 (오류 시 저장 안 함)
         if (trackData) {
-            if (trackData && typeof cacheKey === 'string' && cacheKey) {
+            if (typeof cacheKey === 'string' && cacheKey) {
                 spotifyApiCache.set(cacheKey, trackData);
             } else {
                 // cacheKey가 유효하지 않으면 로그만 남김
@@ -655,7 +657,11 @@ router.post("/search/batch", async (req, res) => {
       // --- 캐싱 로직 끝 ---
     }
 
-    const orderedResults = pairs.map(({ title, artist }) => results[makeKey(title, artist)]);
+    const orderedResults = pairs.map(({ title, artist }) => {
+        const key = makeKey(title, artist); // 최종 정렬 시에도 동일한 makeKey 사용
+        // 결과 객체에 해당 key가 없을 경우 (오류 등으로 인해) 대비하여 기본값 반환
+        return results[key] || { key, id: null, title, artist, album: null, albumImage: null, preview_url: null, spotify_uri: null };
+    });
 
     return res.json({ items: orderedResults });
   } catch (e) {
