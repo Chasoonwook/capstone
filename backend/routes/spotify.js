@@ -618,18 +618,28 @@ router.post("/search/batch", async (req, res) => {
     const responses = await Promise.all(tasks);
 
     for (const responseItem of responses) {
+        // --- responseItem 및 내부 속성 유효성 검사 강화 ---
+        if (!responseItem || typeof responseItem !== 'object') {
+            console.error("[Batch Processing Error] Invalid response item:", responseItem);
+            continue; // 다음 항목으로 건너뛰기
+        }
+
         const { key, cacheKey, trackData, originalTitle, originalArtist } = responseItem;
-         // API 호출 결과를 캐시에 저장 (오류 시 저장 안 함)
+        
+        if (typeof key !== 'string' || !key) {
+            console.error("[Batch Processing Error] Invalid or missing key in response item:", responseItem);
+            // key가 없으면 results에 추가할 수 없으므로 건너뛰거나 기본값 처리
+            continue;
+        }
+        
+        // API 호출 결과를 캐시에 저장 (오류 시 저장 안 함)
         if (trackData) {
-           // --- cacheKey 유효성 검사 추가 ---
-          if (typeof cacheKey === 'string' && cacheKey.length > 0) {
-              spotifyApiCache.set(cacheKey, trackData);
-          } else if (!trackData && typeof cacheKey === 'string' && cacheKey) {
-              // 실패 시에도 로그는 남길 수 있음 (캐시는 안 함)
-              // console.log(`[Batch] No trackData found for cacheKey: ${cacheKey}`);
-          } else if (typeof cacheKey !== 'string' || !cacheKey) {
-              console.error(`[Batch Cache Error] Invalid or missing cacheKey for key: ${key}`);
-          }
+            if (typeof cacheKey === 'string' && cacheKey) {
+                spotifyApiCache.set(cacheKey, trackData);
+            } else {
+                // cacheKey가 유효하지 않으면 로그만 남김
+                console.warn(`[Batch Cache Warn] Invalid or missing cacheKey for key: ${key}, cannot cache.`);
+            }
         }
         // 결과를 최종 결과 객체에 추가
         const c = compactTrack(trackData) || { id: null, title: originalTitle, artist: originalArtist, album: null, albumImage: null, preview_url: null, spotify_uri: null };
