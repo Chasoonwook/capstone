@@ -15,7 +15,7 @@ export type Track = {
   id: string | number;
   title: string;
   artist: string;
-  audioUrl?: string | null;
+  audioUrl?: string | null; // Spotify preview_url
 };
 
 export type PlayerState = {
@@ -46,6 +46,11 @@ type Ctx = {
 };
 
 const PlayerCtx = createContext<Ctx | null>(null);
+
+// 재생 가능 여부(현재는 미리듣기 URL 존재 여부)
+function isPlayable(t?: Track) {
+  return !!t?.audioUrl;
+}
 
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -88,22 +93,62 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       });
 
       a.addEventListener("ended", () => next());
+      a.addEventListener("error", () => {
+        // 재생 오류가 나도 자동으로 다음 곡으로 튀지 않게 멈춤
+        setIsPlaying(false);
+      });
+
       audioRef.current = a;
     }
     return audioRef.current!;
   };
 
+  /** 현재 리스트에서 start 이상에서 처음 재생 가능한 인덱스 반환 (없으면 -1) */
+  const findNextPlayable = useCallback(
+    (start: number) => {
+      const q = state.queue;
+      for (let i = Math.max(0, start); i < q.length; i++) {
+        if (isPlayable(q[i])) return i;
+      }
+      return -1;
+    },
+    [state.queue]
+  );
+
+  /** 현재 리스트에서 start 이하에서 뒤로 처음 재생 가능한 인덱스 반환 (없으면 -1) */
+  const findPrevPlayable = useCallback(
+    (start: number) => {
+      const q = state.queue;
+      for (let i = Math.min(start, q.length - 1); i >= 0; i--) {
+        if (isPlayable(q[i])) return i;
+      }
+      return -1;
+    },
+    [state.queue]
+  );
+
   /** 현재 index 트랙을 로드(+옵션 자동 재생) */
   const loadAndMaybePlay = useCallback(
     async (autoPlay = false) => {
       const a = ensureAudio();
-      const t = state.queue[state.index];
-      if (!t?.audioUrl) return;
 
-      // 같은 소스면 불필요한 reload 방지
+      // 현재 인덱스가 재생 불가면 다음 재생 가능 곡으로 점프
+      if (!isPlayable(state.queue[state.index])) {
+        const ni = findNextPlayable(state.index + 1);
+        if (ni === -1) {
+          // 전체가 재생 불가 → 정지
+          if (!a.paused) a.pause();
+          setIsPlaying(false);
+          setState((s) => ({ ...s, curMs: 0, durMs: 0 }));
+          return;
+        }
+        setState((s) => ({ ...s, index: ni, curMs: 0 }));
+        return;
+      }
+
+      const t = state.queue[state.index]!;
       if (a.src !== t.audioUrl) {
         a.src = t.audioUrl!;
-        // HTMLAudioElement.load()는 void이므로 await 불필요
         a.load();
       }
 
@@ -112,11 +157,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
           await a.play();
           setIsPlaying(true);
         } catch {
-          // 브라우저 자동재생 정책 등으로 실패 가능
+          // 오토플레이 차단 시 사용자가 Play 버튼 누르면 시작됨
+          setIsPlaying(false);
         }
       }
     },
-    [state.queue, state.index],
+    [state.queue, state.index, findNextPlayable],
   );
 
   const play = useCallback(async () => {
@@ -124,7 +170,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     try {
       await a.play();
       setIsPlaying(true);
-    } catch {}
+    } catch {
+      setIsPlaying(false);
+    }
   }, []);
 
   const pause = useCallback(async () => {
@@ -135,8 +183,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const next = useCallback(() => {
     setState((s) => {
-      const nextIndex = s.index + 1 < s.queue.length ? s.index + 1 : s.index;
-      return { ...s, index: nextIndex, curMs: 0 };
+      const ni = (() => {
+        for (let i = s.index + 1; i < s.queue.length; i++) {
+          if (isPlayable(s.queue[i])) return i;
+        }
+        return s.index; // 못 찾으면 그대로
+      })();
+      return { ...s, index: ni, curMs: 0 };
     });
   }, []);
 
@@ -147,10 +200,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         a.currentTime = 0;
         return { ...s, curMs: 0 };
       }
-      const prevIndex = s.index > 0 ? s.index - 1 : 0;
-      return { ...s, index: prevIndex, curMs: 0 };
+      const pi = findPrevPlayable(s.index - 1);
+      return { ...s, index: pi === -1 ? 0 : pi, curMs: 0 };
     });
-  }, []);
+  }, [findPrevPlayable]);
 
   const seek = useCallback((ms: number) => {
     const a = ensureAudio();
@@ -172,24 +225,27 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
    *  ──────────────────────────────────────────── */
   const lastSigRef = useRef<string>("");
   const setQueueFromRecommend = useCallback((tracks: Track[], startIndex = 0) => {
-    const ids = (tracks || []).map((t) => String(t?.id ?? "")).join("|");
-    const sig = `${ids}#${startIndex}`;
-
-    if (sig === lastSigRef.current) {
-      // 같은 큐/같은 인덱스면 무시
-      return;
+    // 시작 인덱스부터 첫 재생 가능 곡을 찾음 → 없으면 처음부터 재탐색
+    let si = startIndex;
+    while (si < tracks.length && !isPlayable(tracks[si])) si++;
+    if (si >= tracks.length) {
+      si = 0;
+      while (si < tracks.length && !isPlayable(tracks[si])) si++;
+      if (si >= tracks.length) si = 0; // 전부 불가
     }
+
+    const ids = (tracks || []).map((t) => String(t?.id ?? "")).join("|");
+    const sig = `${ids}#${si}`;
+    if (sig === lastSigRef.current) return;
     lastSigRef.current = sig;
 
-    setState({ queue: tracks, index: startIndex, curMs: 0, durMs: 0 });
+    setState({ queue: tracks, index: si, curMs: 0, durMs: 0 });
   }, []);
 
-  /** index 또는 queue가 바뀌면 자동 로드(+재생) */
+  /** index 또는 queue가 바뀌면 자동 로드(+자동재생) */
   const idx = state.index;
   const qkey = useMemo(() => state.queue.map((t) => t.id).join(","), [state.queue]);
-
   useEffect(() => {
-    // index 변경(사용자 조작) → 자동 재생
     void loadAndMaybePlay(true);
   }, [idx, qkey, loadAndMaybePlay]);
 

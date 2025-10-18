@@ -189,7 +189,6 @@ export default function RecommendClient() {
   useEffect(() => {
     const run = async () => {
       if (photoId == null) return;
-      // StrictMode에서 같은 photoId로 두 번 들어오는 초기 호출 차단(초기 1회만)
       if (!onceMountedRef.current) {
         onceMountedRef.current = true;
       }
@@ -228,8 +227,7 @@ export default function RecommendClient() {
 
         // 동일 큐면 아무 것도 하지 않음
         if (sig === lastQueueSigRef.current) {
-          // 그래도 화면의 리스트는 최신으로 동기화
-          setPlaylist((prev) => (prev.length ? prev : enhanced));
+          if (!playlist.length) setPlaylist(enhanced);
           return;
         }
 
@@ -237,21 +235,19 @@ export default function RecommendClient() {
         lastQueueSigRef.current = sig;
         setPlaylist(enhanced);
 
-        // 전역 플레이어 큐 설정(첫 곡부터) — 이 호출이 반복되면 루프 → 위 가드로 1회만
+        // 전역 플레이어 큐 설정(첫 곡부터) — 내부에서 첫 재생 가능한 곡으로 시작함
         if (enhanced.length > 0) {
           player.setQueueFromRecommend(enhanced, 0);
         }
       } catch (e) {
         console.error(e);
         setError("추천 목록을 불러오지 못했습니다.");
-        // 에러 시에도 기존 playlist 유지하여 UI 리셋 방지
       } finally {
         setLoading(false);
       }
     };
     run();
-    // photoId가 바뀔 때만 새로 요청
-  }, [photoId, player]);
+  }, [photoId, player]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 표시용 현재 트랙(전역 인덱스 기준)
   const curIndex = player.state.index;
@@ -301,11 +297,21 @@ export default function RecommendClient() {
     setDislikedTracks(next);
   };
 
+  // 사용자가 특정 트랙을 누르면, 그 인덱스부터 앞으로 가며 재생 가능한 곡으로 점프 (없으면 앞에서 다시 탐색)
   const selectTrack = (index: number) => {
     if (!playlist.length) return;
-    const safeIndex = Math.max(0, Math.min(index, playlist.length - 1));
-    // 동일 큐 재사용 + 시작 인덱스만 전달
-    player.setQueueFromRecommend(playlist, safeIndex);
+
+    let i = Math.max(0, Math.min(index, playlist.length - 1));
+    while (i < playlist.length && !playlist[i]?.audioUrl) i++;
+    if (i >= playlist.length) {
+      i = 0;
+      while (i < playlist.length && !playlist[i]?.audioUrl) i++;
+      if (i >= playlist.length) {
+        alert("이 재생목록에는 미리듣기 가능한 곡이 없습니다.");
+        return;
+      }
+    }
+    player.setQueueFromRecommend(playlist, i);
     setShowPlaylist(false);
   };
 
@@ -417,10 +423,7 @@ export default function RecommendClient() {
             />
             <div className="flex justify-between text-sm text-white/60">
               <span>{formatTime(curSec)}</span>
-              <span>
-                -
-                {formatTime(Math.max((durSec || 0) - curSec, 0))}
-              </span>
+              <span>-{formatTime(Math.max((durSec || 0) - curSec, 0))}</span>
             </div>
           </div>
 
