@@ -572,8 +572,15 @@ router.post("/search/batch", async (req, res) => {
       res.set("Cache-Control", "public, max-age=120");
     }
 
+    const norm = (s = "") =>
+      String(s || "")
+        .replace(/\s+/g, " ")
+        .replace(/[[(（【].*?[)\]）】]/g, "") // 괄호 내용 제거 (프론트엔드와 동일하게)
+        .trim()
+        .toLowerCase();
+
     // 키 생성 규칙 (프론트 keyOf와 동일)
-    const makeKey = (t, a) => `${String(t||"").trim().toLowerCase()} - ${String(a||"").trim().toLowerCase()}`;
+    const makeKey = (t, a) => `${norm(t)} - ${norm(a)}`;
     const results = {};
 
     const itemsToFetch = []; // API로 조회해야 할 항목들
@@ -634,7 +641,7 @@ router.post("/search/batch", async (req, res) => {
         
         // API 호출 결과를 캐시에 저장 (오류 시 저장 안 함)
         if (trackData) {
-            if (typeof cacheKey === 'string' && cacheKey) {
+            if (trackData && typeof cacheKey === 'string' && cacheKey) {
                 spotifyApiCache.set(cacheKey, trackData);
             } else {
                 // cacheKey가 유효하지 않으면 로그만 남김
