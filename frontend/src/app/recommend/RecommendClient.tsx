@@ -29,7 +29,7 @@ import { formatTime } from "./utils/media";
 /** 사진 바이너리 URL */
 const buildPhotoSrc = (photoId?: string | null) =>
   photoId
-    ? `${API_BASE}/photos/${encodeURIComponent(String(photoId))}/binary`
+    ? `${API_BASE}/api/photos/${encodeURIComponent(String(photoId))}/binary`
     : null;
 
 /** 서버 응답을 Track으로 정규화 */
@@ -93,7 +93,7 @@ async function prefetchCoversAndUris(list: Track[]): Promise<Track[]> {
   const pairs = list.map((t) => ({ title: norm(t.title), artist: norm(t.artist) }));
 
   try {
-    const res = await fetch(`${API_BASE}/spotify/search/batch`, {
+    const res = await fetch(`${API_BASE}/api/spotify/search/batch`, {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
@@ -202,7 +202,7 @@ export default function RecommendClient() {
       setLoading(true);
       setError(null);
       try {
-        const url = `${API_BASE}/recommendations/by-photo/${encodeURIComponent(photoId)}`;
+        const url = `${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(photoId)}`;
         const res = await fetch(url, { credentials: "include" });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: any = await res.json();
