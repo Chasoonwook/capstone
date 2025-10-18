@@ -136,7 +136,11 @@ async function callSpotifyWithCookies(req, res, method, url, data, params) {
     }
     // refresh
     const ref = await refreshAccessToken(refresh);
-    if (!ref?.access_token) throw e1;
+    if (!ref || typeof ref.access_token !== 'string' || !ref.access_token) {
+        console.error("[callSpotifyWithCookies] Refresh failed or returned invalid token:", ref);
+        clearSpotifyCookies(res); // 문제가 있는 토큰 관련 쿠키 삭제
+        throw e1; // 원래 오류 다시 발생시킴
+    }
 
     setAccessCookie(res, ref.access_token, ref.expires_in);
     const r2 = await doCall(ref.access_token);
@@ -619,7 +623,9 @@ router.post("/search/batch", async (req, res) => {
            spotifyApiCache.set(cacheKey, trackData);
         }
         // 결과를 최종 결과 객체에 추가
-        const c = compactTrack(trackData) || { id: null, title: title || null, artist: artist || null, album: null, albumImage: null, preview_url: null, spotify_uri: null };
+        const currentTitle = typeof title === 'string' ? title : null; // title이 undefined일 경우 null로
+        const currentArtist = typeof artist === 'string' ? artist : null; // artist가 undefined일 경우 null로
+        const c = compactTrack(trackData) || { id: null, title: currentTitle, artist: currentArtist, album: null, albumImage: null, preview_url: null, spotify_uri: null };
         results[key] = { key, ...c };
       }
       // --- 캐싱 로직 끝 ---
