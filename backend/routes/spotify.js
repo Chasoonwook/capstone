@@ -4,6 +4,7 @@
 const express = require("express");
 const axios = require("axios");
 const crypto = require("crypto");
+const NodeCache = require("node-cache");
 
 const router = express.Router();
 
@@ -14,6 +15,8 @@ const FRONT_BASE    = process.env.FRONT_BASE || "https://capstone-front-tau.verc
 
 const CK_ACCESS  = "sp_access";
 const CK_REFRESH = "sp_refresh";
+
+const spotifyApiCache = new NodeCache({ stdTTL: 3600, checkperiod: 300 });
 
 const SCOPE = [
   "streaming",
@@ -457,6 +460,17 @@ router.get("/search", async (req, res) => {
     const limit = Math.min(Math.max(Number(req.query.limit || 5), 1), 5);
     if (!q) return res.status(400).json({ error: "missing_q" });
 
+    // 캐싱 로직
+    const cacheKey = 'search:q=${q}:limit=${limit}';
+    const cachedData = spotifyApiCache.get(cacheKey);
+
+    if (cachedData) {
+      console.log('[Cache HIT] ${cacheKey}');
+      const items = cachedData.map(compactTrack);
+      return res.json({ items });
+    }
+    console.log('[Cache MISS] ${cacheKey}');
+
     let data;
     try {
       // 1) 사용자 토큰으로 시도
@@ -478,6 +492,9 @@ router.get("/search", async (req, res) => {
     }
 
     const tracks = data?.tracks?.items || [];
+
+    spotifyApiCache.set(cacheKey, tracks);
+
     const items = tracks.map(compactTrack);
     res.json({ items });
   } catch (e) {
@@ -495,6 +512,15 @@ router.get("/tracks/:id", async (req, res) => {
     const id = String(req.params.id || "").trim();
     if (!id) return res.status(400).json({ error: "missing_id" });
 
+    const cacheKey = 'track:${id}';
+    const cachedData = spotifyApiCache.get(cacheKey);
+
+    if (cachedData) {
+      console.log('[Cache HIT] ${cacheKey}');
+      return res.json({ item: compactTrack(cachedData) });
+    }
+    console.log('[Cache MISS] ${cacheKey}');
+
     let track;
     try {
       const r = await callSpotifyWithCookies(
@@ -509,6 +535,10 @@ router.get("/tracks/:id", async (req, res) => {
       });
       track = r2.data;
       res.set("Cache-Control", "public, max-age=120");
+    }
+
+    if(track) {
+      spotifyApiCache.set(cacheKey, track);
     }
 
     return res.json({ item: compactTrack(track) });
@@ -540,34 +570,64 @@ router.post("/search/batch", async (req, res) => {
 
     // 키 생성 규칙 (프론트 keyOf와 동일)
     const makeKey = (t, a) => `${String(t||"").trim().toLowerCase()} - ${String(a||"").trim().toLowerCase()}`;
+    const results = {};
+
+    const itemsToFetch = []; // API로 조회해야 할 항목들
+    for (const { title, artist } of pairs) {
+      const key = makeKey(title, artist);
+      const cacheKey = `search:q=track:${title} artist:${artist}:limit=1`; // 단일 검색과 유사한 키 사용
+      const cachedItem = spotifyApiCache.get(cacheKey); // 단일 트랙 결과를 가져옴 (배열 아님)
+
+      if (cachedItem) {
+        console.log(`[Batch Cache HIT] ${cacheKey}`);
+        results[key] = { key, ...compactTrack(cachedItem) };
+      } else {
+        console.log(`[Batch Cache MISS] ${cacheKey}`);
+        itemsToFetch.push({ title, artist, key, cacheKey }); // 캐시에 없으면 조회 목록에 추가
+      }
+    }
 
     // 간단 동시성 제한(5개씩)
     const chunk = (arr, n) => arr.reduce((acc, _, i) => (i % n ? acc : acc.concat([arr.slice(i, i + n)])), []);
-
+    
     const groups = chunk(pairs, 5);
-    const out = [];
+    
     for (const g of groups) {
-      const tasks = g.map(async ({ title, artist }) => {
-        const key = makeKey(title, artist);
+      const tasks = g.map(async ({ title, artist, key, cacheKey }) => {
         const q = `${title ? `track:${title}` : ""}${artist ? ` artist:${artist}` : ""}`.trim();
-        if (!q) return { key, ...{ id:null, title:title||null, artist:artist||null, album:null, albumImage:null, preview_url:null, spotify_uri:null } };
+        if (!q) return { key, cacheKey, trackData: null }; // 검색어 없으면 null
 
-        const r = await axios.get("https://api.spotify.com/v1/search", {
-          params: { q, type: "track", limit: 1 },
-          headers: { Authorization: bearer },
-          timeout: 10000,
-        }).catch(() => null);
-
-        const t = r?.data?.tracks?.items?.[0] || null;
-        const c = compactTrack(t) || { id:null, title:title||null, artist:artist||null, album:null, albumImage:null, preview_url:null, spotify_uri:null };
-
-        return { key, ...c };
+        try {
+          const r = await axios.get("https://api.spotify.com/v1/search", {
+            params: { q, type: "track", limit: 1 },
+            headers: { Authorization: bearer },
+            timeout: 10000,
+          });
+          const trackData = r?.data?.tracks?.items?.[0] || null;
+          return { key, cacheKey, trackData };
+        } catch (err) {
+          console.error(`[Batch API Error] q=${q}:`, err?.response?.status || err.message);
+          return { key, cacheKey, trackData: null }; // API 오류 시 null
+        }
       });
-      const part = await Promise.all(tasks);
-      out.push(...part);
+
+    const responses = await Promise.all(tasks);
+
+    for (const { key, cacheKey, trackData } of responses) {
+         // API 호출 결과를 캐시에 저장 (오류 시 저장 안 함)
+        if (trackData) {
+           spotifyApiCache.set(cacheKey, trackData);
+        }
+        // 결과를 최종 결과 객체에 추가
+        const c = compactTrack(trackData) || { id: null, title: title || null, artist: artist || null, album: null, albumImage: null, preview_url: null, spotify_uri: null };
+        results[key] = { key, ...c };
+      }
+      // --- 캐싱 로직 끝 ---
     }
 
-    return res.json({ items: out });
+    const orderedResults = pairs.map(({ title, artist }) => results[makeKey(title, artist)]);
+
+    return res.json({ items: orderedResults });
   } catch (e) {
     const { status, data } = formatAxiosErr(e);
     res.status(status).json(data);
