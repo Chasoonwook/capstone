@@ -27,8 +27,9 @@ app.use((req, res, next) => {
 
 /* =======================================================================
    CORS (credentials 허용 + 허용 도메인 정규화)
-   - 프리플라이트는 즉시 204
+   - 프리플라이트(OPTIONS)는 즉시 204
    - 에러 응답에도 CORS 헤더가 항상 나가도록 수동으로 세팅
+   - ✅ Allow-Headers에 X-User-Id 등 커스텀 헤더 추가
    ======================================================================= */
 const FRONT_BASE = process.env.FRONT_BASE || "https://capstone-front-tau.vercel.app";
 
@@ -66,14 +67,27 @@ app.use((req, res, next) => {
   if (isAllowedOrigin(origin)) {
     if (origin) res.header("Access-Control-Allow-Origin", origin);
     res.header("Access-Control-Allow-Credentials", "true");
-    res.header(
-      "Access-Control-Allow-Methods",
-      "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS"
-    );
-    res.header(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Authorization"
-    );
+    res.header("Access-Control-Allow-Methods", "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS");
+
+    // 기본 허용 헤더 + 실제 요청 헤더를 합쳐서 반환(보수적으로)
+    const defaultAllowed = [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "X-User-Id", // ✅ 문제의 커스텀 헤더
+    ];
+    const reqHeaders = String(req.headers["access-control-request-headers"] || "")
+      .split(",")
+      .map((h) => h.trim())
+      .filter(Boolean);
+
+    const allowHeaders = Array.from(new Set([...defaultAllowed, ...reqHeaders]))
+      .join(", ");
+
+    res.header("Access-Control-Allow-Headers", allowHeaders);
+
+    // 프리플라이트 캐시 (선택)
+    res.header("Access-Control-Max-Age", "600");
   }
 
   if (req.method === "OPTIONS") {
