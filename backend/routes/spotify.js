@@ -233,24 +233,41 @@ router.get("/callback", async (req, res) => {
   }
 });
 
-/* ─────────────── /me (캐시) ─────────────── */
+/* ─────────────── /me (캐시 + 레이트리밋 완화) ─────────────── */
+
+// 429 대응 전역 백오프(모든 유저 공통. 필요 시 per-IP로 확장 가능)
+let GLOBAL_BACKOFF_UNTIL = 0;
+
 router.get("/me", async (req, res) => {
   const access = req.cookies?.[CK_ACCESS] || null;
   try {
-    if (!access) return res.status(401).json({ connected: false });
+    // 아직 연결 안 된 상태: 항상 200으로
+    if (!access) {
+      return res.json({ connected: false });
+    }
 
     const now = Date.now();
+
+    // 글로벌 백오프 중이면 호출 생략하고 바로 false
+    if (now < GLOBAL_BACKOFF_UNTIL) {
+      return res.json({ connected: false, rate_limited: true, backoff: Math.ceil((GLOBAL_BACKOFF_UNTIL - now)/1000) });
+    }
+
     const cached = meCache.get(access);
 
+    // 토큰별 캐시 HIT
     if (cached && cached.profile && now - cached.ts < ME_TTL_MS) {
       return res.json({ connected: true, profile: cached.profile, cached: true });
     }
+
+    // 누군가 이미 호출 중이면 그거 기다렸다가 결과 사용
     if (cached?.pending) {
       await cached.pending;
       const again = meCache.get(access);
       if (again?.profile) {
         return res.json({ connected: true, profile: again.profile, cached: true });
       }
+      // pending 끝났는데도 profile이 없다면 아래에서 새로 시도
     }
 
     const pending = (async () => {
@@ -266,14 +283,39 @@ router.get("/me", async (req, res) => {
     return res.json({ connected: true, profile });
 
   } catch (e) {
-    const s = e?.response?.status || 500;
-    if (s === 401) return res.status(401).json({ connected: false });
-    return res.status(s).json(e?.response?.data || { error: "me_failed" });
+    const status = e?.response?.status || 500;
+
+    // 401/403(토큰 만료/권한 문제) → 연결 안 된 것으로 처리
+    if (status === 401 || status === 403) {
+      return res.json({ connected: false });
+    }
+
+    // 429(Spotify rate limit) → 항상 200 + 글로벌 백오프
+    if (status === 429) {
+      // Spotify가 주는 Retry-After 헤더(초) 사용, 기본 10초 (상한 60초)
+      const retryAfterSec = Math.min(
+        60,
+        Number(e?.response?.headers?.["retry-after"] || 10)
+      );
+      GLOBAL_BACKOFF_UNTIL = Date.now() + retryAfterSec * 1000;
+
+      return res.json({
+        connected: false,
+        rate_limited: true,
+        retryAfter: retryAfterSec,
+      });
+    }
+
+    // 그 외 오류도 200으로 완화
+    console.error("[/api/spotify/me] unexpected:", status, e?.response?.data || e.message);
+    return res.json({ connected: false });
   } finally {
+    // pending 플래그 정리
     const c = meCache.get(access);
     if (c) meCache.set(access, { ts: c.ts, profile: c.profile });
   }
 });
+
 
 /* ─────────────── SDK 전용 토큰 (중요!) ─────────────── */
 // Web Playback SDK 에 공급할 액세스 토큰 반환.
