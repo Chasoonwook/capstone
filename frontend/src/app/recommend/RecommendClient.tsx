@@ -104,8 +104,8 @@ async function prefetchCoversAndUris(list: Track[]): Promise<Track[]> {
       return list;
     }
     const j = await res.json();
-    const items: Array<{
-      key: string;
+    type BatchItem = {
+      key?: string | null; // key가 null일 수 있음
       id: string | null;
       title: string | null;
       artist: string | null;
@@ -114,11 +114,16 @@ async function prefetchCoversAndUris(list: Track[]): Promise<Track[]> {
       preview_url: string | null;
       spotify_uri: string | null;
       duration_ms?: number;
-    }> = j?.items || [];
+    };
+    const items: (BatchItem | null)[] = j?.items || [];
+
+    const validItems = items.filter((it): it is BatchItem & { key: string } =>
+      it != null && typeof it.key === 'string' && it.key.length > 0
+    );
 
     const keyOf = (t: Track) => `${norm(t.title)} - ${norm(t.artist)}`;
     const map = new Map(
-      items.map((it) => [it.key || `${norm(it.title)} - ${norm(it.artist)}`, it])
+      validItems.map((it) => [it.key, it])
     );
 
     return list.map((t) => {
