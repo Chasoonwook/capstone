@@ -1,67 +1,62 @@
 // src/app/login/page.tsx
-"use client";
+"use client"
 
-import type React from "react";
-import { useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
-import { Music, Eye, EyeOff, Mail, Lock } from "lucide-react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { API_BASE, authHeaders } from "@/lib/api";
+import type React from "react"
+import { useState } from "react"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Music, Eye, EyeOff, Mail, Lock } from "lucide-react"
+import Link from "next/link"
+import { useRouter } from "next/navigation"
+import { API_BASE, authHeaders } from "@/lib/api"
 
-type LoginForm = { email: string; password: string };
+type LoginForm = { email: string; password: string }
 
 type LoginUser = {
-  id?: number | string;
-  user_id?: number | string; // 백엔드에 따라 존재할 수 있음
-  email: string;
-  name: string;
-};
+  id?: number | string
+  user_id?: number | string // 백엔드에 따라 존재할 수 있음
+  email: string
+  name: string
+}
 
 type LoginResponse = {
-  token: string;
-  user: LoginUser;
-  onboarding_done?: boolean;
-  genre_setup_complete?: boolean;
-  [key: string]: unknown;
-};
+  token: string
+  user: LoginUser
+  onboarding_done?: boolean
+  genre_setup_complete?: boolean
+  [key: string]: unknown
+}
 
-const isRecord = (v: unknown): v is Record<string, unknown> =>
-  !!v && typeof v === "object" && !Array.isArray(v);
+const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v)
 
-const hasErrorMessage = (v: unknown): v is { error: string } =>
-  isRecord(v) && typeof v.error === "string";
+const hasErrorMessage = (v: unknown): v is { error: string } => isRecord(v) && typeof v.error === "string"
 
 /** 다양한 모양의 id에서 "정수(>=1)"만 추출 */
 function pickNumericId(u?: LoginUser | null): number | null {
   const toNum = (v: unknown) => {
-    const n = typeof v === "string" ? Number(v) : typeof v === "number" ? v : NaN;
-    return Number.isFinite(n) && n >= 1 ? n : null;
-  };
-  if (!u) return null;
-  return toNum(u.user_id) ?? toNum(u.id);
+    const n = typeof v === "string" ? Number(v) : typeof v === "number" ? v : Number.NaN
+    return Number.isFinite(n) && n >= 1 ? n : null
+  }
+  if (!u) return null
+  return toNum(u.user_id) ?? toNum(u.id)
 }
 
 export default function LoginPage() {
-  const [formData, setFormData] = useState<LoginForm>({ email: "", password: "" });
-  const [showPassword, setShowPassword] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const router = useRouter();
+  const [formData, setFormData] = useState<LoginForm>({ email: "", password: "" })
+  const [showPassword, setShowPassword] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const router = useRouter()
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
-  };
+    const { name, value } = e.target
+    setFormData((prev) => ({ ...prev, [name]: value }))
+  }
 
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    setIsLoading(true);
-    setError(null);
+    e.preventDefault()
+    setIsLoading(true)
+    setError(null)
 
     try {
       // 1) 로그인 호출
@@ -72,52 +67,52 @@ export default function LoginPage() {
           email: formData.email.trim(),
           password: formData.password,
         }),
-      });
+      })
 
       if (!res.ok) {
-        let msg = "이메일 또는 비밀번호가 올바르지 않습니다.";
+        let msg = "이메일 또는 비밀번호가 올바르지 않습니다."
         try {
-          const j: unknown = await res.json();
-          if (hasErrorMessage(j)) msg = j.error;
+          const j: unknown = await res.json()
+          if (hasErrorMessage(j)) msg = j.error
         } catch {}
-        throw new Error(msg);
+        throw new Error(msg)
       }
 
-      const data = (await res.json()) as LoginResponse;
+      const data = (await res.json()) as LoginResponse
       if (!data?.token || !data?.user) {
-        throw new Error("로그인 응답 형식이 올바르지 않습니다.");
+        throw new Error("로그인 응답 형식이 올바르지 않습니다.")
       }
 
-      const { token, user } = data;
+      const { token, user } = data
 
       // 2) 숫자형 user_id 확정 및 필수 저장
-      const numericUid = pickNumericId(user);
+      const numericUid = pickNumericId(user)
       if (numericUid == null) {
-        throw new Error("로그인 응답에 사용자 ID가 없습니다.");
+        throw new Error("로그인 응답에 사용자 ID가 없습니다.")
       }
 
       // 필수 세션 저장 (일기 작성 페이지에서 사용)
-      localStorage.setItem("token", token);
-      localStorage.setItem("account_id", String(numericUid)); // ✅ 핵심: 숫자 ID 저장
-      localStorage.setItem("uid", String(numericUid));        // (기존 호환)
-      localStorage.setItem("email", user.email);
-      localStorage.setItem("name", user.name);
+      localStorage.setItem("token", token)
+      localStorage.setItem("account_id", String(numericUid)) // ✅ 핵심: 숫자 ID 저장
+      localStorage.setItem("uid", String(numericUid)) // (기존 호환)
+      localStorage.setItem("email", user.email)
+      localStorage.setItem("name", user.name)
       try {
         // 참고용 사용자 전체 객체도 저장(필요 시)
-        localStorage.setItem("auth_user", JSON.stringify({ ...user, user_id: numericUid }));
+        localStorage.setItem("auth_user", JSON.stringify({ ...user, user_id: numericUid }))
       } catch {}
 
       // 3) 서버에서 최신 사용자 상태(장르 세팅 여부 등) 재조회 (있을 때만)
-      let genreDone = false;
+      let genreDone = false
       try {
         const meRes = await fetch(`${API_BASE}/api/users/me`, {
           headers: { "X-User-Id": String(numericUid), ...(authHeaders?.() as HeadersInit) },
           cache: "no-store",
           credentials: "include",
-        });
+        })
         if (meRes.ok) {
-          const me = await meRes.json();
-          genreDone = Boolean(me?.genre_setup_complete);
+          const me = await meRes.json()
+          genreDone = Boolean(me?.genre_setup_complete)
         }
       } catch {
         // 무시하고 아래 폴백 사용
@@ -125,48 +120,46 @@ export default function LoginPage() {
 
       // 4) 폴백 플래그 사용
       if (!genreDone) {
-        genreDone = Boolean(data.genre_setup_complete ?? data.onboarding_done);
+        genreDone = Boolean(data.genre_setup_complete ?? data.onboarding_done)
       }
 
       // 5) (선택) 쿠키로도 기록
-      document.cookie = `onboardingDone=${genreDone ? "1" : "0"}; path=/; max-age=31536000`;
+      document.cookie = `onboardingDone=${genreDone ? "1" : "0"}; path=/; max-age=31536000`
 
       // 6) 라우팅
-      router.replace(genreDone ? "/" : "/onboarding/genres");
+      router.replace(genreDone ? "/" : "/onboarding/genres")
     } catch (err: unknown) {
-      const msg =
-        err instanceof Error ? err.message : typeof err === "string" ? err : "로그인 중 오류가 발생했습니다.";
-      setError(msg);
+      const msg = err instanceof Error ? err.message : typeof err === "string" ? err : "로그인 중 오류가 발생했습니다."
+      setError(msg)
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  };
-
-  const handleSocialLogin = (provider: "Google" | "Kakao") => {
-    console.log(`${provider} 로그인`);
-  };
+  }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-50 flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
+    <div className="min-h-screen bg-background flex items-center justify-center p-4">
+      <div className="w-full max-w-lg">
         <div className="text-center mb-8">
-          <Link href="/" className="inline-flex items-center space-x-2 text-purple-600 hover:text-purple-700">
+          <Link href="/" className="inline-flex items-center gap-2 text-foreground hover:opacity-80 transition-opacity">
             <Music className="h-8 w-8" />
-            <span className="text-2xl font-bold">뮤직 추천 시스템</span>
+            <span className="text-2xl font-bold text-balance">뮤직 추천 시스템</span>
           </Link>
         </div>
 
-        <Card className="shadow-lg">
-          <CardHeader className="space-y-1">
-            <CardTitle className="text-2xl font-bold text-center">로그인</CardTitle>
-            <CardDescription className="text-center">계정으로 로그인해 음악 추천을 받아보세요</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
+        <div className="bg-gradient-to-br from-primary/10 via-accent/5 to-primary/10 rounded-2xl p-6 shadow-sm">
+          <div className="mb-6">
+            <h1 className="text-2xl font-bold text-foreground mb-2 text-balance">로그인</h1>
+            <p className="text-sm text-muted-foreground text-pretty">계정으로 로그인해 음악 추천을 받아보세요</p>
+          </div>
+
+          <div className="space-y-4">
             <form onSubmit={handleLogin} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="email">이메일</Label>
+                <Label htmlFor="email" className="text-sm font-medium">
+                  이메일
+                </Label>
                 <div className="relative">
-                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 h-4 w-4" />
+                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground h-4 w-4" />
                   <Input
                     id="email"
                     name="email"
@@ -174,7 +167,7 @@ export default function LoginPage() {
                     placeholder="이메일을 입력하세요"
                     value={formData.email}
                     onChange={handleInputChange}
-                    className="pl-10"
+                    className="pl-10 bg-background"
                     required
                     autoComplete="email"
                   />
@@ -182,9 +175,11 @@ export default function LoginPage() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="password">비밀번호</Label>
+                <Label htmlFor="password" className="text-sm font-medium">
+                  비밀번호
+                </Label>
                 <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 h-4 w-4" />
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground h-4 w-4" />
                   <Input
                     id="password"
                     name="password"
@@ -192,14 +187,14 @@ export default function LoginPage() {
                     placeholder="비밀번호를 입력하세요"
                     value={formData.password}
                     onChange={handleInputChange}
-                    className="pl-10 pr-10"
+                    className="pl-10 pr-10 bg-background"
                     required
                     autoComplete="current-password"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword((v) => !v)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                     aria-label={showPassword ? "비밀번호 숨기기" : "비밀번호 보이기"}
                   >
                     {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -207,53 +202,26 @@ export default function LoginPage() {
                 </div>
               </div>
 
-              {error && <p className="text-sm text-red-600">{error}</p>}
+              {error && <p className="text-sm text-destructive">{error}</p>}
 
-              <Button type="submit" className="w-full bg-purple-600 hover:bg-purple-700" disabled={isLoading}>
+              <button
+                type="submit"
+                disabled={isLoading}
+                className="w-full bg-primary text-primary-foreground rounded-lg py-3 px-4 font-medium text-sm hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
                 {isLoading ? "로그인 중..." : "로그인"}
-              </Button>
+              </button>
             </form>
 
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center">
-                <Separator className="w-full" />
-              </div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-white px-2 text-gray-500">또는</span>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <Button variant="outline" onClick={() => handleSocialLogin("Google")} className="w-full">
-                <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24">
-                  <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                  <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                  <path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-                  <path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-                </svg>
-                Google
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => handleSocialLogin("Kakao")}
-                className="w-full bg-yellow-400 hover:bg-yellow-500 text-black border-yellow-400"
-              >
-                <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M12 3c5.799 0 10.5 3.664 10.5 8.185 0 4.52-4.701 8.184-10.5 8.184a13.5 13.5 0 0 1-1.727-.11l-4.408 2.883c-.501.265-.678.236-.472-.413l.892-3.678c-2.88-1.46-4.785-3.99-4.785-6.866C1.5 6.665 6.201 3 12 3z" />
-                </svg>
-                카카오
-              </Button>
-            </div>
-
             <div className="text-center text-sm">
-              <span className="text-gray-600">아직 계정이 없으신가요? </span>
-              <Link href="/register" className="text-purple-600 hover:text-purple-700 font-medium">
+              <span className="text-muted-foreground">아직 계정이 없으신가요? </span>
+              <Link href="/register" className="text-foreground font-medium hover:opacity-80 transition-opacity">
                 회원가입
               </Link>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       </div>
     </div>
-  );
+  )
 }
