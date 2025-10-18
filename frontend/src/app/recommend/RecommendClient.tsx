@@ -249,7 +249,9 @@ export default function RecommendClient() {
             variant="ghost"
             size="icon"
             className="text-white hover:bg-white/10"
-            onClick={() => router.push("/?from=player")}
+            onClick={() => { 
+              router.push("/"); 
+            }}
             title="메인으로"
           >
             <ChevronDown className="w-6 h-6" />
