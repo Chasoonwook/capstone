@@ -200,7 +200,7 @@ function Inner() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8 mb-16 max-w-5xl mx-auto">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 mb-12 max-w-4xl mx-auto">
             {GENRES.map((genre, index) => {
               const isSelected = selected.includes(genre.id)
               return (
@@ -214,17 +214,16 @@ function Inner() {
                 >
                   <div
                     className={`
-                    relative bg-card rounded-3xl overflow-hidden
-                    border-2 transition-all duration-300
-                    ${
-                      isSelected
-                        ? "border-primary shadow-2xl shadow-primary/20 scale-105"
-                        : "border-border shadow-lg hover:shadow-2xl hover:scale-105 hover:border-primary/50"
-                    }
-                  `}
+                      relative bg-card rounded-2xl overflow-hidden
+                      border-2 transition-all duration-300
+                      ${isSelected
+                        ? "border-primary shadow-xl shadow-primary/20 scale-[1.02]"
+                        : "border-border shadow-lg hover:shadow-xl hover:scale-[1.02] hover:border-primary/50"
+                      }
+                    `}
                   >
-                    {/* Image container */}
-                    <div className="relative h-56 overflow-hidden">
+                    {/* Image container 크기 축소 */}
+                    <div className="relative h-40 sm:h-44 md:h-48 overflow-hidden">
                       <Image
                         src={genre.image || "/placeholder.svg"}
                         alt={genre.name}
@@ -235,25 +234,24 @@ function Inner() {
                       />
                       <div
                         className={`
-                        absolute inset-0 transition-all duration-300
-                        ${
-                          isSelected
+                          absolute inset-0 transition-all duration-300
+                          ${isSelected
                             ? "bg-gradient-to-t from-primary/60 via-primary/20 to-transparent"
                             : "bg-gradient-to-t from-black/40 via-black/10 to-transparent group-hover:from-black/60"
-                        }
-                      `}
+                          }
+                        `}
                       />
-
                       {isSelected && (
-                        <div className="absolute top-4 right-4 bg-primary text-primary-foreground rounded-full p-3 shadow-2xl animate-in zoom-in duration-300">
-                          <Check size={20} strokeWidth={3} />
+                        <div className="absolute top-3 right-3 bg-primary text-primary-foreground rounded-full p-2.5 shadow-xl animate-in zoom-in duration-300">
+                          <Check size={18} strokeWidth={3} />
                         </div>
                       )}
                     </div>
 
-                    <div className="p-6 space-y-2">
-                      <h3 className="font-bold text-xl text-card-foreground tracking-tight">{genre.name}</h3>
-                      <p className="text-sm text-muted-foreground leading-relaxed">{genre.description}</p>
+                    {/* 카드 콘텐츠 패딩/글자 크기 축소 */}
+                    <div className="p-4 space-y-1.5">
+                      <h3 className="font-bold text-lg text-card-foreground tracking-tight">{genre.name}</h3>
+                      <p className="text-xs text-muted-foreground leading-relaxed">{genre.description}</p>
                     </div>
 
                     <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none">
