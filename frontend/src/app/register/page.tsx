@@ -368,6 +368,10 @@ export default function SignupPage() {
               >
                 {isLoading ? "가입 중..." : "회원가입"}
               </Button>
+
+              <Button variant="outline" className="w-full mt-2" asChild>
+                <Link href="/login">로그인으로 돌아가기</Link>
+              </Button>
             </form>
           </div>
         </div>
