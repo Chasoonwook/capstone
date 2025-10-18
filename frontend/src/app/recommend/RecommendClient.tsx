@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
@@ -145,6 +145,9 @@ export default function RecommendClient() {
   const router = useRouter();
   const player = usePlayer(); // PlayerContext (전역 오디오)
 
+  // ─────────────────────────────────────────
+  // 페이지 파라미터/아트워크
+  // ─────────────────────────────────────────
   const [photoId, setPhotoId] = useState<string | null>(null);
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -168,21 +171,29 @@ export default function RecommendClient() {
       : null;
   const playlistTitle = `${userNameFallback || "내"} 플레이리스트`;
 
+  // ─────────────────────────────────────────
+  // 재생목록/상태
+  // ─────────────────────────────────────────
   const [playlist, setPlaylist] = useState<Track[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showPlaylist, setShowPlaylist] = useState(false);
-  const [likedTracks, setLikedTracks] = useState<Set<string | number>>(
-    new Set()
-  );
-  const [dislikedTracks, setDislikedTracks] = useState<
-    Set<string | number>
-  >(new Set());
+  const [likedTracks, setLikedTracks] = useState<Set<string | number>>(new Set());
+  const [dislikedTracks, setDislikedTracks] = useState<Set<string | number>>(new Set());
 
-  // 추천 목록 로드 → 전역 큐 세팅(Provider가 자동 로드+재생)
+  // 큐 시그니처 가드(동일 큐로 재설정 금지)
+  const lastQueueSigRef = useRef<string>("");
+  const onceMountedRef = useRef<boolean>(false); // StrictMode 이중실행 방지용
+
+  // 추천 목록 로드 → 전역 큐 세팅(단, 동일 큐면 건너뜀)
   useEffect(() => {
     const run = async () => {
       if (photoId == null) return;
+      // StrictMode에서 같은 photoId로 두 번 들어오는 초기 호출 차단(초기 1회만)
+      if (!onceMountedRef.current) {
+        onceMountedRef.current = true;
+      }
+
       setLoading(true);
       setError(null);
       try {
@@ -207,24 +218,42 @@ export default function RecommendClient() {
             .filter(Boolean) as Track[];
         }
 
-        // 한 번에 커버/미리듣기 보강(있으면 사용)
+        // 커버/미리듣기 보강
         const enhanced = await prefetchCoversAndUris(list);
+
+        // 시그니처 계산 (id + spotify_track_id + audioUrl + 길이)
+        const sig = JSON.stringify(
+          enhanced.map((t) => [t.id, t.spotify_track_id, !!t.audioUrl]).concat([enhanced.length])
+        );
+
+        // 동일 큐면 아무 것도 하지 않음
+        if (sig === lastQueueSigRef.current) {
+          // 그래도 화면의 리스트는 최신으로 동기화
+          setPlaylist((prev) => (prev.length ? prev : enhanced));
+          return;
+        }
+
+        // 새 큐만 반영
+        lastQueueSigRef.current = sig;
         setPlaylist(enhanced);
 
-        // 전역 플레이어 큐 설정(첫 곡부터 재생)
-        player.setQueueFromRecommend(enhanced, 0);
+        // 전역 플레이어 큐 설정(첫 곡부터) — 이 호출이 반복되면 루프 → 위 가드로 1회만
+        if (enhanced.length > 0) {
+          player.setQueueFromRecommend(enhanced, 0);
+        }
       } catch (e) {
         console.error(e);
         setError("추천 목록을 불러오지 못했습니다.");
-        setPlaylist([]);
+        // 에러 시에도 기존 playlist 유지하여 UI 리셋 방지
       } finally {
         setLoading(false);
       }
     };
     run();
+    // photoId가 바뀔 때만 새로 요청
   }, [photoId, player]);
 
-  // 표시용 현재 트랙
+  // 표시용 현재 트랙(전역 인덱스 기준)
   const curIndex = player.state.index;
   const current = playlist[curIndex];
 
@@ -240,8 +269,7 @@ export default function RecommendClient() {
     return `${m}:${t.toString().padStart(2, "0")}`;
   };
 
-  const handleSeek = (value: number[]) =>
-    player.seek((value?.[0] ?? 0) * 1000);
+  const handleSeek = (value: number[]) => player.seek((value?.[0] ?? 0) * 1000);
 
   const toggleLike = () => {
     if (!current) return;
@@ -257,6 +285,7 @@ export default function RecommendClient() {
     }
     setLikedTracks(next);
   };
+
   const toggleDislike = () => {
     if (!current) return;
     const next = new Set(dislikedTracks);
@@ -273,8 +302,10 @@ export default function RecommendClient() {
   };
 
   const selectTrack = (index: number) => {
-    // Provider는 index를 외부에서 직접 못 바꾸므로 큐를 같은 배열로 재설정하면서 시작 인덱스만 바꿔줌
-    player.setQueueFromRecommend(playlist, index);
+    if (!playlist.length) return;
+    const safeIndex = Math.max(0, Math.min(index, playlist.length - 1));
+    // 동일 큐 재사용 + 시작 인덱스만 전달
+    player.setQueueFromRecommend(playlist, safeIndex);
     setShowPlaylist(false);
   };
 
@@ -385,10 +416,11 @@ export default function RecommendClient() {
               className="mb-2"
             />
             <div className="flex justify-between text-sm text-white/60">
-              <span>{`${Math.floor(curSec / 60)}:${String(curSec % 60).padStart(2, "0")}`}</span>
-              <span>{`-${Math.floor(Math.max((durSec || 0) - curSec, 0) / 60)}:${String(
-                Math.max((durSec || 0) - curSec, 0) % 60
-              ).padStart(2, "0")}`}</span>
+              <span>{formatTime(curSec)}</span>
+              <span>
+                -
+                {formatTime(Math.max((durSec || 0) - curSec, 0))}
+              </span>
             </div>
           </div>
 
@@ -474,9 +506,7 @@ export default function RecommendClient() {
                   min={0}
                   max={100}
                   step={1}
-                  onValueChange={(vals) =>
-                    player.setVolume((vals?.[0] ?? 0) / 100)
-                  }
+                  onValueChange={(vals) => player.setVolume((vals?.[0] ?? 0) / 100)}
                 />
               </div>
 
