@@ -465,7 +465,7 @@ router.get("/search", async (req, res) => {
     if (!q) return res.status(400).json({ error: "missing_q" });
 
     // 캐싱 로직
-    const cacheKey = 'search:q=${q}:limit=${limit}';
+    const cacheKey = `search:q=${q}:limit=${limit}`;
     const cachedData = spotifyApiCache.get(cacheKey);
 
     if (cachedData) {
@@ -631,7 +631,7 @@ router.post("/search/batch", async (req, res) => {
             continue; // 다음 항목으로 건너뛰기
         }
 
-        const { cacheKey, trackData, originalTitle, originalArtist } = responseItem;
+        const { trackData, originalTitle, originalArtist } = responseItem;
         
         const key = makeKey(originalTitle, originalArtist);
 
@@ -643,8 +643,11 @@ router.post("/search/batch", async (req, res) => {
         
         // API 호출 결과를 캐시에 저장 (오류 시 저장 안 함)
         if (trackData) {
-            if (typeof cacheKey === 'string' && cacheKey) {
-                spotifyApiCache.set(cacheKey, trackData);
+
+          const currentCacheKey = `search:q=track:${String(originalTitle||'').trim()} artist:${String(originalArtist||'').trim()}:limit=1`;
+
+            if (typeof currentCacheKey === 'string' && currentCacheKey) {
+                spotifyApiCache.set(currentCacheKey, trackData);
             } else {
                 // cacheKey가 유효하지 않으면 로그만 남김
                 console.warn(`[Batch Cache Warn] Invalid or missing cacheKey for key: ${key}, cannot cache.`);
