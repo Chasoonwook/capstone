@@ -15,7 +15,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { API_BASE, authHeaders } from "@/lib/api";
 import SpotifyConnectModal from "@/components/modals/SpotifyConnectModal";
-import { getSpotifyStatus } from "@/lib/spotifyClient"; // ✅ 캐싱/쿨다운 포함된 단일 진입점
+
+// ✅ 컨텍스트: 상태 구독 + 수동 새로고침 전용 (자동 호출 없음)
+import { useSpotifyStatus } from "@/contexts/SpotifyStatusContext";
 
 interface UserHeaderProps {
   user: any;
@@ -36,6 +38,8 @@ export default function UserHeader({
   selectedGenres = [],
 }: UserHeaderProps) {
   const router = useRouter();
+  const { status, refresh } = useSpotifyStatus();
+
   const Wrapper: React.ElementType = embedded ? "div" : "header";
   const wrapperCls = embedded
     ? "max-w-5xl mx-auto flex items-center justify-between px-4 py-3"
@@ -47,47 +51,70 @@ export default function UserHeader({
     "Guest";
 
   // ─────────────────────────────────────────────────────────
-  // Spotify 연결 상태 (캐시된 getSpotifyStatus 사용)
+  // Spotify 연결 상태: 컨텍스트에서만 읽고, 갱신은 refresh()로만
   // ─────────────────────────────────────────────────────────
-  const [isSpotifyConnected, setIsSpotifyConnected] = useState(false);
+  const isSpotifyConnected = !!status?.connected;
   const [showSpotifyModal, setShowSpotifyModal] = useState(false);
-  const lastFocusCheckRef = useRef<number>(0); // 포커스 재조회 쿨다운
 
-  const readSpotifyStatus = useCallback(async () => {
-    const s = await getSpotifyStatus(); // 내부 60초 캐시 + inflight 합치기 + 짧은 실패 TTL
-    setIsSpotifyConnected(!!s?.connected);
-  }, []);
+  // 계정별 “한 번만” 띄우기 키
+  const accountId = useMemo(() => {
+    const anyUser = (user ?? {}) as any;
+    return (
+      anyUser.email?.trim() ||
+      anyUser.id?.toString()?.trim() ||
+      anyUser.uid?.toString()?.trim() ||
+      anyUser.userId?.toString()?.trim() ||
+      "guest"
+    );
+  }, [user]);
+  const seenKey = useMemo(() => `spotify_connect_prompt_seen::${accountId}`, [accountId]);
 
-  // 최초 1회
+  // 최초 1회 강제 갱신 (Provider는 lazy라 자동 호출 안 함)
   useEffect(() => {
     let alive = true;
-    readSpotifyStatus().then(() => {
+    (async () => {
+      await refresh(true); // 서버 레이트리밋 방지: 내부 30초 쿨다운 있음
       if (!alive) return;
-    });
+
+      const already = typeof window !== "undefined" && localStorage.getItem(seenKey) === "1";
+      setShowSpotifyModal(isLoggedIn && !isSpotifyConnected && !already);
+    })();
     return () => {
       alive = false;
     };
-  }, [readSpotifyStatus]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seenKey, isLoggedIn]); // 상태 변화는 컨텍스트로 반영됨
 
-  // 창 포커스/가시화 시 재조회 (최소 30초 간격)
+  // 창에 포커스가 돌아오면 가끔만 재조회(최소 30초 간격)
+  const lastFocusRef = useRef(0);
   useEffect(() => {
-    const handler = () => {
+    const onFocus = () => {
       const now = Date.now();
-      if (now - lastFocusCheckRef.current < 30_000) return; // 30초 쿨다운
-      lastFocusCheckRef.current = now;
-      readSpotifyStatus();
+      if (now - lastFocusRef.current < 30_000) return; // 30초 쿨다운
+      lastFocusRef.current = now;
+      refresh(); // 내부에도 쿨다운 있으므로 안전
     };
-    const visHandler = () => {
-      if (document.visibilityState === "visible") handler();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") onFocus();
     };
 
-    window.addEventListener("focus", handler);
-    document.addEventListener("visibilitychange", visHandler);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
-      window.removeEventListener("focus", handler);
-      document.removeEventListener("visibilitychange", visHandler);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [readSpotifyStatus]);
+  }, [refresh]);
+
+  // 연결 완료되면 모달 닫고 ‘본 것으로’ 처리
+  useEffect(() => {
+    if (isSpotifyConnected) {
+      setShowSpotifyModal(false);
+      try {
+        localStorage.setItem(seenKey, "1");
+      } catch {}
+    }
+  }, [isSpotifyConnected, seenKey]);
 
   // ─────────────────────────────────────────────────────────
   // 선호 장르 표시(기존 로직 유지)
@@ -103,7 +130,8 @@ export default function UserHeader({
     return [];
   };
 
-  const uid = typeof window !== "undefined" ? localStorage.getItem("uid") || undefined : undefined;
+  const uid =
+    typeof window !== "undefined" ? localStorage.getItem("uid") || undefined : undefined;
   const localKey = uid ? `preferred_genres::${uid}` : undefined;
 
   const initialGenres = useMemo(() => {
@@ -187,6 +215,7 @@ export default function UserHeader({
     const returnTo = `${pathname}${search || ""}${hash || ""}`;
     const qs = new URLSearchParams({ return: returnTo }).toString();
 
+    // 서버에서 /login 또는 /authorize 처리
     window.location.href = `${API_BASE}/api/spotify/login?${qs}`;
   };
 
@@ -342,15 +371,23 @@ export default function UserHeader({
       )}
       {embedded && (
         <>
-          <h1 className="text-xl font-bold leading-none cursor-pointer" onClick={() => router.push("/")}>
+          <h1
+            className="text-xl font-bold leading-none cursor-pointer"
+            onClick={() => router.push("/")}
+          >
             MoodTune
           </h1>
           <RightPart />
         </>
       )}
+
+      {/* 🔒 한 번만 뜨는 스포티파이 연결 모달 */}
       <SpotifyConnectModal
-        open={showSpotifyModal}
-        onClose={() => setShowSpotifyModal(false)}
+        open={isLoggedIn && !isSpotifyConnected && showSpotifyModal}
+        onClose={() => {
+          try { localStorage.setItem(seenKey, "1"); } catch {}
+          setShowSpotifyModal(false);
+        }}
         onConnect={handleSpotifyConnect}
       />
     </Wrapper>
