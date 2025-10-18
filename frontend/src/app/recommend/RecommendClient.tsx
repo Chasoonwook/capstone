@@ -485,7 +485,7 @@ export default function RecommendClient() {
               onClick={isPlaying ? player.pause : player.play}
               className="w-16 h-16 rounded-full bg-white hover:bg-white/90 text-black shadow-lg disabled:opacity-50"
               title={isPlaying ? "일시정지" : "재생"}
-              disabled={!current || !current.audioUrl} // ✅ current 또는 audioUrl 없으면 비활성화
+              disabled={!current || (!current.audioUrl && !current.spotify_uri)} // ✅ current 또는 audioUrl 없으면 비활성화
             >
               {isPlaying ? (
                 <Pause className="w-8 h-8 fill-black" />
