@@ -45,7 +45,7 @@ export function useSpotifyPlayer() {
 
     const getToken = async (): Promise<string | null> => {
       try {
-        const r = await fetch(`${API_BASE}/spotify/token`, { credentials: "include" })
+        const r = await fetch(`${API_BASE}/api/spotify/token`, { credentials: "include" })
         if (!r.ok) return null
         const j = await r.json()
         return (j?.access_token as string) || null
