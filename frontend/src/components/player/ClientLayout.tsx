@@ -6,8 +6,9 @@ import { GlobalNowPlayingBar } from "@/components/player/GlobalNowPlayingBar";
 
 export default function ClientLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  // recommend 페이지에서는 하단바 숨김
-  const showBar = !pathname?.startsWith("/recommend");
+
+  // 메인 페이지("/")에서만 하단바 표시
+  const showBar = pathname === "/";
 
   return (
     <PlayerProvider>

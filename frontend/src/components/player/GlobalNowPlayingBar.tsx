@@ -23,7 +23,7 @@ export function GlobalNowPlayingBar() {
     togglePlayPause,
     next,
     prev,
-    seek, // ✅ seek 함수 구조분해
+    seek,
     volume,
     setVolume,
   } = usePlayer();
@@ -37,8 +37,10 @@ export function GlobalNowPlayingBar() {
 
   const isPlayable = useMemo(() => {
     if (!currentTrack) return false;
-    return (state.playbackSource === 'spotify' && !!currentTrack.spotify_uri) ||
-           (state.playbackSource !== 'spotify' && !!currentTrack.audioUrl);
+    return (
+      (state.playbackSource === "spotify" && !!currentTrack.spotify_uri) ||
+      (state.playbackSource !== "spotify" && !!currentTrack.audioUrl)
+    );
   }, [currentTrack, state.playbackSource]);
 
   const goToPlayer = useCallback(() => {
@@ -46,11 +48,8 @@ export function GlobalNowPlayingBar() {
       typeof window !== "undefined"
         ? window.sessionStorage.getItem("lastPlayerRoute")
         : null;
-    if (!last || window.location.pathname === '/recommend') {
-        router.push("/");
-    } else {
-        router.push(last);
-    }
+
+    router.push(last || "/");
   }, [router]);
 
   const stop: React.MouseEventHandler = (e) => e.stopPropagation();
@@ -63,22 +62,24 @@ export function GlobalNowPlayingBar() {
       role="button"
       aria-label="플레이어로 이동"
       onClick={goToPlayer}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") goToPlayer(); }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") goToPlayer();
+      }}
       tabIndex={0}
     >
       {/* 진행 바 */}
       <div className="h-[3px] w-full bg-white/10 group" onClick={stop}>
         <Slider
-            value={[progressPercent]}
-            max={100}
-            step={0.1}
-            className="absolute bottom-[calc(100%-1.5px)] w-full h-[3px] cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity [&>span]:bg-white/30 [&>span>span]:bg-white [&>span>span>span]:hidden"
-            onValueChange={(value) => {
-                if (state.durMs > 0) {
-                    seek((value[0] / 100) * state.durMs); // ✅ 오류 수정: player.seek -> seek
-                }
-            }}
-            disabled={!currentTrack || state.durMs <= 0}
+          value={[progressPercent]}
+          max={100}
+          step={0.1}
+          className="absolute bottom-[calc(100%-1.5px)] w-full h-[3px] cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity [&>span]:bg-white/30 [&>span>span]:bg-white [&>span>span>span]:hidden"
+          onValueChange={(value) => {
+            if (state.durMs > 0) {
+              seek((value[0] / 100) * state.durMs);
+            }
+          }}
+          disabled={!currentTrack || state.durMs <= 0}
         />
         <div
           className="h-[3px] bg-white/70"
@@ -93,22 +94,29 @@ export function GlobalNowPlayingBar() {
       >
         {/* 좌측: 앨범 아트 + 곡 정보 */}
         <div className="flex items-center gap-3 min-w-0">
-           <button onClick={goToPlayer} className="flex-shrink-0">
-             <img src={coverUrl} alt={title} className="w-10 h-10 rounded-sm bg-white/10 object-cover" />
-           </button>
-           <div className="min-w-0 flex-1">
-             <button onClick={goToPlayer} className="text-left w-full">
-                <div className="text-sm font-medium truncate">{title}</div>
-                <div className="text-xs text-white/60 truncate">{artist}</div>
-             </button>
-           </div>
+          <button onClick={goToPlayer} className="flex-shrink-0">
+            <img
+              src={coverUrl}
+              alt={title}
+              className="w-10 h-10 rounded-sm bg-white/10 object-cover"
+            />
+          </button>
+          <div className="min-w-0 flex-1">
+            <button onClick={goToPlayer} className="text-left w-full">
+              <div className="text-sm font-medium truncate">{title}</div>
+              <div className="text-xs text-white/60 truncate">{artist}</div>
+            </button>
+          </div>
         </div>
 
         {/* 중앙: 재생 컨트롤 */}
         <div className="flex items-center gap-4">
           <button
             aria-label="이전 곡"
-            onClick={(e) => { e.stopPropagation(); prev(); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              prev();
+            }}
             className="p-2 hover:bg-white/10 rounded disabled:opacity-50"
             disabled={!currentTrack || state.index <= 0}
           >
@@ -117,16 +125,26 @@ export function GlobalNowPlayingBar() {
 
           <button
             aria-label={isPlaying ? "일시정지" : "재생"}
-            onClick={(e) => { e.stopPropagation(); togglePlayPause(); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              togglePlayPause();
+            }}
             className="p-3 rounded-full bg-white text-black hover:bg-white/90 disabled:opacity-50 disabled:bg-gray-400"
             disabled={!isPlayable}
           >
-            {isPlaying ? <Pause className="w-5 h-5 fill-black" /> : <Play className="w-5 h-5 fill-black" />}
+            {isPlaying ? (
+              <Pause className="w-5 h-5 fill-black" />
+            ) : (
+              <Play className="w-5 h-5 fill-black" />
+            )}
           </button>
 
           <button
             aria-label="다음 곡"
-            onClick={(e) => { e.stopPropagation(); next(); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              next();
+            }}
             className="p-2 hover:bg-white/10 rounded disabled:opacity-50"
             disabled={!currentTrack || state.index >= state.queue.length - 1}
           >
@@ -138,41 +156,57 @@ export function GlobalNowPlayingBar() {
         <div className="hidden md:flex items-center gap-3 justify-end">
           <button
             aria-label="재생목록"
-            onClick={(e) => { e.stopPropagation(); goToPlayer(); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              goToPlayer();
+            }}
             className="p-2 hover:bg-white/10 rounded"
           >
             <ListMusic className="w-5 h-5" />
           </button>
 
           <button
-            onClick={(e) => { e.stopPropagation(); setVolume(volume > 0 ? 0 : 0.8); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              setVolume(volume > 0 ? 0 : 0.8);
+            }}
             className="p-1 hover:bg-white/10 rounded"
             aria-label="음소거 토글"
           >
-            {volume === 0 ? <VolumeX className="w-4 h-4" /> : volume < 0.5 ? <Volume1 className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+            {volume === 0 ? (
+              <VolumeX className="w-4 h-4" />
+            ) : volume < 0.5 ? (
+              <Volume1 className="w-4 h-4" />
+            ) : (
+              <Volume2 className="w-4 h-4" />
+            )}
           </button>
           <Slider
             value={[Math.round(volume * 100)]}
             max={100}
             step={1}
             className="w-24 h-1 cursor-pointer [&>span]:bg-white/30 [&>span>span]:bg-white [&>span>span>span]:hidden"
-            onValueChange={(value) => { setVolume(value[0] / 100); }}
+            onValueChange={(value) => {
+              setVolume(value[0] / 100);
+            }}
             onClick={(e) => e.stopPropagation()}
             aria-label="볼륨 조절"
           />
         </div>
 
-         {/* 우측: 목록 버튼 (모바일) */}
-         <div className="flex md:hidden items-center gap-3 justify-end">
-             <button
-                aria-label="재생목록"
-                onClick={(e) => { e.stopPropagation(); goToPlayer(); }}
-                className="p-2 hover:bg-white/10 rounded"
-             >
-                <ListMusic className="w-5 h-5" />
-            </button>
-         </div>
-
+        {/* 우측: 목록 버튼 (모바일) */}
+        <div className="flex md:hidden items-center gap-3 justify-end">
+          <button
+            aria-label="재생목록"
+            onClick={(e) => {
+              e.stopPropagation();
+              goToPlayer();
+            }}
+            className="p-2 hover:bg-white/10 rounded"
+          >
+            <ListMusic className="w-5 h-5" />
+          </button>
+        </div>
       </div>
     </div>
   );
