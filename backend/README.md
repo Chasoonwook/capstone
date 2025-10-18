@@ -55,6 +55,7 @@ POST /api/photos/analyze
 npm i express cors dotenv pg multer jsonwebtoken axios bcrypt
 npm install cookie-parser (0918 추가)
 npm install form-data(1001 추가)
+npm install node-cache(1018 추가)
 
 
 ### histoty.js 라우터 추가 ( 0901 )
