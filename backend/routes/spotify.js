@@ -620,11 +620,18 @@ router.post("/search/batch", async (req, res) => {
     for (const { key, cacheKey, trackData } of responses) {
          // API 호출 결과를 캐시에 저장 (오류 시 저장 안 함)
         if (trackData) {
-           spotifyApiCache.set(cacheKey, trackData);
+           // --- cacheKey 유효성 검사 추가 ---
+          if (typeof cacheKey === 'string' && cacheKey.length > 0) {
+              spotifyApiCache.set(cacheKey, trackData);
+          } else {
+              // cacheKey가 유효하지 않으면 로그를 남기고 캐싱을 건너뜁니다.
+              console.error(`[Batch Cache Error] Invalid cacheKey: ${cacheKey} for key: ${key}`);
+          }
         }
         // 결과를 최종 결과 객체에 추가
-        const currentTitle = typeof title === 'string' ? title : null; // title이 undefined일 경우 null로
-        const currentArtist = typeof artist === 'string' ? artist : null; // artist가 undefined일 경우 null로
+        const originalItem = itemsToFetch.find(item => item.key === key);
+        const currentTitle = originalItem ? (typeof originalItem.title === 'string' ? originalItem.title : null) : null;
+        const currentArtist = originalItem ? (typeof originalItem.artist === 'string' ? originalItem.artist : null) : null;
         const c = compactTrack(trackData) || { id: null, title: currentTitle, artist: currentArtist, album: null, albumImage: null, preview_url: null, spotify_uri: null };
         results[key] = { key, ...c };
       }
