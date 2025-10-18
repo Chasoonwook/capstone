@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { User, LogOut, LogIn, CheckCircle2, PlugZap, History, Settings, Heart } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { API_BASE, authHeaders } from "@/lib/api";
 import SpotifyConnectModal from "@/components/modals/SpotifyConnectModal";
+import { getSpotifyStatus } from "@/lib/spotifyClient"; // ✅ 캐싱/쿨다운 포함된 단일 진입점
 
 interface UserHeaderProps {
   user: any;
@@ -46,31 +47,47 @@ export default function UserHeader({
     "Guest";
 
   // ─────────────────────────────────────────────────────────
-  // Spotify 연결 상태: 쿠키 기반 /api/spotify/me 호출로만 판단
+  // Spotify 연결 상태 (캐시된 getSpotifyStatus 사용)
   // ─────────────────────────────────────────────────────────
   const [isSpotifyConnected, setIsSpotifyConnected] = useState(false);
   const [showSpotifyModal, setShowSpotifyModal] = useState(false);
+  const lastFocusCheckRef = useRef<number>(0); // 포커스 재조회 쿨다운
 
-  const checkSpotifyConnection = useCallback(async () => {
-    try {
-      const r = await fetch(`${API_BASE}/api/spotify/me`, {
-        method: "GET",
-        credentials: "include", // ★ 쿠키 동봉 필수
-        cache: "no-store",
-      });
-      setIsSpotifyConnected(r.ok);
-    } catch {
-      setIsSpotifyConnected(false);
-    }
+  const readSpotifyStatus = useCallback(async () => {
+    const s = await getSpotifyStatus(); // 내부 60초 캐시 + inflight 합치기 + 짧은 실패 TTL
+    setIsSpotifyConnected(!!s?.connected);
   }, []);
 
+  // 최초 1회
   useEffect(() => {
-    checkSpotifyConnection();
-    // 탭으로 돌아왔을 때 상태 갱신
-    const onFocus = () => checkSpotifyConnection();
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, [checkSpotifyConnection]);
+    let alive = true;
+    readSpotifyStatus().then(() => {
+      if (!alive) return;
+    });
+    return () => {
+      alive = false;
+    };
+  }, [readSpotifyStatus]);
+
+  // 창 포커스/가시화 시 재조회 (최소 30초 간격)
+  useEffect(() => {
+    const handler = () => {
+      const now = Date.now();
+      if (now - lastFocusCheckRef.current < 30_000) return; // 30초 쿨다운
+      lastFocusCheckRef.current = now;
+      readSpotifyStatus();
+    };
+    const visHandler = () => {
+      if (document.visibilityState === "visible") handler();
+    };
+
+    window.addEventListener("focus", handler);
+    document.addEventListener("visibilitychange", visHandler);
+    return () => {
+      window.removeEventListener("focus", handler);
+      document.removeEventListener("visibilitychange", visHandler);
+    };
+  }, [readSpotifyStatus]);
 
   // ─────────────────────────────────────────────────────────
   // 선호 장르 표시(기존 로직 유지)
@@ -161,17 +178,15 @@ export default function UserHeader({
 
   // ─────────────────────────────────────────────────────────
   // Spotify 연결 버튼: 백엔드 로그인 엔드포인트로 이동
-  // (우리가 만든 spotify.js는 /login 과 /authorize 둘 다 대응)
   // ─────────────────────────────────────────────────────────
   const handleSpotifyConnect = () => {
     setShowSpotifyModal(false);
     if (typeof window === "undefined") return;
 
     const { pathname, search, hash } = window.location;
-    const returnTo = `${pathname}${search || ""}${hash || ""}`; // 해시까지 보존
+    const returnTo = `${pathname}${search || ""}${hash || ""}`;
     const qs = new URLSearchParams({ return: returnTo }).toString();
-    
-    // prefer /login (cookie 버전), alias로 /authorize도 동작하도록 서버 구현됨
+
     window.location.href = `${API_BASE}/api/spotify/login?${qs}`;
   };
 

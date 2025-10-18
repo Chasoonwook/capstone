@@ -4,6 +4,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -64,7 +65,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     return isNaN(v) ? 0.8 : Math.min(1, Math.max(0, v));
   });
 
-  /** 오디오 엘리먼트 보장 */
+  /** 오디오 엘리먼트 보장 (앱 생명주기 동안 1개만) */
   const ensureAudio = () => {
     if (!audioRef.current) {
       const a = new Audio();
@@ -98,14 +99,21 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       const a = ensureAudio();
       const t = state.queue[state.index];
       if (!t?.audioUrl) return;
-      a.src = t.audioUrl;
-      await a.load();
+
+      // 같은 소스면 불필요한 reload 방지
+      if (a.src !== t.audioUrl) {
+        a.src = t.audioUrl!;
+        // HTMLAudioElement.load()는 void이므로 await 불필요
+        a.load();
+      }
 
       if (autoPlay) {
         try {
           await a.play();
           setIsPlaying(true);
-        } catch {}
+        } catch {
+          // 브라우저 자동재생 정책 등으로 실패 가능
+        }
       }
     },
     [state.queue, state.index],
@@ -159,15 +167,29 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     if (audioRef.current) audioRef.current.volume = vv;
   }, []);
 
+  /** ─────────────────────────────────────────────
+   *  동일 큐/동일 시작 인덱스면 no-op (리셋 루프 차단)
+   *  ──────────────────────────────────────────── */
+  const lastSigRef = useRef<string>("");
   const setQueueFromRecommend = useCallback((tracks: Track[], startIndex = 0) => {
+    const ids = (tracks || []).map((t) => String(t?.id ?? "")).join("|");
+    const sig = `${ids}#${startIndex}`;
+
+    if (sig === lastSigRef.current) {
+      // 같은 큐/같은 인덱스면 무시
+      return;
+    }
+    lastSigRef.current = sig;
+
     setState({ queue: tracks, index: startIndex, curMs: 0, durMs: 0 });
   }, []);
 
-  // index 또는 queue가 바뀌면 자동 로드(+재생)
+  /** index 또는 queue가 바뀌면 자동 로드(+재생) */
   const idx = state.index;
-  const qkey = state.queue.map((t) => t.id).join(",");
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useMemo(() => {
+  const qkey = useMemo(() => state.queue.map((t) => t.id).join(","), [state.queue]);
+
+  useEffect(() => {
+    // index 변경(사용자 조작) → 자동 재생
     void loadAndMaybePlay(true);
   }, [idx, qkey, loadAndMaybePlay]);
 

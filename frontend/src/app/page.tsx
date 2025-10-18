@@ -1,17 +1,17 @@
-"use client"
+"use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react"
-import { useRouter } from "next/navigation"
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 
-import PhotoUpload from "@/components/upload/PhotoUpload"
+import PhotoUpload from "@/components/upload/PhotoUpload";
 // import MoodBadges from "@/components/mood/MoodBadges" // 삭제
-import { useAuthUser } from "@/hooks/useAuthUser"
-import { useMusics } from "@/hooks/useMusics"
-import { useHistory } from "@/hooks/useHistory"
-import SpotifyConnectModal from "@/components/modals/SpotifyConnectModal"
+import { useAuthUser } from "@/hooks/useAuthUser";
+import { useMusics } from "@/hooks/useMusics";
+import { useHistory } from "@/hooks/useHistory";
+import SpotifyConnectModal from "@/components/modals/SpotifyConnectModal";
 
-import Header from "@/components/header/Header"
-import HistorySwitch from "@/components/history/HistorySwitch"
+import Header from "@/components/header/Header";
+import HistorySwitch from "@/components/history/HistorySwitch";
 
 import {
   Camera,
@@ -21,123 +21,98 @@ import {
   SkipForward,
   ListMusic,
   Volume2,
-} from "lucide-react"
-import { API_BASE } from "@/lib/api"
-import { getSpotifyStatus, invalidateSpotifyStatus } from "../lib/spotifyClient" // 클라이언트 전용
+} from "lucide-react";
+import { API_BASE } from "@/lib/api";
+
+// ✅ 컨텍스트에서 연동상태만 구독 (네트워크 호출 없음)
+import { useSpotifyStatus } from "../contexts/SpotifyStatusContext";
 
 export default function Page() {
-  const { user, isLoggedIn, logout } = useAuthUser()
-  const router = useRouter()
+  const { user, isLoggedIn, logout } = useAuthUser();
+  const router = useRouter();
 
-  const { musics, loading: musicsLoading, error: musicsError } = useMusics()
-  const { history, loading: historyLoading, error: historyError } = useHistory(isLoggedIn)
+  const { musics, loading: musicsLoading, error: musicsError } = useMusics();
+  const { history, loading: historyLoading, error: historyError } = useHistory(isLoggedIn);
 
-  // 선택 장르는 PhotoUpload에 전달만 하도록 유지(무드 UI는 제거됨)
-  const [selectedGenres, setSelectedGenres] = useState<string[]>([])
-  const [showUploadModal, setShowUploadModal] = useState(false)
+  // 선택 장르는 PhotoUpload에 전달만
+  const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
+  const [showUploadModal, setShowUploadModal] = useState(false);
 
   // 계정 식별자 (없으면 guest)
   const accountId = useMemo(() => {
-    const anyUser = (user ?? {}) as any
+    const anyUser = (user ?? {}) as any;
     return (
       anyUser.email?.trim() ||
       anyUser.id?.toString()?.trim() ||
       anyUser.uid?.toString()?.trim() ||
       anyUser.userId?.toString()?.trim() ||
       "guest"
-    )
-  }, [user])
+    );
+  }, [user]);
 
   // ✅ “한 번만” 표시를 위한 key
   const seenKey = useMemo(
     () => `spotify_connect_prompt_seen::${accountId}`,
     [accountId],
-  )
+  );
 
-  const [isSpotifyConnected, setIsSpotifyConnected] = useState(false)
-  const [showSpotifyModal, setShowSpotifyModal] = useState(false)
+  // 컨텍스트에서 연동 여부만 구독
+  const { status } = useSpotifyStatus();
+  const isSpotifyConnected = !!status?.connected;
+
+  const [showSpotifyModal, setShowSpotifyModal] = useState(false);
 
   // 추천 화면에서 내려왔을 때만 하단 내비 보이기
-  const [showNav, setShowNav] = useState(false)
+  const [showNav, setShowNav] = useState(false);
 
   // 플레이어 복귀(마지막 플레이어 경로 저장해 둔 값 사용)
   const openPlayer = () => {
     const last =
       (typeof window !== "undefined" && sessionStorage.getItem("lastPlayerRoute")) ||
-      "/recommend"
-    router.push(last)
-  }
+      "/recommend";
+    router.push(last);
+  };
 
-  // 최초 마운트: 쿼리 처리 및 status 캐시 무효화
+  // 최초 마운트: 쿼리 처리 및 스포티파이 모달 노출 결정(한 번만)
   useEffect(() => {
-    if (typeof window === "undefined") return
-    const url = new URL(window.location.href)
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
 
+    // 추천에서 복귀했는지
     if (url.searchParams.get("from") === "player") {
-      setShowNav(true)
-      url.searchParams.delete("from")
-      window.history.replaceState({}, "", url.toString())
+      setShowNav(true);
+      url.searchParams.delete("from");
+      window.history.replaceState({}, "", url.toString());
     } else {
-      setShowNav(false)
+      setShowNav(false);
     }
 
-    // 연동 리다이렉트 흔적이 있으면 강제 재조회
-    if (url.searchParams.has("spotify")) {
-      invalidateSpotifyStatus()
-      url.searchParams.delete("spotify")
-      window.history.replaceState({}, "", url.toString())
-    }
-  }, [])
+    // 모달 노출: 로그인했고, 아직 연결 안 됐고, 이전에 본 적 없을 때만
+    const alreadySeen = localStorage.getItem(seenKey) === "1";
+    setShowSpotifyModal(isLoggedIn && !isSpotifyConnected && !alreadySeen);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // 최초 1회만
 
-  // ✅ Spotify 연결 상태 체크 (포커스 시 재조회) — 모달은 “한 번만”
+  // 연동 상태가 바뀌었을 때(예: 다른 곳에서 연결 완료 후 돌아옴) 모달 닫기
   useEffect(() => {
-    let mounted = true
-
-    const checkConnected = async (force = false) => {
+    if (isSpotifyConnected) {
+      setShowSpotifyModal(false);
       try {
-        if (force) invalidateSpotifyStatus()
-        const j = await getSpotifyStatus()
-        if (!mounted) return
-
-        const connected = !!j?.connected
-        setIsSpotifyConnected(connected)
-
-        // 이미 본 적 있으면 절대 열지 않음
-        const alreadySeen = typeof window !== "undefined" && localStorage.getItem(seenKey) === "1"
-
-        // 로그인했고, 연결 안 되었고, 이전에 보여준 적 없을 때만 한 번 띄움
-        setShowSpotifyModal(isLoggedIn && !connected && !alreadySeen)
-      } catch {
-        if (!mounted) return
-        setIsSpotifyConnected(false)
-
-        const alreadySeen = typeof window !== "undefined" && localStorage.getItem(seenKey) === "1"
-        setShowSpotifyModal(isLoggedIn && !alreadySeen)
-      }
+        localStorage.setItem(seenKey, "1");
+      } catch {}
     }
-
-    // 최초 1회 강제 재조회
-    checkConnected(true)
-
-    // 포커스 전환 시 재조회(연결됐는지 정도만 갱신)
-    const onFocus = () => checkConnected(true)
-    window.addEventListener("focus", onFocus)
-    return () => {
-      mounted = false
-      window.removeEventListener("focus", onFocus)
-    }
-  }, [seenKey, isLoggedIn])
+  }, [isSpotifyConnected, seenKey]);
 
   return (
     <>
       <div className={`min-h-screen bg-background ${showNav ? "pb-20" : "pb-6"}`}>
-        <Suspense fallback={<div className="h-14" />}>
+        <Suspense fallback={<div className="h-14" />} >
           <Header
             user={user}
             isLoggedIn={isLoggedIn}
             onLogout={() => {
-              logout()
-              router.push("/login")
+              logout();
+              router.push("/login");
             }}
             musics={musics}
             loading={musicsLoading}
@@ -178,11 +153,7 @@ export default function Page() {
             </div>
           </section>
 
-          {/* ▼▼▼ ‘지금 기분은?’(무드 배지) 섹션 제거됨 ▼▼▼ */}
-          {/* <section className="px-4 mb-6">
-            <h2 className="text-sm font-semibold text-foreground mb-3">지금 기분은?</h2>
-            <MoodBadges selected={selectedGenres} onToggle={toggleGenre} />
-          </section> */}
+          {/* ▼▼▼ 무드 배지 섹션 제거됨 ▼▼▼ */}
         </main>
 
         {!showNav && (
@@ -212,8 +183,8 @@ export default function Page() {
               isLoggedIn={isLoggedIn}
               selectedGenres={selectedGenres}
               onRequireLogin={() => {
-                setShowUploadModal(false)
-                router.push("/login")
+                setShowUploadModal(false);
+                router.push("/login");
               }}
             />
           </div>
@@ -225,15 +196,15 @@ export default function Page() {
         open={isLoggedIn && !isSpotifyConnected && showSpotifyModal}
         onClose={() => {
           try {
-            localStorage.setItem(seenKey, "1") // 닫으면 다시는 안 뜸
+            localStorage.setItem(seenKey, "1"); // 닫으면 다시는 안 뜸
           } catch {}
-          setShowSpotifyModal(false)
+          setShowSpotifyModal(false);
         }}
         onConnect={() => {
           try {
-            localStorage.setItem(seenKey, "1") // 연결 시도해도 다시는 안 뜨게
+            localStorage.setItem(seenKey, "1"); // 연결 시도해도 다시는 안 뜨게
           } catch {}
-          window.location.href = `${API_BASE}/api/spotify/authorize?return=/`
+          window.location.href = `${API_BASE}/api/spotify/authorize?return=/`;
         }}
       />
 
@@ -315,5 +286,5 @@ export default function Page() {
         </nav>
       )}
     </>
-  )
+  );
 }
