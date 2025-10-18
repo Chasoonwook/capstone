@@ -56,33 +56,33 @@ type Ctx = {
 const PlayerCtx = createContext<Ctx | null>(null);
 
 /* =======================
-   Spotify 검색 캐시/백오프
+   검색 중복 방지/실패 캐시/스로틀
    ======================= */
-const _resultCache = new Map<string, Track>();
-const _inflight = new Map<string, Promise<Track>>();
-let _lastHit = 0;
-const MIN_GAP_MS = 350;
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const inflightMap = new Map<string, Promise<Track>>(); // 동일 키 1-flight
+const failCache = new Map<string, number>();           // 실패 키 -> ts
+const FAIL_TTL_MS = 3 * 60 * 1000;                     // 실패 3분 동안 재검색 금지
+const MIN_GAP_MS = 800;                                 // 호출 간 최소 간격(스로틀)
+let lastHit = 0;
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** 재생 직전, 프리뷰/Spotify ID 없으면 1회만 검색해서 보강 */
 async function resolvePlayableSource(t: Track): Promise<Track> {
-  if (!t) return t;
-  if (t.spotify_uri || t.spotify_track_id || t.audioUrl) return t;
-  if (!t.title) return t;
+  if (!t || t.audioUrl || t.spotify_uri || t.spotify_track_id || !t.title) return t;
 
   const key = `${t.title}|${t.artist ?? ""}`.trim().toLowerCase();
 
-  const cached = _resultCache.get(key);
-  if (cached) return { ...t, ...cached };
+  // 최근 실패한 곡은 건너뜀(429 폭주 방지)
+  const lastFail = failCache.get(key) || 0;
+  if (Date.now() - lastFail < FAIL_TTL_MS) return t;
 
-  const inprog = _inflight.get(key);
-  if (inprog) {
-    const merged = await inprog;
-    return { ...t, ...merged };
-  }
+  // 동일 키 요청 진행 중이면 그 결과 재사용(1-flight)
+  const inflight = inflightMap.get(key);
+  if (inflight) return { ...t, ...(await inflight) };
 
   const p = (async (): Promise<Track> => {
-    const gap = Date.now() - _lastHit;
-    if (gap < MIN_GAP_MS) await sleep(MIN_GAP_MS - gap);
+    // 스로틀: 호출 간 최소 간격 보장
+    const gap = Date.now() - lastHit;
+    if (gap < MIN_GAP_MS) await wait(MIN_GAP_MS - gap);
 
     const qs = new URLSearchParams({
       title: t.title,
@@ -90,30 +90,20 @@ async function resolvePlayableSource(t: Track): Promise<Track> {
       limit: "1",
     });
 
-    let attempt = 0;
     let data: any = null;
-    while (attempt < 3) {
-      _lastHit = Date.now();
-      let resp: Response | null = null;
-      try {
-        resp = await fetch(`${API_BASE}/api/spotify/search?${qs.toString()}`, {
-          credentials: "include",
-        });
-      } catch {
-        // 네트워크 에러는 소폭 대기 후 재시도
-      }
 
-      if (resp && resp.ok) {
-        data = await resp.json();
-        break;
-      }
-      if (resp && resp.status === 429) {
-        const ra = Number(resp.headers.get("retry-after")) || 1;
-        await sleep(Math.max(ra * 1000, 800));
-      } else {
-        await sleep(400);
-      }
-      attempt++;
+    // 과도 재시도 금지: 1회만 시도
+    lastHit = Date.now();
+    const resp = await fetch(`${API_BASE}/api/spotify/search?${qs.toString()}`, {
+      credentials: "include",
+    }).catch(() => null);
+
+    if (resp?.ok) {
+      data = await resp.json();
+    } else {
+      // 429/기타 실패 → 부정 캐시 기록
+      failCache.set(key, Date.now());
+      return t;
     }
 
     const item =
@@ -122,7 +112,10 @@ async function resolvePlayableSource(t: Track): Promise<Track> {
       data?.[0] ||
       null;
 
-    if (!item) return t;
+    if (!item) {
+      failCache.set(key, Date.now());
+      return t;
+    }
 
     const preview =
       item?.preview_url || item?.previewUrl || item?.audioUrl || null;
@@ -131,27 +124,20 @@ async function resolvePlayableSource(t: Track): Promise<Track> {
     const sid =
       item?.id || item?.trackId || item?.spotify_track_id || null;
 
-    const enriched: Track = {
-      id: t.id,
-      title: t.title,
-      artist: t.artist,
-      duration: t.duration ?? null,
-      selected_from: t.selected_from ?? null,
+    return {
+      ...t,
       audioUrl: preview ?? t.audioUrl ?? null,
       coverUrl: cover ?? t.coverUrl ?? null,
       spotify_track_id: sid ?? t.spotify_track_id ?? null,
-      spotify_uri: (sid ? `spotify:track:${sid}` : t.spotify_uri) ?? null,
+      spotify_uri: sid ? `spotify:track:${sid}` : (t.spotify_uri ?? null),
     };
-
-    _resultCache.set(key, enriched);
-    return enriched;
   })();
 
-  _inflight.set(key, p);
+  inflightMap.set(key, p);
   try {
     return await p;
   } finally {
-    _inflight.delete(key);
+    inflightMap.delete(key);
   }
 }
 
@@ -176,7 +162,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     return isNaN(v) ? 0.8 : Math.min(1, Math.max(0, v));
   });
 
-  // 인덱스 변경 useEffect가 play()를 또 부르지 않도록 제어
+  // 인덱스 변경 useEffect의 자동 호출을 억제(중복 play 방지)
   const suppressAutoPlayRef = useRef(false);
 
   const ensureAudio = useCallback(() => {
@@ -246,7 +232,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       const targetIndex = index ?? state.index;
       if (!baseTrack) return;
 
-      // 1) 소스 보강 (429 고려: 캐시/백오프/1-flight)
+      // 1) 소스 보강 (과도 재시도/중복 호출 차단됨)
       const targetTrack = await resolvePlayableSource(baseTrack);
 
       // 2) 소스 결정
@@ -314,10 +300,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      // 4) 둘 다 없으면 잠시 후 재시도(캐시/백오프 덕분에 과열 없음)
+      // 4) 둘 다 없으면 재시도 없이 바로 다음 곡으로 (폭주 차단)
       console.warn("No playable source for track:", targetTrack.title);
       setIsPlaying(false);
-      setTimeout(() => play(targetTrack, targetIndex), 800);
+      next();
     },
     [
       state.index,
@@ -325,6 +311,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       isSpotifyConnected,
       spotifyPlayer,
       ensureAudio,
+      next,
     ]
   );
 
@@ -412,7 +399,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
       if (isPlaying) pause();
 
-      // 인덱스 변경 useEffect의 자동 재생을 잠시 억제
+      // 인덱스 변경 hook의 자동 재생을 잠시 억제(중복 호출 방지)
       suppressAutoPlayRef.current = true;
 
       setState((s) => ({
@@ -443,7 +430,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     return () => a.removeEventListener("ended", handleEnded);
   }, [ensureAudio, state.playbackSource, next]);
 
-  // 인덱스 변경 시 자동 재생 (setQueueAndPlay가 호출한 직후엔 억제)
+  // 인덱스 변경 시 자동 재생 (setQueueAndPlay 직후엔 억제)
   useEffect(() => {
     const track = state.queue[state.index];
     if (suppressAutoPlayRef.current) return;
