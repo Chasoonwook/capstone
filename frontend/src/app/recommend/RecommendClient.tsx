@@ -29,7 +29,7 @@ import { formatTime } from "./utils/media";
 /** 사진 바이너리 URL */
 const buildPhotoSrc = (photoId?: string | null) =>
   photoId
-    ? `${API_BASE}/photos/${encodeURIComponent(String(photoId))}/binary` // ✅ /api 중복 제거
+    ? `${API_BASE}/photos/${encodeURIComponent(String(photoId))}/binary`
     : null;
 
 /** 서버 응답을 Track으로 정규화 */
@@ -132,7 +132,7 @@ async function prefetchCoversAndUris(list: Track[]): Promise<Track[]> {
         audioUrl: t.audioUrl || hit.preview_url || null,
         duration: t.duration ?? hitDurationSec,
         spotify_uri: t.spotify_uri || uri || null,
-        spotify_track_id: (t as any).spotify_track_id || hit.id || (uri?.split(":").pop() || null),
+        spotify_track_id: t.spotify_track_id || hit.id || (uri?.split(":").pop() || null),
       };
     });
   } catch (e) {
@@ -145,6 +145,9 @@ export default function RecommendClient() {
   const router = useRouter();
   const player = usePlayer();
   const { status: spotifyStatus } = useSpotifyStatus();
+
+  // Spotify 연결 + SDK 준비 여부
+  const isSpotifyConnected = (spotifyStatus?.connected ?? false) && player.isSpotifyReady;
 
   // --- 상태 ---
   const [photoId, setPhotoId] = useState<string | null>(null);
@@ -199,7 +202,7 @@ export default function RecommendClient() {
       setLoading(true);
       setError(null);
       try {
-        const url = `${API_BASE}/recommendations/by-photo/${encodeURIComponent(photoId)}`; // ✅ /api 중복 제거
+        const url = `${API_BASE}/recommendations/by-photo/${encodeURIComponent(photoId)}`;
         const res = await fetch(url, { credentials: "include" });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: any = await res.json();
@@ -255,7 +258,6 @@ export default function RecommendClient() {
   const curSec = Math.floor(curMs / 1000);
   const durSec = Math.floor(durMs / 1000);
   const volume = player.volume;
-  const isSpotifyPlaying = player.state.playbackSource === "spotify";
 
   // --- 제어 핸들러 ---
   const handlePlayPause = player.togglePlayPause;
@@ -550,8 +552,10 @@ export default function RecommendClient() {
             )}
             {!loading &&
               playlist.map((track, index) => {
+                // ✅ 연결/준비 여부 기준으로 '재생 가능' 판단
+                const isPlayable = isSpotifyConnected ? !!track.spotify_uri : !!track.audioUrl;
                 const isActive = index === player.state.index;
-                const isPlayable = isSpotifyPlaying ? !!track.spotify_uri : !!track.audioUrl;
+
                 return (
                   <button
                     key={`${track.id}-${index}`}
@@ -575,7 +579,7 @@ export default function RecommendClient() {
                       <p className="text-sm text-white/60 truncate">
                         {track.artist}
                         <span className="ml-2 text-xs text-white/50">
-                          {isSpotifyPlaying
+                          {isSpotifyConnected
                             ? track.spotify_uri
                               ? "Spotify"
                               : "재생 불가"
