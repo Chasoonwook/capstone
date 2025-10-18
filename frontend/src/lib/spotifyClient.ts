@@ -30,7 +30,7 @@ export async function getSpotifyStatus(force = false): Promise<SpotifyMe> {
   if (!force && _cache && now - _last < TTL_MS) return _cache;
   if (!force && _inflight) return _inflight;
 
-  const url = `${API_BASE}/api/spotify/me`;
+  const url = `${API_BASE}/spotify/me`;
 
   _inflight = fetch(url, { method: "GET", credentials: "include" })
     .then(async (res): Promise<SpotifyMe> => {
@@ -104,7 +104,7 @@ async function loadSpotifySdkScript(): Promise<void> {
 }
 
 async function fetchSdkToken(): Promise<string> {
-  const r = await fetch(`${API_BASE}/api/spotify/token`, {
+  const r = await fetch(`${API_BASE}/spotify/token`, {
     credentials: "include",
   });
   const j = await r.json();

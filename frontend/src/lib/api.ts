@@ -1,5 +1,5 @@
 // src/lib/api.ts
-const RAW = process.env.NEXT_PUBLIC_API_BASE || "https://capstone-app-back.onrender.com/api";
+const RAW = process.env.NEXT_PUBLIC_API_BASE || "https://capstone-app-back.onrender.com";
 
 // 항상 /api 로 끝나도록 보정
 const url = new URL(RAW.includes("://") ? RAW : `https://${RAW}`);
