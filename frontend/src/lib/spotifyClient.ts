@@ -52,7 +52,6 @@ export async function getSpotifyStatus(force = false): Promise<SpotifyMe> {
         // 비로그인/토큰없음 → 연결 안 됨 취급 (짧은 TTL로 캐시)
         _cache = { connected: false };
         _last = Date.now(); // 실패 TTL 적용
-        // 실패 TTL 동안만 유효하도록 시간차에 따라 TTL 계산
         setTimeout(() => (_cache = null), RETRY_TTL_MS);
         return _cache;
       }
@@ -87,10 +86,176 @@ export async function getSpotifyStatus(force = false): Promise<SpotifyMe> {
       return _cache;
     })
     .finally(() => {
-      // 호출자에게 반환된 뒤에는 inflight 해제
-      // (동시 호출은 위에서 합쳐짐)
       _inflight = null;
     });
 
   return _inflight;
+}
+
+/* =======================================================================
+   ▼▼▼ 여기부터 추가: Web Playback SDK 로더 + 플레이어 생성 + 간단 API ▼▼▼
+   ======================================================================= */
+
+declare global {
+  interface Window {
+    onSpotifyWebPlaybackSDKReady?: () => void;
+    Spotify?: any;
+  }
+}
+
+/** SDK 스크립트 로드 Promise (중복 로드 방지) */
+let _sdkPromise: Promise<typeof window.Spotify> | null = null;
+
+/** 브라우저에서 Spotify Web Playback SDK를 로드하고 window.Spotify를 resolve */
+export function loadSpotifySDK(): Promise<typeof window.Spotify> {
+  if (_sdkPromise) return _sdkPromise;
+
+  _sdkPromise = new Promise((resolve, reject) => {
+    if (typeof window === "undefined") {
+      reject(new Error("SSR: Spotify SDK cannot load on server"));
+      return;
+    }
+
+    if (window.Spotify) {
+      resolve(window.Spotify);
+      return;
+    }
+
+    window.onSpotifyWebPlaybackSDKReady = () => {
+      if (window.Spotify) resolve(window.Spotify);
+      else reject(new Error("Spotify SDK ready but not found"));
+    };
+
+    const ID = "spotify-web-playback-sdk";
+    if (!document.getElementById(ID)) {
+      const s = document.createElement("script");
+      s.id = ID;
+      s.async = true;
+      s.src = "https://sdk.scdn.co/spotify-player.js";
+      s.onerror = () => reject(new Error("Spotify SDK script load failed"));
+      document.head.appendChild(s);
+    }
+  });
+
+  return _sdkPromise;
+}
+
+/** 백엔드 프록시에서 SDK용 액세스 토큰을 받아오는 헬퍼 */
+export async function fetchSdkAccessToken(): Promise<string> {
+  const res = await fetch(`${API_BASE}/api/spotify/token`, {
+    method: "GET",
+    credentials: "include",
+  });
+  if (!res.ok) {
+    throw new Error(`token failed: ${res.status}`);
+  }
+  const j = await res.json();
+  if (!j?.access_token) throw new Error("No access_token");
+  return j.access_token as string;
+}
+
+/**
+ * Web Playback SDK Player 생성
+ * - 성공 시 { player, deviceId } 반환
+ * - 실패 시 throw
+ */
+export async function createWebPlayer(params?: {
+  name?: string;
+  volume?: number; // 0 ~ 1
+  /** 필요하면 커스텀 토큰 획득 로직 주입 */
+  getOAuthToken?: () => Promise<string>;
+}): Promise<{ player: any; deviceId: string }> {
+  const { name = "MoodTune Web Player", volume = 0.8, getOAuthToken } = params || {};
+  const Spotify = await loadSpotifySDK();
+
+  const player = new Spotify.Player({
+    name,
+    volume,
+    getOAuthToken: async (cb: (token: string) => void) => {
+      try {
+        const token = getOAuthToken ? await getOAuthToken() : await fetchSdkAccessToken();
+        cb(token);
+      } catch (e) {
+        console.error("[SpotifySDK] getOAuthToken failed:", e);
+        cb("");
+      }
+    },
+  });
+
+  player.addListener("initialization_error", ({ message }: any) =>
+    console.error("SDK init error:", message),
+  );
+  player.addListener("authentication_error", ({ message }: any) =>
+    console.error("SDK auth error:", message),
+  );
+  player.addListener("account_error", ({ message }: any) =>
+    console.error("SDK account error:", message),
+  );
+  player.addListener("playback_error", ({ message }: any) =>
+    console.error("SDK playback error:", message),
+  );
+
+  // ready 이벤트에서 device_id 확보
+  const deviceId: string = await new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => reject(new Error("SDK ready timeout")), 12_000);
+    player.addListener("ready", ({ device_id }: any) => {
+      clearTimeout(timeout);
+      resolve(device_id);
+    });
+  });
+
+  const ok = await player.connect();
+  if (!ok) throw new Error("player.connect() failed");
+  return { player, deviceId };
+}
+
+/* -----------------------------------------------------------------------
+   간단 제어 헬퍼(백엔드 프록시 경유) — 필요한 곳에서 import해서 사용하세요.
+   ----------------------------------------------------------------------- */
+
+/** 이 기기로 재생 전환 (필요 시 play=true 로 곡 시작) */
+export async function transferToDevice(deviceId: string, play = true) {
+  await fetch(`${API_BASE}/api/spotify/transfer`, {
+    method: "PUT",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ device_id: deviceId, play }),
+  });
+}
+
+/** 특정 트랙 URI(들) 재생 (deviceId 생략 시 Spotify가 기본 기기로 시도) */
+export async function playUris(uris: string[], deviceId?: string, position_ms?: number) {
+  const url = new URL(`${API_BASE}/api/spotify/play`);
+  const body: any = { uris };
+  if (typeof position_ms === "number") body.position_ms = position_ms;
+  if (deviceId) url.searchParams.set("device_id", deviceId);
+
+  await fetch(url.toString(), {
+    method: "PUT",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function pausePlayback() {
+  await fetch(`${API_BASE}/api/spotify/pause`, {
+    method: "PUT",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+export async function nextTrack() {
+  await fetch(`${API_BASE}/api/spotify/next`, {
+    method: "POST",
+    credentials: "include",
+  });
+}
+
+export async function prevTrack() {
+  await fetch(`${API_BASE}/api/spotify/previous`, {
+    method: "POST",
+    credentials: "include",
+  });
 }

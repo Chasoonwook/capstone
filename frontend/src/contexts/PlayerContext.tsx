@@ -1,3 +1,4 @@
+// src/contexts/PlayerContext.tsx
 "use client";
 
 import {
@@ -9,13 +10,23 @@ import {
   useRef,
   useState,
 } from "react";
+import { API_BASE } from "@/lib/api";
+import {
+  createWebPlayer,
+  transferToDevice,
+  playUris,
+  pausePlayback,
+  nextTrack as sdkNext,
+  prevTrack as sdkPrev,
+} from "@/lib/spotifyClient";
 
 /** 트랙 모델 */
 export type Track = {
   id: string | number;
   title: string;
   artist: string;
-  audioUrl?: string | null; // Spotify preview_url
+  audioUrl?: string | null;     // 미리듣기용
+  spotify_uri?: string | null;  // 전체재생용
 };
 
 export type PlayerState = {
@@ -29,23 +40,27 @@ type Ctx = {
   state: PlayerState;
   isPlaying: boolean;
   volume: number;
-
+  // 제어
   play: () => Promise<void>;
   pause: () => Promise<void>;
   next: () => void;
   prev: () => void;
-  seek: (ms: number) => void;
+  seek: (ms: number) => void; // (SDK 모드에서는 noop)
   setVolume: (v: number) => void;
-
+  // 큐 주입
   setQueueFromRecommend: (tracks: Track[], startIndex?: number) => void;
 };
 
 const PlayerCtx = createContext<Ctx | null>(null);
 
-const isPlayable = (t?: Track) => !!t?.audioUrl;
-
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
+  // HTMLAudio (preview fallback)
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Spotify SDK
+  const sdkPlayerRef = useRef<any | null>(null);
+  const [sdkDeviceId, setSdkDeviceId] = useState<string | null>(null);
+  const [spConnected, setSpConnected] = useState<boolean>(false);
 
   const [state, setState] = useState<PlayerState>({
     queue: [],
@@ -62,21 +77,68 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     return isNaN(v) ? 0.8 : Math.min(1, Math.max(0, v));
   });
 
-  /** 현재 로드 사이클 식별자(이벤트가 옛 src에서 온 것 무시) */
-  const loadIdRef = useRef(0);
-  /** 실제 재생이 시작되었는지(ended 스킵 방지) */
-  const startedRef = useRef(false);
-  /** 워치독 타이머 */
-  const watchdogRef = useRef<number | null>(null);
+  /** Spotify 연결 여부 (쿠키 기반 상태) 1회 확인 */
+  useEffect(() => {
+    let mounted = true;
+    fetch(`${API_BASE}/api/spotify/status`, { credentials: "include" })
+      .then((r) => r.json().catch(() => ({})))
+      .then((j) => {
+        if (!mounted) return;
+        setSpConnected(!!j?.connected);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setSpConnected(false);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
-  const clearWatchdog = () => {
-    if (watchdogRef.current != null) {
-      window.clearTimeout(watchdogRef.current);
-      watchdogRef.current = null;
+  /** SDK 초기화: 연결 + Premium이면 SDK 생성 → device_id 확보 */
+  useEffect(() => {
+    let aborted = false;
+
+    async function bootSDK() {
+      if (!spConnected) return; // 연결 안 됨 → 미리듣기만 사용
+      try {
+        // 이미 초기화 됐으면 스킵
+        if (sdkPlayerRef.current && sdkDeviceId) return;
+
+        const { player, deviceId } = await createWebPlayer({
+          name: "MoodTune Web Player",
+          volume,
+        });
+
+        if (aborted) {
+          try {
+            player.disconnect();
+          } catch {}
+          return;
+        }
+
+        sdkPlayerRef.current = player;
+        setSdkDeviceId(deviceId);
+      } catch (e) {
+        console.warn("[SDK] init failed → preview fallback:", e);
+      }
     }
-  };
 
-  const ensureAudio = () => {
+    void bootSDK();
+    return () => {
+      aborted = true;
+    };
+  }, [spConnected, volume, sdkDeviceId]);
+
+  /** 현재 SDK 모드로 재생 가능한지 */
+  const isSpotifyMode = useCallback(() => {
+    if (!spConnected || !sdkDeviceId) return false;
+    const t = state.queue[state.index];
+    return !!t?.spotify_uri;
+  }, [spConnected, sdkDeviceId, state.queue, state.index]);
+
+  /** HTMLAudio 보장(미리듣기) */
+  const ensureAudio = useCallback(() => {
     if (!audioRef.current) {
       const a = new Audio();
       a.preload = "metadata";
@@ -88,8 +150,6 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
           curMs: a.currentTime * 1000,
           durMs: a.duration ? a.duration * 1000 : s.durMs,
         }));
-        // 실제 재생이 0.5초 이상 진행되면 started
-        if (a.currentTime >= 0.5) startedRef.current = true;
       });
 
       a.addEventListener("loadedmetadata", () => {
@@ -99,225 +159,187 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         }));
       });
 
-      a.addEventListener("playing", () => {
-        startedRef.current = true;
-      });
-
       a.addEventListener("ended", () => {
-        // 실제 재생된 적이 있어야만 다음 곡
-        if (startedRef.current) next();
-      });
-
-      a.addEventListener("error", () => {
-        // 오류는 정지로만 처리(워치독이 있으면 거기서 스킵)
-        setIsPlaying(false);
+        // 미리듣기 끝 → 다음 트랙
+        next();
       });
 
       audioRef.current = a;
     }
     return audioRef.current!;
-  };
-
-  /** 현재 리스트에서 start 이상 첫 재생가능 인덱스(-1: 없음) */
-  const findNextPlayable = useCallback(
-    (start: number) => {
-      const q = state.queue;
-      for (let i = Math.max(0, start); i < q.length; i++) {
-        if (isPlayable(q[i])) return i;
-      }
-      return -1;
-    },
-    [state.queue]
-  );
-
-  /** 현재 리스트에서 start 이하 뒤로 첫 재생가능 인덱스(-1: 없음) */
-  const findPrevPlayable = useCallback(
-    (start: number) => {
-      const q = state.queue;
-      for (let i = Math.min(start, q.length - 1); i >= 0; i--) {
-        if (isPlayable(q[i])) return i;
-      }
-      return -1;
-    },
-    [state.queue]
-  );
-
-  /** src 준비를 기다리는 유틸 */
-  const waitForCanPlay = (a: HTMLAudioElement, id: number, timeoutMs = 2000) =>
-    new Promise<void>((resolve, reject) => {
-      let done = false;
-      const onReady = () => {
-        if (done || id !== loadIdRef.current) return;
-        done = true;
-        a.removeEventListener("canplaythrough", onReady);
-        resolve();
-      };
-      const to = window.setTimeout(() => {
-        if (done) return;
-        done = true;
-        a.removeEventListener("canplaythrough", onReady);
-        reject(new Error("canplay timeout"));
-      }, timeoutMs);
-      a.addEventListener("canplaythrough", onReady, { once: true });
-      // 빠르게 로드되어도 resolve
-      if (a.readyState >= 3) {
-        clearTimeout(to);
-        a.removeEventListener("canplaythrough", onReady);
-        resolve();
-      }
-    });
+  }, [volume]);
 
   /** 현재 index 트랙을 로드(+옵션 자동 재생) */
   const loadAndMaybePlay = useCallback(
     async (autoPlay = false) => {
-      const a = ensureAudio();
-      clearWatchdog();
-      startedRef.current = false;
-      const myId = ++loadIdRef.current;
-
-      // 현재 인덱스가 재생 불가면 다음 재생 가능 곡으로 점프
-      if (!isPlayable(state.queue[state.index])) {
-        const ni = findNextPlayable(state.index + 1);
-        if (ni === -1) {
-          // 전체가 재생 불가 → 정지
-          if (!a.paused) a.pause();
-          setIsPlaying(false);
-          setState((s) => ({ ...s, curMs: 0, durMs: 0 }));
-          return;
-        }
-        setState((s) => ({ ...s, index: ni, curMs: 0 }));
+      // 1) SDK 가능한 경우: HTMLAudio 로드 불필요
+      if (isSpotifyMode()) {
+        if (autoPlay) await play();
         return;
       }
 
-      const t = state.queue[state.index]!;
+      // 2) Preview (HTMLAudio)
+      const a = ensureAudio();
+      const t = state.queue[state.index];
+
+      if (!t?.audioUrl) {
+        a.src = "";
+        setState((s) => ({ ...s, curMs: 0, durMs: 0 }));
+        setIsPlaying(false);
+        return;
+      }
+
       if (a.src !== t.audioUrl) {
         a.src = t.audioUrl!;
         a.load();
-      } else {
-        a.currentTime = 0;
       }
-
-      try {
-        await waitForCanPlay(a, myId, 2000);
-      } catch {
-        // 준비가 안 되면 워치독으로 다음 곡 시도(2.5s)
-      }
-
       if (autoPlay) {
         try {
           await a.play();
           setIsPlaying(true);
-        } catch (err: any) {
-          // 오토플레이 거절(NotAllowedError 등)은 스킵하지 말고 멈춤
+        } catch (err) {
+          console.warn("Preview autoplay failed:", err);
           setIsPlaying(false);
         }
+      } else {
+        if (!a.paused) a.pause();
+        setIsPlaying(false);
       }
-
-      // 지연/깨진 미디어 워치독: 2.5s 내에 재생 시작되지 않으면 다음 곡
-      clearWatchdog();
-      watchdogRef.current = window.setTimeout(() => {
-        if (!startedRef.current && myId === loadIdRef.current) {
-          next(); // 다음 재생 가능 곡으로
-        }
-      }, 2500);
     },
-    [state.queue, state.index, findNextPlayable],
+    [isSpotifyMode, ensureAudio, state.queue, state.index],
   );
 
+  /** 재생/일시정지/탐색/볼륨/이동 제어 */
   const play = useCallback(async () => {
+    // SDK 모드: 해당 device로 transfer + play(uris)
+    if (isSpotifyMode()) {
+      const t = state.queue[state.index];
+      const uri = t?.spotify_uri;
+      if (!sdkDeviceId || !uri) return;
+
+      await transferToDevice(sdkDeviceId, true).catch(() => {});
+      await playUris([uri], sdkDeviceId).catch(() => {});
+      setIsPlaying(true);
+      return;
+    }
+
+    // Preview 모드
     const a = ensureAudio();
+    const t = state.queue[state.index];
+    if (!t?.audioUrl) return;
     try {
       await a.play();
       setIsPlaying(true);
-    } catch {
+    } catch (err) {
+      console.error("Preview play failed:", err);
       setIsPlaying(false);
     }
-  }, []);
+  }, [isSpotifyMode, state.queue, state.index, sdkDeviceId, ensureAudio]);
 
   const pause = useCallback(async () => {
+    if (isSpotifyMode()) {
+      await pausePlayback().catch(() => {});
+      setIsPlaying(false);
+      return;
+    }
     const a = ensureAudio();
     a.pause();
     setIsPlaying(false);
-  }, []);
+  }, [isSpotifyMode, ensureAudio]);
 
   const next = useCallback(() => {
-    clearWatchdog();
-    setState((s) => {
-      const q = s.queue;
-      let i = s.index + 1;
-      while (i < q.length && !isPlayable(q[i])) i++;
-      if (i >= q.length) i = s.index; // 못 찾으면 그대로
-      return { ...s, index: i, curMs: 0 };
-    });
-  }, []);
+    if (isSpotifyMode()) {
+      sdkNext().catch(() => {});
+    }
+    setState((s) => ({
+      ...s,
+      index: Math.min(s.index + 1, s.queue.length - 1),
+      curMs: 0,
+    }));
+  }, [isSpotifyMode]);
 
   const prev = useCallback(() => {
-    const a = ensureAudio();
-    clearWatchdog();
-    setState((s) => {
+    if (isSpotifyMode()) {
+      sdkPrev().catch(() => {});
+    } else {
+      const a = ensureAudio();
       if (a.currentTime > 3) {
         a.currentTime = 0;
-        return { ...s, curMs: 0 };
+        setState((s) => ({ ...s, curMs: 0 }));
+        return;
       }
-      const pi = findPrevPlayable(s.index - 1);
-      return { ...s, index: pi === -1 ? 0 : pi, curMs: 0 };
-    });
-  }, [findPrevPlayable]);
+    }
+    setState((s) => ({
+      ...s,
+      index: Math.max(0, s.index - 1),
+      curMs: 0,
+    }));
+  }, [isSpotifyMode, ensureAudio]);
 
-  const seek = useCallback((ms: number) => {
-    const a = ensureAudio();
-    a.currentTime = Math.max(0, ms / 1000);
-    setState((s) => ({ ...s, curMs: a.currentTime * 1000 }));
-  }, []);
+  const seek = useCallback(
+    (ms: number) => {
+      // SDK 시킹은 상태동기/레이트리밋 고려가 필요 → 일단 noop
+      if (isSpotifyMode()) return;
+
+      const a = ensureAudio();
+      const target = Math.max(0, ms / 1000);
+      const duration = a.duration || state.durMs / 1000 || 0;
+      a.currentTime = Math.min(target, duration > 0 ? duration - 0.1 : 0);
+      setState((s) => ({ ...s, curMs: a.currentTime * 1000 }));
+    },
+    [isSpotifyMode, ensureAudio, state.durMs],
+  );
 
   const setVolume = useCallback((v: number) => {
     const vv = Math.min(1, Math.max(0, v));
     _setVolume(vv);
-    if (typeof window !== "undefined") {
+    try {
       localStorage.setItem("player_volume", String(vv));
-    }
+    } catch {}
+    // SDK 볼륨
+    try {
+      sdkPlayerRef.current?.setVolume?.(vv);
+    } catch {}
+    // HTMLAudio 볼륨
     if (audioRef.current) audioRef.current.volume = vv;
   }, []);
 
-  /** 동일 큐/시작 인덱스면 no-op */
+  /** 동일 큐 재주입 방지 */
   const lastSigRef = useRef<string>("");
   const setQueueFromRecommend = useCallback((tracks: Track[], startIndex = 0) => {
-    let si = startIndex;
-    while (si < tracks.length && !isPlayable(tracks[si])) si++;
-    if (si >= tracks.length) {
-      si = 0;
-      while (si < tracks.length && !isPlayable(tracks[si])) si++;
-      if (si >= tracks.length) si = 0;
-    }
-
+    const safeIndex = Math.max(0, Math.min(startIndex, (tracks?.length || 1) - 1));
     const ids = (tracks || []).map((t) => String(t?.id ?? "")).join("|");
-    const sig = `${ids}#${si}`;
+    const sig = `${ids}#${safeIndex}`;
     if (sig === lastSigRef.current) return;
     lastSigRef.current = sig;
 
-    setState({ queue: tracks, index: si, curMs: 0, durMs: 0 });
+    setState({ queue: tracks, index: safeIndex, curMs: 0, durMs: 0 });
+    setIsPlaying(false);
   }, []);
 
-  /** index/queue 변경 시 자동 로드(+자동재생) */
+  /** index/queue 변경 → 자동 로드(+재생) */
   const idx = state.index;
   const qkey = useMemo(() => state.queue.map((t) => t.id).join(","), [state.queue]);
   useEffect(() => {
     void loadAndMaybePlay(true);
-    return () => clearWatchdog();
   }, [idx, qkey, loadAndMaybePlay]);
 
-  const ctx: Ctx = {
-    state,
-    isPlaying,
-    volume,
-    play,
-    pause,
-    next,
-    prev,
-    seek,
-    setVolume,
-    setQueueFromRecommend,
-  };
+  /** 컨텍스트 값 */
+  const ctx: Ctx = useMemo(
+    () => ({
+      state,
+      isPlaying,
+      volume,
+      play,
+      pause,
+      next,
+      prev,
+      seek,
+      setVolume,
+      setQueueFromRecommend,
+    }),
+    [state, isPlaying, volume, play, pause, next, prev, seek, setVolume, setQueueFromRecommend],
+  );
 
   return <PlayerCtx.Provider value={ctx}>{children}</PlayerCtx.Provider>;
 }
