@@ -73,7 +73,7 @@ export function useDiaries(
 
       // 백엔드가 offset을 무시해도 무해하므로 같이 전달
       const url =
-        `${API_BASE}/diaries` +
+        `${API_BASE}/api/diaries` +
         `?user_id=${numericUserId}` +
         `&limit=${limit}` +
         `&offset=${offset}`;
