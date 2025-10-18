@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils";
 import { API_BASE } from "@/lib/api";
 import { usePlayer } from "@/contexts/PlayerContext";
 
+/** Track 타입 동일 */
 type Track = {
   id: string | number;
   title: string;
@@ -38,7 +39,6 @@ const buildPhotoSrc = (photoId?: string | null) =>
     ? `${API_BASE}/api/photos/${encodeURIComponent(String(photoId))}/binary`
     : null;
 
-// 서버 응답 다형성 대응
 const normalizeTrack = (raw: any, idx: number): Track | null => {
   const title = raw?.title ?? raw?.music_title ?? raw?.name ?? null;
   const artist = raw?.artist ?? raw?.music_artist ?? raw?.singer ?? "Unknown";
@@ -62,11 +62,7 @@ const normalizeTrack = (raw: any, idx: number): Track | null => {
 
   const spotify_uri: string | null = raw?.spotify_uri ?? null;
   let spotify_track_id: string | null = raw?.spotify_track_id ?? null;
-  if (
-    !spotify_track_id &&
-    typeof spotify_uri === "string" &&
-    spotify_uri.startsWith("spotify:track:")
-  ) {
+  if (!spotify_track_id && typeof spotify_uri === "string" && spotify_uri.startsWith("spotify:track:")) {
     spotify_track_id = spotify_uri.split(":").pop() || null;
   }
 
@@ -83,7 +79,7 @@ const normalizeTrack = (raw: any, idx: number): Track | null => {
   };
 };
 
-/** 추천목록을 한 번에 커버/미리듣기로 보강(백엔드 batch 사용; 없어도 정상동작) */
+/** 커버/미리듣기 보강 */
 async function prefetchCoversAndUris(list: Track[]): Promise<Track[]> {
   if (!list?.length) return list;
   const norm = (s?: string | null) =>
@@ -94,7 +90,6 @@ async function prefetchCoversAndUris(list: Track[]): Promise<Track[]> {
       .toLowerCase();
 
   const pairs = list.map((t) => ({ title: norm(t.title), artist: norm(t.artist) }));
-
   try {
     const res = await fetch(`${API_BASE}/api/spotify/search/batch`, {
       method: "POST",
@@ -116,12 +111,7 @@ async function prefetchCoversAndUris(list: Track[]): Promise<Track[]> {
     }> = j?.items || [];
 
     const keyOf = (t: Track) => `${norm(t.title)} - ${norm(t.artist)}`;
-    const map = new Map(
-      items.map((it) => [
-        it.key || `${norm(it.title)} - ${norm(it.artist)}`,
-        it,
-      ])
-    );
+    const map = new Map(items.map((it) => [it.key || `${norm(it.title)} - ${norm(it.artist)}`, it]));
 
     return list.map((t) => {
       const hit = map.get(keyOf(t));
@@ -132,8 +122,7 @@ async function prefetchCoversAndUris(list: Track[]): Promise<Track[]> {
         coverUrl: t.coverUrl || hit.albumImage || null,
         audioUrl: t.audioUrl || hit.preview_url || null,
         spotify_uri: t.spotify_uri || uri || null,
-        spotify_track_id:
-          t.spotify_track_id || hit.id || (uri?.split(":").pop() || null),
+        spotify_track_id: t.spotify_track_id || hit.id || (uri?.split(":").pop() || null),
       };
     });
   } catch {
@@ -143,11 +132,8 @@ async function prefetchCoversAndUris(list: Track[]): Promise<Track[]> {
 
 export default function RecommendClient() {
   const router = useRouter();
-  const player = usePlayer(); // PlayerContext (전역 오디오)
+  const player = usePlayer();
 
-  // ─────────────────────────────────────────
-  // 페이지 파라미터/아트워크
-  // ─────────────────────────────────────────
   const [photoId, setPhotoId] = useState<string | null>(null);
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -156,12 +142,10 @@ export default function RecommendClient() {
   }, []);
   const analyzedPhotoUrl = useMemo(() => buildPhotoSrc(photoId), [photoId]);
 
-  // 메인 하단바에서 복귀할 때 사용될 "마지막 플레이어 경로" 저장
   useEffect(() => {
     if (!photoId) return;
-    const route = `/recommend?photoId=${encodeURIComponent(photoId)}`;
     try {
-      sessionStorage.setItem("lastPlayerRoute", route);
+      sessionStorage.setItem("lastPlayerRoute", `/recommend?photoId=${encodeURIComponent(photoId)}`);
     } catch {}
   }, [photoId]);
 
@@ -171,9 +155,6 @@ export default function RecommendClient() {
       : null;
   const playlistTitle = `${userNameFallback || "내"} 플레이리스트`;
 
-  // ─────────────────────────────────────────
-  // 재생목록/상태
-  // ─────────────────────────────────────────
   const [playlist, setPlaylist] = useState<Track[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -181,24 +162,16 @@ export default function RecommendClient() {
   const [likedTracks, setLikedTracks] = useState<Set<string | number>>(new Set());
   const [dislikedTracks, setDislikedTracks] = useState<Set<string | number>>(new Set());
 
-  // 큐 시그니처 가드(동일 큐로 재설정 금지)
+  // 동일 큐 반복 설정 방지
   const lastQueueSigRef = useRef<string>("");
-  const onceMountedRef = useRef<boolean>(false); // StrictMode 이중실행 방지용
 
-  // 추천 목록 로드 → 전역 큐 세팅(단, 동일 큐면 건너뜀)
   useEffect(() => {
     const run = async () => {
       if (photoId == null) return;
-      if (!onceMountedRef.current) {
-        onceMountedRef.current = true;
-      }
-
       setLoading(true);
       setError(null);
       try {
-        const url = `${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(
-          photoId
-        )}`;
+        const url = `${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(photoId)}`;
         const res = await fetch(url, { credentials: "include" });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: any = await res.json();
@@ -212,32 +185,22 @@ export default function RecommendClient() {
             ...tag(data.sub_songs, "sub"),
             ...tag(data.preferred_songs, "preferred"),
           ];
-          list = all
-            .map((r, i) => normalizeTrack(r, i))
-            .filter(Boolean) as Track[];
+          list = all.map((r, i) => normalizeTrack(r, i)).filter(Boolean) as Track[];
         }
 
-        // 커버/미리듣기 보강
         const enhanced = await prefetchCoversAndUris(list);
 
-        // 시그니처 계산 (id + spotify_track_id + audioUrl + 길이)
-        const sig = JSON.stringify(
-          enhanced.map((t) => [t.id, t.spotify_track_id, !!t.audioUrl]).concat([enhanced.length])
-        );
-
-        // 동일 큐면 아무 것도 하지 않음
+        // id + audioUrl 유무 기반 시그니처
+        const sig = JSON.stringify(enhanced.map((t) => [t.id, !!t.audioUrl]));
         if (sig === lastQueueSigRef.current) {
           if (!playlist.length) setPlaylist(enhanced);
           return;
         }
-
-        // 새 큐만 반영
         lastQueueSigRef.current = sig;
-        setPlaylist(enhanced);
 
-        // 전역 플레이어 큐 설정(첫 곡부터) — 내부에서 첫 재생 가능한 곡으로 시작함
+        setPlaylist(enhanced);
         if (enhanced.length > 0) {
-          player.setQueueFromRecommend(enhanced, 0);
+          player.setQueueFromRecommend(enhanced, 0); // 컨텍스트가 첫 재생가능 곡으로 시작+자동재생
         }
       } catch (e) {
         console.error(e);
@@ -249,11 +212,9 @@ export default function RecommendClient() {
     run();
   }, [photoId, player]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 표시용 현재 트랙(전역 인덱스 기준)
   const curIndex = player.state.index;
   const current = playlist[curIndex];
 
-  // 진행바 / 재생상태 / 볼륨
   const curSec = Math.floor((player.state.curMs || 0) / 1000);
   const durSec = Math.floor((player.state.durMs || 0) / 1000);
   const isPlaying = player.isPlaying;
@@ -297,10 +258,9 @@ export default function RecommendClient() {
     setDislikedTracks(next);
   };
 
-  // 사용자가 특정 트랙을 누르면, 그 인덱스부터 앞으로 가며 재생 가능한 곡으로 점프 (없으면 앞에서 다시 탐색)
+  /** 사용자가 특정 트랙을 누르면 그 인덱스부터 앞으로 가며 재생가능 곡으로 점프 */
   const selectTrack = (index: number) => {
     if (!playlist.length) return;
-
     let i = Math.max(0, Math.min(index, playlist.length - 1));
     while (i < playlist.length && !playlist[i]?.audioUrl) i++;
     if (i >= playlist.length) {
@@ -325,7 +285,6 @@ export default function RecommendClient() {
     router.push(`/editor?${q.toString()}`);
   };
 
-  // 대표 아트워크는 분석 이미지 유지
   const artUrl = analyzedPhotoUrl ?? "/placeholder.svg";
 
   return (

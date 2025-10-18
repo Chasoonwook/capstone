@@ -10,7 +10,7 @@ import {
   useState,
 } from "react";
 
-/** 트랙 모델 (필요시 필드 추가 가능) */
+/** 트랙 모델 */
 export type Track = {
   id: string | number;
   title: string;
@@ -26,14 +26,10 @@ export type PlayerState = {
 };
 
 type Ctx = {
-  /** 현재 플레이어 상태 */
   state: PlayerState;
-  /** 재생중 여부 */
   isPlaying: boolean;
-  /** 볼륨(0~1) */
   volume: number;
 
-  /** 재생/일시정지/탐색/볼륨/이동 제어 */
   play: () => Promise<void>;
   pause: () => Promise<void>;
   next: () => void;
@@ -41,16 +37,12 @@ type Ctx = {
   seek: (ms: number) => void;
   setVolume: (v: number) => void;
 
-  /** 추천 페이지에서 큐 설정 */
   setQueueFromRecommend: (tracks: Track[], startIndex?: number) => void;
 };
 
 const PlayerCtx = createContext<Ctx | null>(null);
 
-// 재생 가능 여부(현재는 미리듣기 URL 존재 여부)
-function isPlayable(t?: Track) {
-  return !!t?.audioUrl;
-}
+const isPlayable = (t?: Track) => !!t?.audioUrl;
 
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -70,7 +62,20 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     return isNaN(v) ? 0.8 : Math.min(1, Math.max(0, v));
   });
 
-  /** 오디오 엘리먼트 보장 (앱 생명주기 동안 1개만) */
+  /** 현재 로드 사이클 식별자(이벤트가 옛 src에서 온 것 무시) */
+  const loadIdRef = useRef(0);
+  /** 실제 재생이 시작되었는지(ended 스킵 방지) */
+  const startedRef = useRef(false);
+  /** 워치독 타이머 */
+  const watchdogRef = useRef<number | null>(null);
+
+  const clearWatchdog = () => {
+    if (watchdogRef.current != null) {
+      window.clearTimeout(watchdogRef.current);
+      watchdogRef.current = null;
+    }
+  };
+
   const ensureAudio = () => {
     if (!audioRef.current) {
       const a = new Audio();
@@ -83,6 +88,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
           curMs: a.currentTime * 1000,
           durMs: a.duration ? a.duration * 1000 : s.durMs,
         }));
+        // 실제 재생이 0.5초 이상 진행되면 started
+        if (a.currentTime >= 0.5) startedRef.current = true;
       });
 
       a.addEventListener("loadedmetadata", () => {
@@ -92,9 +99,17 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         }));
       });
 
-      a.addEventListener("ended", () => next());
+      a.addEventListener("playing", () => {
+        startedRef.current = true;
+      });
+
+      a.addEventListener("ended", () => {
+        // 실제 재생된 적이 있어야만 다음 곡
+        if (startedRef.current) next();
+      });
+
       a.addEventListener("error", () => {
-        // 재생 오류가 나도 자동으로 다음 곡으로 튀지 않게 멈춤
+        // 오류는 정지로만 처리(워치독이 있으면 거기서 스킵)
         setIsPlaying(false);
       });
 
@@ -103,7 +118,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     return audioRef.current!;
   };
 
-  /** 현재 리스트에서 start 이상에서 처음 재생 가능한 인덱스 반환 (없으면 -1) */
+  /** 현재 리스트에서 start 이상 첫 재생가능 인덱스(-1: 없음) */
   const findNextPlayable = useCallback(
     (start: number) => {
       const q = state.queue;
@@ -115,7 +130,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     [state.queue]
   );
 
-  /** 현재 리스트에서 start 이하에서 뒤로 처음 재생 가능한 인덱스 반환 (없으면 -1) */
+  /** 현재 리스트에서 start 이하 뒤로 첫 재생가능 인덱스(-1: 없음) */
   const findPrevPlayable = useCallback(
     (start: number) => {
       const q = state.queue;
@@ -127,10 +142,38 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     [state.queue]
   );
 
+  /** src 준비를 기다리는 유틸 */
+  const waitForCanPlay = (a: HTMLAudioElement, id: number, timeoutMs = 2000) =>
+    new Promise<void>((resolve, reject) => {
+      let done = false;
+      const onReady = () => {
+        if (done || id !== loadIdRef.current) return;
+        done = true;
+        a.removeEventListener("canplaythrough", onReady);
+        resolve();
+      };
+      const to = window.setTimeout(() => {
+        if (done) return;
+        done = true;
+        a.removeEventListener("canplaythrough", onReady);
+        reject(new Error("canplay timeout"));
+      }, timeoutMs);
+      a.addEventListener("canplaythrough", onReady, { once: true });
+      // 빠르게 로드되어도 resolve
+      if (a.readyState >= 3) {
+        clearTimeout(to);
+        a.removeEventListener("canplaythrough", onReady);
+        resolve();
+      }
+    });
+
   /** 현재 index 트랙을 로드(+옵션 자동 재생) */
   const loadAndMaybePlay = useCallback(
     async (autoPlay = false) => {
       const a = ensureAudio();
+      clearWatchdog();
+      startedRef.current = false;
+      const myId = ++loadIdRef.current;
 
       // 현재 인덱스가 재생 불가면 다음 재생 가능 곡으로 점프
       if (!isPlayable(state.queue[state.index])) {
@@ -150,17 +193,33 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       if (a.src !== t.audioUrl) {
         a.src = t.audioUrl!;
         a.load();
+      } else {
+        a.currentTime = 0;
+      }
+
+      try {
+        await waitForCanPlay(a, myId, 2000);
+      } catch {
+        // 준비가 안 되면 워치독으로 다음 곡 시도(2.5s)
       }
 
       if (autoPlay) {
         try {
           await a.play();
           setIsPlaying(true);
-        } catch {
-          // 오토플레이 차단 시 사용자가 Play 버튼 누르면 시작됨
+        } catch (err: any) {
+          // 오토플레이 거절(NotAllowedError 등)은 스킵하지 말고 멈춤
           setIsPlaying(false);
         }
       }
+
+      // 지연/깨진 미디어 워치독: 2.5s 내에 재생 시작되지 않으면 다음 곡
+      clearWatchdog();
+      watchdogRef.current = window.setTimeout(() => {
+        if (!startedRef.current && myId === loadIdRef.current) {
+          next(); // 다음 재생 가능 곡으로
+        }
+      }, 2500);
     },
     [state.queue, state.index, findNextPlayable],
   );
@@ -182,19 +241,19 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const next = useCallback(() => {
+    clearWatchdog();
     setState((s) => {
-      const ni = (() => {
-        for (let i = s.index + 1; i < s.queue.length; i++) {
-          if (isPlayable(s.queue[i])) return i;
-        }
-        return s.index; // 못 찾으면 그대로
-      })();
-      return { ...s, index: ni, curMs: 0 };
+      const q = s.queue;
+      let i = s.index + 1;
+      while (i < q.length && !isPlayable(q[i])) i++;
+      if (i >= q.length) i = s.index; // 못 찾으면 그대로
+      return { ...s, index: i, curMs: 0 };
     });
   }, []);
 
   const prev = useCallback(() => {
     const a = ensureAudio();
+    clearWatchdog();
     setState((s) => {
       if (a.currentTime > 3) {
         a.currentTime = 0;
@@ -220,18 +279,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     if (audioRef.current) audioRef.current.volume = vv;
   }, []);
 
-  /** ─────────────────────────────────────────────
-   *  동일 큐/동일 시작 인덱스면 no-op (리셋 루프 차단)
-   *  ──────────────────────────────────────────── */
+  /** 동일 큐/시작 인덱스면 no-op */
   const lastSigRef = useRef<string>("");
   const setQueueFromRecommend = useCallback((tracks: Track[], startIndex = 0) => {
-    // 시작 인덱스부터 첫 재생 가능 곡을 찾음 → 없으면 처음부터 재탐색
     let si = startIndex;
     while (si < tracks.length && !isPlayable(tracks[si])) si++;
     if (si >= tracks.length) {
       si = 0;
       while (si < tracks.length && !isPlayable(tracks[si])) si++;
-      if (si >= tracks.length) si = 0; // 전부 불가
+      if (si >= tracks.length) si = 0;
     }
 
     const ids = (tracks || []).map((t) => String(t?.id ?? "")).join("|");
@@ -242,11 +298,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     setState({ queue: tracks, index: si, curMs: 0, durMs: 0 });
   }, []);
 
-  /** index 또는 queue가 바뀌면 자동 로드(+자동재생) */
+  /** index/queue 변경 시 자동 로드(+자동재생) */
   const idx = state.index;
   const qkey = useMemo(() => state.queue.map((t) => t.id).join(","), [state.queue]);
   useEffect(() => {
     void loadAndMaybePlay(true);
+    return () => clearWatchdog();
   }, [idx, qkey, loadAndMaybePlay]);
 
   const ctx: Ctx = {
