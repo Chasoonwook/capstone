@@ -217,3 +217,18 @@ track:title artist:artist 쿼리로 검색 → album.images[0].url 추출
 
 ### rankings.js 코드 수정 (1014)
 하루 통계로 순위 변동을 계산하는 로직으로 변경
+
+### server.js 코드 수정 (1018)
+허용 헤더 추가: Access-Control-Allow-Headers에 X-User-Id(문제의 헤더)와 X-Requested-With를 포함시켰어요. → 프리플라이트가 더 이상 막히지 않음.
+
+요청 헤더 자동 반영: 브라우저가 보낸 access-control-request-headers를 읽어, 서버가 그대로 허용 리스트에 합쳐서 돌려줍니다. → 커스텀/추가 헤더가 생겨도 안전.
+
+OPTIONS 즉시 처리: 프리플라이트(OPTIONS)에 204로 빠르게 응답하고, Access-Control-Max-Age: 600으로 캐시. → 불필요한 재검사 감소.
+
+Credentials 안전 설정 유지: Access-Control-Allow-Credentials: true와 정확한 Origin 반사+화이트리스트 유지. → 쿠키 포함 요청 정상 동작.
+
+결과
+
+이전: 브라우저가 X-User-Id를 쓰려고 프리플라이트 보냈는데, 서버가 허용하지 않아 CORS 에러.
+
+지금: 서버가 그 헤더를 명시적으로 허용하고 OPTIONS를 처리→ PUT /api/users/me/genres 등이 정상 호출됨.
