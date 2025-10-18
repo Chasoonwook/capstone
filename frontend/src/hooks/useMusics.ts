@@ -26,7 +26,7 @@ export function useMusics(): UseMusicsResult {
       setLoading(true);
       setError(null);
       try {
-        const r = await fetch(`${API_BASE}/musics`, { cache: "no-store" });
+        const r = await fetch(`${API_BASE}/api/musics`, { cache: "no-store" });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const data = await r.json();
         // 응답 형태가 [{...}] 또는 { musics: [...] } 둘 다 안전 처리
