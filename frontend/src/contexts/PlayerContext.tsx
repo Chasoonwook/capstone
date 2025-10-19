@@ -224,7 +224,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       const nextTrack = s.queue[nextIndex];
       return { ...s, index: nextIndex, currentTrack: nextTrack, curMs: 0 };
     });
-  }, []);
+  }, [setIsPlaying]);
 
   const play = useCallback(
     async (track?: Track, index?: number) => {
