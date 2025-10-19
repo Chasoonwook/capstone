@@ -305,8 +305,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       // suppressAutoPlayRef.current = true; // 제거
 
       setState((s) => ({
-        ...s, queue: tracks, index: safeIndex, currentTrack: firstTrack,
-        curMs: 0, durMs: firstTrack?.duration ? firstTrack.duration * 1000 : 0, playbackSource: null,
+        ...s,
+        queue: tracks,
+        index: safeIndex,
+        currentTrack: firstTrack,
+        curMs: 0,
+        durMs: firstTrack?.duration ? firstTrack.duration * 1000 : 0,
+        playbackSource: null,
       }));
       console.log(`[PlayerContext] State updated for new queue. Index: ${safeIndex}, Track: ${firstTrack?.title}`);
 
