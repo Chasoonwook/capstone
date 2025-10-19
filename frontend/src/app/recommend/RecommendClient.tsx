@@ -321,7 +321,7 @@ export default function RecommendClient() {
     setDislikedTracks(next);
   };
 
-  const artUrl = currentTrack?.coverUrl || analyzedPhotoUrl || "/placeholder.svg";
+  const artUrl = analyzedPhotoUrl || currentTrack?.coverUrl || "/placeholder.svg";
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-black via-neutral-900 to-black flex items-center justify-center p-4">
@@ -555,7 +555,7 @@ export default function RecommendClient() {
             {!loading && playlist.length === 0 && (
               <p className="text-white/70 text-center py-4">추천 목록이 없습니다.</p>
             )}
-            {!loading &&
+            {!loading && 
               playlist.map((track, index) => {
                 // ✅ 연결/준비 여부 기준으로 '재생 가능' 판단
                 const isPlayable = isSpotifyConnected ? !!track.spotify_uri : !!track.audioUrl;

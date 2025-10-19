@@ -7,20 +7,18 @@ import type { Song } from "../types";
 type Props = {
   items: Song[];
   currentId: string | number | null;
-  uploadedImage: string | null;
   onClickItem: (song: Song) => void;
 };
 
 export default function RecommendationList({
   items,
   currentId,
-  uploadedImage,
   onClickItem,
 }: Props) {
   return (
     <div className="space-y-2">
       {items.map((song) => {
-        const cover = uploadedImage ?? song.image ?? "/placeholder.svg";
+        const cover = song.image ?? "/placeholder.svg";
         const active = currentId === song.id;
         return (
           <div
@@ -33,13 +31,14 @@ export default function RecommendationList({
             {cover ? (
               <Image
                 src={cover}
-                alt={song.title ?? "thumbnail"}
+                alt={song.title ?? "album cover"}
                 width={48}
                 height={48}
                 sizes="48px"
                 className="rounded-lg mr-3 border border-white/10 flex-shrink-0 !w-12 !h-12"
                 style={{ width: 48, height: 48 }}
-                unoptimized={typeof cover === "string" && (cover.startsWith("data:") || cover.includes("/api/photos/"))}
+                // unoptimized={typeof cover === "string" && cover.startsWith("data:")}
+                priority={items.indexOf(song) < 5}
               />
             ) : (
               <div className="w-12 h-12 rounded-lg mr-3 bg-gray-300/40" />
