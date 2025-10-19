@@ -13,8 +13,11 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     pathname.startsWith("/recommend") ||
     pathname.startsWith("/diary/");
 
-  // 🎛️ 하단 재생바는 diary 페이지만 표시
-  const showBar = pathname.startsWith("/diary/");
+  // 메인(/), 추천(/recommend), 다이어리(/diary/*)에서 표시
+  const showBar =
+    pathname === "/" ||
+    pathname.startsWith("/diary/");
+
 
   const content = (
     <>
