@@ -1,7 +1,7 @@
 // src/app/recommend/types.ts
 
 /** 추천 출처(메인/선호/서브) */
-export type SelectedFrom = "main" | "preferred" | "sub";
+export type SelectedFrom = "main" | "preferred" | "sub" | "search" | "recommend" | "diary";
 
 /** 프론트에서 사용하는 노래 카드 모델 */
 export type Song = {
