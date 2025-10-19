@@ -4,6 +4,7 @@ const fs = require("fs");
 const express = require("express");
 const cookieParser = require("cookie-parser");
 const axios = require("axios");
+const cors = require("cors");
 require("dotenv").config({ debug: true });
 const pool = require("./db");
 
@@ -26,75 +27,41 @@ app.use((req, res, next) => {
 });
 
 /* =======================================================================
-   CORS (credentials 허용 + 허용 도메인 정규화)
-   - 프리플라이트(OPTIONS)는 즉시 204
-   - 에러 응답에도 CORS 헤더가 항상 나가도록 수동으로 세팅
-   - ✅ Allow-Headers에 X-User-Id 등 커스텀 헤더 추가
+   CORS 설정
    ======================================================================= */
 const FRONT_BASE = process.env.FRONT_BASE || "https://capstone-front-tau.vercel.app";
 
-const trim = (s) => (s ? s.replace(/\/+$/, "") : s);
-const allowed = new Set([
+const allowedOrigins = [
   "http://localhost:3000",
   "http://127.0.0.1:3000",
-  trim(FRONT_BASE),
-]);
+  FRONT_BASE,
+];
 
 // 자기 자신(배포 주소)도 허용
-const selfOrigin =
-  process.env.RENDER_EXTERNAL_URL ||
-  (process.env.RENDER_EXTERNAL_HOSTNAME ? `https://${process.env.RENDER_EXTERNAL_HOSTNAME}` : null);
-if (selfOrigin) allowed.add(trim(selfOrigin));
-
-function isAllowedOrigin(origin) {
-  if (!origin) return true; // 서버-서버 호출
-  try {
-    const u = new URL(origin);
-    const norm = `${u.protocol}//${u.host}`;
-    if (allowed.has(norm)) return true;
-    // 서브도메인 허용 (vercel / onrender)
-    if (u.hostname.endsWith(".vercel.app")) return true;
-    if (u.hostname.endsWith(".onrender.com")) return true;
-    if (u.hostname === "localhost" || u.hostname === "127.0.0.1") return true;
-  } catch {}
-  return false;
+const selfOrigin = process.env.RENDER_EXTERNAL_URL || (process.env.RENDER_EXTERNAL_HOSTNAME ? `https://${process.env.RENDER_EXTERNAL_HOSTNAME}` : null);
+if (selfOrigin && !allowedOrigins.includes(selfOrigin)) {
+  allowedOrigins.push(selfOrigin);
 }
 
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  res.header("Vary", "Origin");
+console.log("[CORS] Allowed Origins:", allowedOrigins); // 허용 목록 확인용 로그
 
-  if (isAllowedOrigin(origin)) {
-    if (origin) res.header("Access-Control-Allow-Origin", origin);
-    res.header("Access-Control-Allow-Credentials", "true");
-    res.header("Access-Control-Allow-Methods", "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS");
-
-    // 기본 허용 헤더 + 실제 요청 헤더를 합쳐서 반환(보수적으로)
-    const defaultAllowed = [
-      "Content-Type",
-      "Authorization",
-      "X-Requested-With",
-      "X-User-Id", // ✅ 문제의 커스텀 헤더
-    ];
-    const reqHeaders = String(req.headers["access-control-request-headers"] || "")
-      .split(",")
-      .map((h) => h.trim())
-      .filter(Boolean);
-
-    const allowHeaders = Array.from(new Set([...defaultAllowed, ...reqHeaders]))
-      .join(", ");
-
-    res.header("Access-Control-Allow-Headers", allowHeaders);
-
-    // 프리플라이트 캐시 (선택)
-    res.header("Access-Control-Max-Age", "600");
-  }
-
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(204);
-  }
-  next();
-});
+app.use(cors({
+  origin: function (origin, callback) {
+    // !origin은 Postman 등 origin 없는 요청 허용 (개발 시 유용)
+    // 실제 배포 시에는 !origin을 제거하거나 더 엄격하게 관리할 수 있음
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      console.log(`[CORS] Allowing origin: ${origin || 'server-to-server'}`); // 허용 로그
+      callback(null, true);
+    } else {
+      console.error(`[CORS] Blocking origin: ${origin}`); // 차단 로그
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true, // 쿠키 공유 허용
+  exposedHeaders: ['Set-Cookie'], // 필요 시 Set-Cookie 헤더 노출
+  // allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-User-Id'], // 명시적으로 헤더 지정 가능 (기본값으로도 충분할 수 있음)
+  optionsSuccessStatus: 204 // OPTIONS 요청에 204 응답
+}));
 
 /* =======================================================================
    health
