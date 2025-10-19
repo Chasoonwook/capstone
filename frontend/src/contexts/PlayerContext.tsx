@@ -127,11 +127,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, [spotifyPlayer.state, isSpotifyConnected, state.playbackSource]);
 
   const next = useCallback(() => {
+    console.log("[PlayerContext] next() called");
     setState((s) => {
       if (!s.queue || s.queue.length === 0) return s;
       const nextIndex = s.index + 1;
       if (nextIndex >= s.queue.length) { console.log("End of queue reached"); setIsPlaying(false); return { ...s, curMs: 0 }; }
       const nextTrack = s.queue[nextIndex];
+      console.log(`[PlayerContext] next(): Updating index to ${nextIndex}, track: ${nextTrack?.title}`);
       return { ...s, index: nextIndex, currentTrack: nextTrack, curMs: 0 }; // nextTrack 추가 및 curMs: 0 유지
     });
   }, [setIsPlaying]);
@@ -141,6 +143,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       const baseTrack = track ?? state.queue[index ?? state.index];
       const targetIndex = index ?? state.index;
       if (!baseTrack) return;
+
+      console.log(`[PlayerContext] play() called for track: ${baseTrack.title}, index: ${targetIndex}, startFromBeginning: ${startFromBeginning}`);
 
       try { // 명시적 중지
         if (state.playbackSource === "spotify" && spotifyPlayer.ready && !spotifyPlayer.state.paused) { await spotifyPlayer.pause(); }
@@ -153,6 +157,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       const canPlaySpotify = isSpotifyConnected && hasSpotify;
       const source: "spotify" | "preview" | null = canPlaySpotify ? "spotify" : targetTrack.audioUrl ? "preview" : null;
       console.log(`Play request: ${targetTrack.title} (Source: ${source || "None"})`);
+      console.log(`[PlayerContext] Determined source: ${source || "None"}`);
 
       setState((s) => ({
         ...s, index: targetIndex, currentTrack: targetTrack, playbackSource: source,
@@ -162,17 +167,35 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
       if (source === "spotify") {
         const uri = targetTrack.spotify_uri || (targetTrack.spotify_track_id ? `spotify:track:${targetTrack.spotify_track_id}` : null);
-        if (uri) { try { await spotifyPlayer.playUris([uri]); setIsPlaying(true); return; } catch (e) { console.error("Spotify playUris failed:", e); setIsPlaying(false); } }
+        if (uri) { 
+          try { 
+            console.log(`[PlayerContext] Calling spotifyPlayer.playUris with URI: ${uri}`);
+            await spotifyPlayer.playUris([uri]); 
+            setIsPlaying(true); 
+            return; 
+          } catch (e) { console.error("Spotify playUris failed:", e); setIsPlaying(false); } 
+        } else {console.log("[PlayerContext] Spotify source selected but no valid URI found.");}
       }
       if (source === "preview") {
         const a = ensureAudio(); const newSrc = targetTrack.audioUrl!; let shouldLoad = a.src !== newSrc;
         if (shouldLoad) { a.src = newSrc; a.load(); }
-        if (startFromBeginning || shouldLoad) { a.currentTime = 0; if (!shouldLoad) setState(s => ({ ...s, curMs: 0 })); }
-        else if (state.curMs > 0 && a.seekable.length > 0 && state.curMs < a.duration * 1000) { // seekable 확인 및 범위 체크 추가
-             try { a.currentTime = state.curMs / 1000; } catch (e) { console.error("Error setting currentTime:", e); a.currentTime = 0; }
-         } else { a.currentTime = 0; } // 유효하지 않으면 처음부터
-        try { if (shouldLoad) { /* canplaythrough 대기 로직 (선택) */ } await a.play(); setIsPlaying(true); return; }
-        catch (err) { console.error("Preview play failed:", err); setIsPlaying(false); }
+        const targetTime = (startFromBeginning || shouldLoad) ? 0 : (state.curMs / 1000); // ✨ 재생 시간 계산 ✨
+        console.log(`[PlayerContext] Setting preview currentTime to: ${targetTime}`); //
+        if (a.seekable.length > 0) { // seekable 확인
+            try { a.currentTime = targetTime; } catch (e) { console.error("Error setting currentTime:", e); a.currentTime = 0; }
+        } else if (targetTime !== 0) {
+             // seekable 하지 않으면 경고 후 0초로 (또는 로드 후 설정 시도)
+             console.warn("Preview audio not seekable yet, starting from 0.");
+             a.currentTime = 0;
+        }
+        if (!shouldLoad && !startFromBeginning) setState(s => ({ ...s, curMs: a.currentTime * 1000 })); // 즉시 상태 반영 (load 시에는 loadedmetadata에서 처리됨)
+
+        try {
+          console.log("[PlayerContext] Calling previewAudio.play()"); // ✨ 로그 추가
+          await a.play();
+          setIsPlaying(true);
+          return;
+        } catch (err) { console.error("Preview play failed:", err); setIsPlaying(false); }
       }
       console.warn("No playable source for track:", targetTrack.title); setIsPlaying(false); next();
     },
@@ -211,6 +234,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   // ✨ prev 함수 로직 재수정 ✨
   const prev = useCallback(() => {
+    console.log("[PlayerContext] prev() called");
     // Spotify 재생 시 SDK의 prev 사용
     if (state.playbackSource === "spotify" && spotifyPlayer.ready) {
       spotifyPlayer.prev();
@@ -238,7 +262,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
     // 인덱스가 실제로 변경될 경우에만 상태 업데이트 (무한 루프 방지)
     if (prevIndex !== state.index && state.queue[prevIndex]) {
-        console.log(`Prev button: Moving to index ${prevIndex}`);
+        console.log(`[PlayerContext] prev(): Updating index to ${prevIndex}`);
         // suppressAutoPlayRef 설정은 useEffect에서 처리하므로 여기서 불필요
         setState((s) => {
             const prevTrack = s.queue[prevIndex];
@@ -272,20 +296,23 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   // ✨ 인덱스/트랙ID 변경 감지 useEffect 최종 ✨
   useEffect(() => {
-    if (suppressAutoPlayRef.current) {
+    console.log(`[PlayerContext] Index/TrackID Effect triggered. Suppressed: ${suppressAutoPlayRef.current}, Index: ${state.index}, CurrentTrack ID: ${state.currentTrack?.id}`);
+    if (suppressAutoPlayRef.current) { 
         console.log("Auto-play suppressed"); // 디버깅 로그
         return;
     }
 
     const track = state.queue[state.index]; // 현재 인덱스에 해당하는 트랙
 
+    // 조건: 트랙 유효 + (현재 트랙 없거나 ID 다름)
+    const shouldPlay = track && (!state.currentTrack || state.currentTrack.id !== track.id);
+    console.log(`[PlayerContext] Effect condition check: shouldPlay = ${shouldPlay}`); // ✨ 로그 추가
+
     // 트랙이 유효하고, currentTrack이 없거나 ID가 다를 때 재생 시도
-    if (track && (!state.currentTrack || state.currentTrack.id !== track.id)) {
-      console.log(`Index/Track ID changed, playing track ID: ${track.id} from beginning`);
+    if (shouldPlay) {
+      console.log(`--> Calling play for Track ID: ${track.id} from beginning`);
       // play 함수에 true를 전달하여 처음부터 재생
       void play(track, state.index, true);
-    } else {
-        console.log(`Index/Track ID changed detected, but conditions not met for auto-play. Index: ${state.index}, Track: ${track?.id}, CurrentTrack: ${state.currentTrack?.id}`); // 디버깅 로그
     }
   // ✨ 의존성 배열: state.index와 state.currentTrack?.id만 사용 ✨
   }, [state.index, state.currentTrack?.id, state.queue, play]); // play는 유지, seek 제거
