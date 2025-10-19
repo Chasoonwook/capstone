@@ -188,6 +188,163 @@ app.get("/api/spotify/token", async (req, res) => {
 });
 
 /* =======================================================================
+   ✨ (추가) 검색용 라우트 4종 — 프론트의 Search/Player에서 사용
+   - /api/spotify/search, /api/spotify/search/batch
+   - /api/deezer/search,  /api/itunes/search
+   ======================================================================= */
+
+/** ─ Spotify: 앱 크리덴셜 토큰 캐시 (사용자 연동 없어도 검색 가능) ─ */
+let _ccToken = null;
+let _ccExpireAt = 0;
+async function getClientCredentialsToken() {
+  if (!_ccToken || Date.now() >= _ccExpireAt) {
+    if (!SPOTIFY_CLIENT_ID || !SPOTIFY_CLIENT_SECRET) {
+      return null; // 환경변수 없으면 건너뜀
+    }
+    const body = new URLSearchParams({ grant_type: "client_credentials" });
+    const basic = Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString("base64");
+    const resp = await axios.post("https://accounts.spotify.com/api/token", body.toString(), {
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${basic}`,
+      },
+      timeout: 10000,
+    });
+    _ccToken = resp.data?.access_token || null;
+    const ttl = Number(resp.data?.expires_in || 300);
+    _ccExpireAt = Date.now() + (ttl - 30) * 1000; // 30초 여유
+  }
+  return _ccToken;
+}
+
+/** GET /api/spotify/search?title=&artist=&limit=1 */
+app.get("/api/spotify/search", async (req, res) => {
+  try {
+    const { title = "", artist = "", limit = "1" } = req.query;
+    const query = [title ? `track:${title}` : null, artist ? `artist:${artist}` : null]
+      .filter(Boolean)
+      .join(" ");
+    const token = await getClientCredentialsToken();
+
+    if (!token || !query) {
+      // 토큰 혹은 쿼리가 없으면 프론트가 fallback(deezer/itunes) 하도록 빈 구조 반환
+      return res.json({ tracks: { items: [] } });
+    }
+
+    const r = await axios.get("https://api.spotify.com/v1/search", {
+      params: { q: query, type: "track", limit },
+      headers: { Authorization: `Bearer ${token}` },
+      timeout: 12000,
+    });
+
+    // 프론트는 data.tracks.items 또는 data.items 등 유연히 읽음
+    res.json({ tracks: r.data?.tracks || { items: [] } });
+  } catch (e) {
+    console.warn("[/api/spotify/search] fallback with empty:", e?.response?.data || e.message);
+    res.json({ tracks: { items: [] } });
+  }
+});
+
+/** POST /api/spotify/search/batch  { pairs: [{title, artist}, ...] } */
+app.post("/api/spotify/search/batch", async (req, res) => {
+  try {
+    const pairs = Array.isArray(req.body?.pairs) ? req.body.pairs : [];
+    if (pairs.length === 0) return res.json({ items: [] });
+
+    const token = await getClientCredentialsToken();
+    // 토큰 없으면 앨범 이미지 없이 키만 돌려주기 (프론트는 null 허용)
+    if (!token) {
+      return res.json({
+        items: pairs.map((p) => ({
+          key: `${(p.title || "").trim().toLowerCase()} - ${(p.artist || "").trim().toLowerCase()}`,
+          albumImage: null,
+        })),
+      });
+    }
+
+    const tasks = pairs.map(async (p) => {
+      const key = `${(p.title || "").trim().toLowerCase()} - ${(p.artist || "").trim().toLowerCase()}`;
+      const q = [p.title ? `track:${p.title}` : null, p.artist ? `artist:${p.artist}` : null]
+        .filter(Boolean)
+        .join(" ");
+      if (!q) return { key, albumImage: null };
+
+      try {
+        const r = await axios.get("https://api.spotify.com/v1/search", {
+          params: { q, type: "track", limit: 1 },
+          headers: { Authorization: `Bearer ${token}` },
+          timeout: 12000,
+        });
+        const item = r.data?.tracks?.items?.[0] || null;
+        const albumImage =
+          item?.album?.images?.[0]?.url ||
+          item?.album?.images?.[1]?.url ||
+          item?.album?.images?.[2]?.url ||
+          null;
+        return {
+          key,
+          albumImage,
+          title: item?.name || null,
+          artist: item?.artists?.map((a) => a.name).join(", ") || null,
+          trackId: item?.id || null,
+        };
+      } catch {
+        return { key, albumImage: null };
+      }
+    });
+
+    const items = await Promise.all(tasks);
+    res.json({ items });
+  } catch (e) {
+    console.warn("[/api/spotify/search/batch] error:", e?.response?.data || e.message);
+    res.json({ items: [] });
+  }
+});
+
+/** GET /api/deezer/search?title=&artist=&limit=1  (공식 공개 API) */
+app.get("/api/deezer/search", async (req, res) => {
+  try {
+    const { title = "", artist = "", limit = "1" } = req.query;
+    const parts = [];
+    if (title) parts.push(`track:"${title}"`);
+    if (artist) parts.push(`artist:"${artist}"`);
+    const q = parts.join(" ") || (title || artist || "");
+    const url = `https://api.deezer.com/search?q=${encodeURIComponent(q)}&limit=${encodeURIComponent(
+      String(limit)
+    )}`;
+    const r = await axios.get(url, { timeout: 12000 });
+    // 프론트는 data.data[0] 형태를 읽을 수 있음
+    res.json(r.data || { data: [] });
+  } catch (e) {
+    console.warn("[/api/deezer/search] fallback with empty:", e?.response?.data || e.message);
+    res.json({ data: [] });
+  }
+});
+
+/** GET /api/itunes/search?title=&artist=&limit=1  (공식 공개 API) */
+app.get("/api/itunes/search", async (req, res) => {
+  try {
+    const { title = "", artist = "", limit = "1", country = "KR" } = req.query;
+    const term = `${title} ${artist}`.trim();
+    if (!term) return res.json({ results: [] });
+    const r = await axios.get("https://itunes.apple.com/search", {
+      params: {
+        term,
+        entity: "song",
+        limit: String(limit || 1),
+        country: String(country || "KR"),
+      },
+      timeout: 12000,
+    });
+    // 프론트는 data.results[0] 형태를 읽음
+    res.json(r.data || { results: [] });
+  } catch (e) {
+    console.warn("[/api/itunes/search] fallback with empty:", e?.response?.data || e.message);
+    res.json({ results: [] });
+  }
+});
+
+/* =======================================================================
    라우터 자동 로더
    ======================================================================= */
 function loadRoute(relPath) {
