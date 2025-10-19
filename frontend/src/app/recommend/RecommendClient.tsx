@@ -25,6 +25,7 @@ import { API_BASE } from "@/lib/api";
 import { usePlayer, Track } from "@/contexts/PlayerContext";
 import { useSpotifyStatus } from "@/contexts/SpotifyStatusContext";
 import { formatTime } from "./utils/media";
+import { send } from "process";
 
 /** 사진 바이너리 URL */
 const buildPhotoSrc = (photoId?: string | null) =>
@@ -276,6 +277,38 @@ export default function RecommendClient() {
     [playlist, player]
   );
 
+  // 백엔드로 피드백을 전송
+  const sendFeedback = async (feedbackValue: 1 | -1) => {
+    // 현재 곡이나 사진 id가 없으면 전송 중단
+    if (!currentTrack || !photoId) {
+      console.warn("Feedback aborted: missing track or photo context.");
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/api/feedback`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include", // authRequired API는 이 옵션이 필수입니다.
+        body: JSON.stringify({
+          music_id: currentTrack.id,
+          feedback: feedbackValue, // 1 (좋아요) 또는 -1 (싫어요)
+          photo_id: photoId,
+        }),
+      });
+
+      if (!res.ok) {
+        console.warn("Failed to send feedback to server:", res.status);
+      } else {
+        console.log(`Feedback (value: ${feedbackValue}) successfully sent.`);
+      }
+    } catch (e) {
+      console.error("Error sending feedback:", e);
+    }
+  };
+
   const goEdit = () => {
     if (!photoId) return alert("사진 정보가 없습니다.");
     const cur = currentTrack || playlist[0];
@@ -289,14 +322,19 @@ export default function RecommendClient() {
   const toggleLike = () => {
     if (!currentTrack) return;
     const next = new Set(likedTracks);
-    if (next.has(currentTrack.id)) next.delete(currentTrack.id);
-    else {
-      next.add(currentTrack.id);
+    const isCurrentlyLiked = next.has(currentTrack.id);
+    
+    if (isCurrentlyLiked) {
+      next.delete(currentTrack.id);
+    } else {
+      next.add(currentTrack.id); // 좋아요 추가
+
       if (dislikedTracks.has(currentTrack.id)) {
         const d = new Set(dislikedTracks);
         d.delete(currentTrack.id);
         setDislikedTracks(d);
       }
+      sendFeedback(1); // 좋아요 피드백 전송
     }
     setLikedTracks(next);
   };
@@ -304,14 +342,19 @@ export default function RecommendClient() {
   const toggleDislike = () => {
     if (!currentTrack) return;
     const next = new Set(dislikedTracks);
-    if (next.has(currentTrack.id)) next.delete(currentTrack.id);
-    else {
+    const isCurrentlyDisliked = next.has(currentTrack.id);
+
+    if (isCurrentlyDisliked) {
+      next.delete(currentTrack.id);
+    } else {
       next.add(currentTrack.id);
+
       if (likedTracks.has(currentTrack.id)) {
         const l = new Set(likedTracks);
         l.delete(currentTrack.id);
         setLikedTracks(l);
       }
+      sendFeedback(-1); // 싫어요 피드백 전송
     }
     setDislikedTracks(next);
   };
