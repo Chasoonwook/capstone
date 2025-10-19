@@ -6,7 +6,7 @@ import Image from "next/image"
 import { useRouter } from "next/navigation"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import { Search, X } from "lucide-react"
+import { Search, X, Play } from "lucide-react" // ← Play 추가
 import { useRequestCounter } from "@/hooks/useRequestCounter"
 import { API_BASE } from "@/lib/api"
 import type { MusicItem } from "@/types/music"
@@ -18,6 +18,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+
+// ✅ 추가: 플레이어 연결
+import { usePlayer } from "@/contexts/PlayerContext"
+import type { Track } from "@/contexts/PlayerContext"
 
 /** 서버 배치 응답 타입 */
 type BatchItem = { key: string; albumImage: string | null; title?: string | null; artist?: string | null; trackId?: string | null }
@@ -79,6 +83,7 @@ const saveSessionArt = (obj: ArtCache) => {
   } catch {}
 }
 
+
 export default function SearchAndRequest({
   musics,
   loading,
@@ -88,6 +93,9 @@ export default function SearchAndRequest({
 }: Props) {
   const router = useRouter()
   const isNarrow = useIsNarrow()
+
+  // ✅ 추가: 플레이어 훅
+  const { setQueueAndPlay } = usePlayer()
 
   /* ── 상태 ───────────────────────────────────────────────── */
   const [q, setQ] = useState("")
@@ -119,7 +127,7 @@ export default function SearchAndRequest({
       .slice(0, 30)
   }, [q, musics])
 
-  /* ── 앨범 아트 캐시/로딩 ─────────────────────────────────── */
+    /* ── 앨범 아트 캐시/로딩 ─────────────────────────────────── */
   const [artCache, setArtCache] = useState<ArtCache>({})
   const [artLoading, setArtLoading] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
@@ -227,6 +235,29 @@ export default function SearchAndRequest({
   const onPickClick = (m: MusicItem) => {
     pendingMusicRef.current = m
     fileInputRef.current?.click()
+  }
+
+  // ✅ 추가: MusicItem → Track 변환 유틸
+  const toTrack = (m: MusicItem): Track => {
+    const key = keyOf(m)
+    return {
+      id: m.music_id,
+      title: m.title ?? "",
+      artist: m.artist ?? "",
+      coverUrl: artCache[key] ?? null,
+      // audioUrl / spotify_* 는 PlayerContext의 resolvePlayableSource 가 해결합니다.
+      selected_from: "sub",
+    }
+  }
+
+  // ✅ 추가: 검색 결과에서 선택한 곡을 재생
+  const playFromSearch = (m: MusicItem) => {
+    const queue: Track[] = results.map(toTrack)
+    const startIndex = results.findIndex((x) => x.music_id === m.music_id)
+    if (queue.length === 0 || startIndex < 0) return
+    setQueueAndPlay(queue, startIndex)
+    // 필요하면 검색 오버레이 닫기
+    setOverlayOpen(false)
   }
 
   const onFileChosen: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
@@ -362,6 +393,7 @@ export default function SearchAndRequest({
     </>
   )
 
+
   // 검색 리스트 공통 렌더
   const ResultList = (
     <div className={`${resultsMax} w-full mx-auto mt-6`}>
@@ -384,10 +416,11 @@ export default function SearchAndRequest({
               <li
                 key={m.music_id}
                 className="bg-white/80 rounded-xl border p-3 flex items-center justify-between gap-3 hover:shadow-sm transition"
+                // ✅ (선택) 항목 더블클릭으로 바로 재생
+                onDoubleClick={() => playFromSearch(m)}
               >
                 <div className="flex items-center gap-3 min-w-0 flex-1">
                   {img ? (
-                    // ✔ 경고 해결: 고정 크기 래퍼 + fill + object-cover
                     <div className="relative w-12 h-12 rounded-md overflow-hidden flex-shrink-0">
                       <Image
                         src={img}
@@ -395,7 +428,7 @@ export default function SearchAndRequest({
                         fill
                         sizes="48px"
                         className="object-cover"
-                        priority={idx < 4} // 상단 몇 개 우선 로드
+                        priority={idx < 4}
                         onError={(e) => {
                           const el = e.currentTarget as HTMLImageElement
                           el.style.display = "none"
@@ -414,6 +447,20 @@ export default function SearchAndRequest({
 
                 <div className="flex items-center gap-2">
                   {artLoading && <span className="text-xs text-gray-400">이미지 로딩…</span>}
+
+                  {/* ✅ 추가: 바로 재생 버튼 */}
+                  <Button
+                    size="sm"
+                    className="gap-1"
+                    onClick={() => playFromSearch(m)}
+                    aria-label="재생"
+                    title="재생"
+                  >
+                    <Play className="w-4 h-4" />
+                    재생
+                  </Button>
+
+                  {/* 기존: 사진 선택(에디터 이동용) */}
                   <Button
                     variant="outline"
                     size="sm"

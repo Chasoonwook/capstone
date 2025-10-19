@@ -10,6 +10,7 @@ import { Stage, Layer, Image as KImage, Line, Group, Transformer } from "react-k
 import useImage from "use-image"
 import Konva from "konva"
 import "konva/lib/filters/Brighten"
+import { fetchMe } from "@/app/recommend/hooks/useAuthMe" // ✅ history 저장용
 
 /* ---------- 타입 ---------- */
 type StickerMeta = { sticker_id: number; name?: string | null }
@@ -75,6 +76,9 @@ export default function EditorClient() {
   const router = useRouter()
 
   const photoId = qs.get("photoId")
+  const historyId = qs.get("historyId") // 편집 진입 시 전달되면 유지
+  const musicId = qs.get("musicId")
+  const selectedFromParam = qs.get("selected_from") // "main" | "sub" | ...
   const draftKey = useMemo(() => (photoId ? `editor_draft::${photoId}` : ""), [photoId])
 
   const [imgUrl, setImgUrl] = useState<string | null>(null)
@@ -239,7 +243,7 @@ export default function EditorClient() {
     setTool(null)
   }
 
-  /* ---------- 저장(원본 교체) & 나가기 ---------- */
+  /* ---------- 저장(원본 교체) + 반영 검증 + history 저장 ---------- */
   const stageToBlob = async (): Promise<Blob> => {
     const stage = stageRef.current as any
     const dataURL: string = stage.toDataURL({ pixelRatio: 1, mimeType: "image/png" })
@@ -269,16 +273,87 @@ export default function EditorClient() {
     return false
   }
 
+  // 업로드 후 실제 반영 확인(캐시 우회)
+  async function verifySaved(pid: string): Promise<boolean> {
+    try {
+      const r = await fetch(`${API_BASE}/api/photos/${pid}/binary?ts=${Date.now()}`, {
+        method: "GET",
+        cache: "no-store",
+        credentials: "include",
+      })
+      if (!r.ok) return false
+      const blob = await r.blob()
+      return blob.size > 0
+    } catch {
+      return false
+    }
+  }
+
+  // ✅ history 저장 (편집 후 스냅샷 기록)
+  const saveHistoryAfterEdit = async (): Promise<number | null> => {
+    try {
+      const me = await fetchMe()
+      if (!me?.id) {
+        setErr("로그인이 필요합니다.")
+        return null
+      }
+      if (!photoId) {
+        setErr("photoId가 없습니다.")
+        return null
+      }
+      // musicId가 없을 수도 있음 → 서버에서 NULL 허용 가정
+      const res = await fetch(`${API_BASE}/api/history`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: me.id,
+          photo_id: Number(photoId),
+          music_id: musicId ? Number(musicId) : null,
+          // 편집 화면에서도 selected_from을 그대로 넘겨 스냅샷에 표시(가능하면)
+          selected_from: (selectedFromParam === "main" || selectedFromParam === "sub") ? selectedFromParam : null,
+          // 필요시 편집 플래그 등을 추가할 수 있음 e.g., edited: true
+        }),
+      })
+      if (!res.ok) {
+        const t = await res.text().catch(() => "")
+        throw new Error(t || "history 저장 실패")
+      }
+      const json = await res.json().catch(() => ({}))
+      const hid = json?.history_id ?? null
+      if (!hid) throw new Error("history_id가 없습니다.")
+      return hid
+    } catch (e: any) {
+      setErr(e?.message || "history 저장 중 오류가 발생했습니다.")
+      return null
+    }
+  }
+
   const handleConfirm = async () => {
     if (!imgUrl) return
     setSaving(true)
     setErr(null)
     try {
+      // 1) 캔버스 → Blob
       const blob = await stageToBlob()
-      const ok = await uploadEdited(blob) // ✅ 원본 교체
+
+      // 2) 업로드(원본 교체 시도)
+      const ok = await uploadEdited(blob)
       if (!ok) throw new Error("편집본 업로드에 실패했습니다.")
-      clearDraft()                        // ✅ 드래프트 삭제
-      router.push("/")                    // ✅ 메인으로 이동
+
+      // 3) 반영 검증
+      if (!photoId || !(await verifySaved(String(photoId)))) {
+        throw new Error("저장이 반영되지 않았습니다. 잠시 후 다시 시도해주세요.")
+      }
+
+      // 4) history 스냅샷 저장
+      const hid = await saveHistoryAfterEdit()
+      if (!hid) return // 실패 시 이동하지 않음
+
+      // 5) 드래프트 삭제 후 메인 이동(캐시 무효화)
+      clearDraft()
+      router.push(`/?ts=${Date.now()}`)
+      // router.refresh() // 필요 시 사용
     } catch (e: any) {
       setErr(e?.message || "저장 중 오류가 발생했습니다.")
     } finally {
@@ -287,7 +362,7 @@ export default function EditorClient() {
   }
 
   const handleCancel = () => {
-    clearDraft()          // ✅ 취소 시 드래프트 삭제
+    clearDraft()
     router.back()
   }
 

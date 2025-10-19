@@ -113,7 +113,7 @@ export default function EditorClient() {
 
   const handleSaveAsIs = async () => {
     const newId = await saveHistoryAndDiary()
-    if (newId) router.push("/diary")
+    if (newId) router.push("/")   // 저장 후 메인으로 이동
   }
 
   const handleGoEdit = () => {
