@@ -285,9 +285,65 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, [state.playbackSource, spotifyPlayer, state.queue, state.index, state.curMs, isPlaying, seek, resume]);
 
 
-  const setVolume = useCallback( (v: number) => { /* ... 동일 ... */ }, [spotifyPlayer]);
+  const setVolume = useCallback(
+    (v: number) => {
+      const vv = Math.min(1, Math.max(0, v));
+      _setVolume(vv); // 내부 상태 업데이트
+      // 로컬 스토리지에 저장
+      if (typeof window !== "undefined") {
+        try { localStorage.setItem("player_volume", String(vv)); } catch {}
+      }
+      // HTML Audio 요소 볼륨 조절
+      if (audioRef.current) audioRef.current.volume = vv;
+      // Spotify SDK 볼륨 조절 (준비된 경우)
+      if (spotifyPlayer.ready) {
+        spotifyPlayer.setVolume(vv);
+      }
+    },
+    [spotifyPlayer] // spotifyPlayer 객체 참조가 바뀌면 함수 재생성
+  );
 
-  const setQueueAndPlay = useCallback( (tracks: Track[], startIndex = 0) => { /* ... 동일 ... */ }, [isPlaying, pause, play] );
+  const setQueueAndPlay = useCallback(
+    (tracks: Track[], startIndex = 0) => {
+      console.log(`[PlayerContext] setQueueAndPlay called with ${tracks.length} tracks, starting at index ${startIndex}`); // ✨ 로그 추가
+      const safeIndex = Math.max(0, Math.min(startIndex, tracks.length - 1));
+      const firstTrack = tracks[safeIndex] || null;
+
+      // 현재 재생 중이면 일단 중지
+      if (isPlaying) {
+          console.log("[PlayerContext] Pausing before setting new queue"); // ✨ 로그 추가
+          pause();
+      }
+
+      // 인덱스 변경 hook의 자동 재생을 잠시 억제
+      suppressAutoPlayRef.current = true;
+      console.log("[PlayerContext] Auto-play suppressed"); // ✨ 로그 추가
+
+      // 새로운 큐와 인덱스로 상태 업데이트 (항상 0초부터 시작)
+      setState((s) => ({
+        ...s,
+        queue: tracks,
+        index: safeIndex,
+        currentTrack: firstTrack,
+        curMs: 0,
+        durMs: firstTrack?.duration ? firstTrack.duration * 1000 : 0,
+        playbackSource: null, // 재생 소스 초기화
+      }));
+      console.log(`[PlayerContext] State updated for new queue. Index: ${safeIndex}, Track: ${firstTrack?.title}`); // ✨ 로그 추가
+
+      // 약간의 지연 후 첫 곡 재생 시작 (startFromBeginning = true)
+      setTimeout(() => {
+        console.log("[PlayerContext] Initiating play for the first track in the new queue"); // ✨ 로그 추가
+        void play(firstTrack, safeIndex, true); // true 전달 확인
+        // ✨ play 함수 호출 직후가 아니라, 약간 더 지연 후 해제 ✨
+        setTimeout(() => {
+            suppressAutoPlayRef.current = false;
+            console.log("[PlayerContext] Auto-play suppression released"); // ✨ 로그 추가
+        }, 150); // 총 50ms + 150ms = 200ms 지연 후 해제
+      }, 50);
+    },
+    [isPlaying, pause, play] // play, pause 의존성 유지
+  );
 
   useEffect(() => { // preview ended
     const a = ensureAudio(); const handleEnded = () => { if (state.playbackSource === "preview") next(); };
@@ -296,26 +352,48 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   // ✨ 인덱스/트랙ID 변경 감지 useEffect 최종 ✨
   useEffect(() => {
+    const currentIndex = state.index; // 현재 상태의 인덱스를 변수에 저장
+    const currentQueue = state.queue; // 현재 상태의 큐를 변수에 저장
+    const currentlyPlayingTrackId = state.currentTrack?.id; // 현재 재생 중인 트랙 ID
+
     console.log(`[PlayerContext] Index/TrackID Effect triggered. Suppressed: ${suppressAutoPlayRef.current}, Index: ${state.index}, CurrentTrack ID: ${state.currentTrack?.id}`);
-    if (suppressAutoPlayRef.current) { 
-        console.log("Auto-play suppressed"); // 디버깅 로그
-        return;
-    }
+    
+    if (suppressAutoPlayRef.current) {return;}
 
     const track = state.queue[state.index]; // 현재 인덱스에 해당하는 트랙
 
-    // 조건: 트랙 유효 + (현재 트랙 없거나 ID 다름)
-    const shouldPlay = track && (!state.currentTrack || state.currentTrack.id !== track.id);
-    console.log(`[PlayerContext] Effect condition check: shouldPlay = ${shouldPlay}`); // ✨ 로그 추가
+    // 인덱스가 유효한 범위 내에 있는지 확인
+    if (currentIndex < 0 || currentIndex >= currentQueue.length) {
+      console.log(`[PlayerContext Effect] Invalid index (${currentIndex}). No track to play.`);
+      return;
+    }
+
+    const targetTrack = currentQueue[currentIndex]; // 목표 트랙 가져오기
+
+    // 목표 트랙이 유효하고 ID를 가지고 있는지 확인
+    const targetTrackIsValid = !!targetTrack && typeof targetTrack === 'object' && typeof targetTrack.id !== 'undefined';
+    if (!targetTrackIsValid) {
+        console.log(`[PlayerContext Effect] Track at index ${currentIndex} is invalid.`);
+        return;
+    }
+
+    const targetTrackId = targetTrack.id; // 목표 트랙 ID
+
+    // ✨ 재생 조건: 목표 트랙 ID가 현재 재생 중인 트랙 ID와 다를 때 ✨
+    const shouldPlay = currentlyPlayingTrackId !== targetTrackId;
+
+    console.log(`[PlayerContext Effect] Condition check: targetTrackId=${targetTrackId}, currentlyPlayingTrackId=${currentlyPlayingTrackId}, shouldPlay=${shouldPlay}`);
 
     // 트랙이 유효하고, currentTrack이 없거나 ID가 다를 때 재생 시도
     if (shouldPlay) {
-      console.log(`--> Calling play for Track ID: ${track.id} from beginning`);
+      console.log(`--> Calling play for Track ID: ${targetTrackId} from beginning`);
       // play 함수에 true를 전달하여 처음부터 재생
-      void play(track, state.index, true);
+      void play(targetTrack, currentIndex, true);
+    } else {
+        console.log(`[PlayerContext Effect] Conditions not met for auto-play (target track ID is same as current).`);
     }
   // ✨ 의존성 배열: state.index와 state.currentTrack?.id만 사용 ✨
-  }, [state.index, state.currentTrack?.id, state.queue, play]); // play는 유지, seek 제거
+  }, [state.index, state.queue, play]); // play는 유지, seek 제거
 
 
   const ctx: Ctx = useMemo(
