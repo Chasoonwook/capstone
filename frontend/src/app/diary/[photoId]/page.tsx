@@ -3,7 +3,7 @@
 
 import { useMemo, useState, useEffect, useCallback, useRef } from "react"
 import { useSearchParams, useParams, useRouter } from "next/navigation"
-import { API_BASE } from "@/lib/api"
+import { API_BASE, apiUrl } from "@/lib/api"
 import { ArrowLeft, Save, Music2, Calendar, Play } from "lucide-react"
 import { useAuthUser } from "@/hooks/useAuthUser"
 
@@ -240,15 +240,20 @@ export default function DiaryPage() {
     userCheckDone,
   ])
 
-  // 🔎 SearchAndRequest.tsx와 동일한 배치 API로 앨범아트 1건 조회(가능하면) + 세션 캐시 사용
+  // 🔎 배치 API로 앨범커버 + (가능하면) previewUrl/spotifyUri 확보 → 트랙에 주입
   const fetchCoverAndPlay = useCallback(async (auto = false) => {
     const title = titleParam.trim()
     const artist = artistParam.trim()
     const keyId = `diary:${photoId}:${title.toLowerCase()}-${artist.toLowerCase()}`
 
-    // 이미 현재 곡이 동일하면 중복 재생 방지
+    // 이미 현재 곡이 동일하면 자동 재시도 생략
     const cur = state.currentTrack
-    if (auto && cur && (cur.title?.toLowerCase() ?? "") === title.toLowerCase() && (cur.artist?.toLowerCase() ?? "") === artist.toLowerCase()) {
+    if (
+      auto &&
+      cur &&
+      (cur.title?.toLowerCase() ?? "") === title.toLowerCase() &&
+      (cur.artist?.toLowerCase() ?? "") === artist.toLowerCase()
+    ) {
       return
     }
 
@@ -259,33 +264,46 @@ export default function DiaryPage() {
       setCoverUrl(cached)
     }
 
-    // 2) 아직 배치 검색을 시도하지 않았고 title/artist가 있으면 한 번만 호출
+    // 2) 배치 검색 1회 (앨범커버 + previewUrl/spotifyUri 확보 시도)
     let cover: string | null = typeof cached !== "undefined" ? cached : null
+    let previewUrl: string | null = null
+    let spotifyUri: string | null = null
+
     if (!artTried && title && artist) {
       setArtTried(true)
       try {
         const body = { pairs: [{ title, artist }] }
-        const r = await fetch("/api/spotify/search/batch", {
+        const r = await fetch(apiUrl("/spotify/search/batch"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
           cache: "no-store",
+          credentials: "include",
         })
         if (r.ok) {
-          const json = (await r.json()) as { items?: { key?: string; albumImage: string | null }[] }
-          const album = json?.items?.[0]?.albumImage ?? null
-          cover = album
-          setCoverUrl(album)
+          const json = (await r.json()) as {
+            items?: Array<{
+              albumImage?: string | null
+              previewUrl?: string | null
+              spotifyUri?: string | null
+            }>
+          }
+          const item = json?.items?.[0]
+          cover = item?.albumImage ?? cover ?? null
+          previewUrl = item?.previewUrl ?? null
+          spotifyUri = item?.spotifyUri ?? null
+
+          if (cover != null) setCoverUrl(cover)
 
           // 세션 캐시에 저장
           setArtCache((prev) => {
-            const next = { ...prev, [k]: album ?? null }
+            const next = { ...prev, [k]: cover ?? null }
             saveSessionArt(next)
             return next
           })
         }
       } catch {
-        // 실패해도 무시하고 재생은 진행
+        // 실패해도 재생 시도는 계속
       }
     }
 
@@ -295,7 +313,9 @@ export default function DiaryPage() {
       title: title || "제목 없음",
       artist: artist || "Various",
       coverUrl: cover ?? null,
-      // audioUrl/spotify_uri 등은 PlayerContext 내부 resolve가 처리
+      // 🔹 미리듣기/스포티파이 URI를 가능하면 채워넣기
+      audioUrl: previewUrl ?? undefined,
+      spotify_uri: spotifyUri ?? undefined,
       selected_from: "diary",
     }
 
@@ -418,7 +438,6 @@ export default function DiaryPage() {
             </div>
           </div>
         </section>
-
 
         <section className="space-y-6">
           <div>
