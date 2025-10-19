@@ -253,7 +253,6 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         index: targetIndex,
         currentTrack: targetTrack,
         playbackSource: source,
-        // curMs: 0, // <--- 제거
       }));
 
       if (source === "spotify" && audioRef.current && !audioRef.current.paused) {
@@ -459,17 +458,21 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     return () => a.removeEventListener("ended", handleEnded);
   }, [ensureAudio, state.playbackSource, next]);
 
-  // 인덱스 변경 시 자동 재생 (suppressAutoPlayRef 고려)
+  // 인덱스 변경 시 자동 재생 
   useEffect(() => {
+    // suppressAutoPlayRef가 true이면 아무것도 하지 않음 (큐 설정 중이므로)
+    if (suppressAutoPlayRef.current) return;
+
     const track = state.queue[state.index];
     // ✨ play 호출 조건 강화: suppress 중이 아니고, 트랙이 존재하고, 현재 트랙과 다를 때만 ✨
-    if (!suppressAutoPlayRef.current && track && state.currentTrack?.id !== track.id) {
-      // ✨ play 호출 시 curMs를 0으로 초기화하도록 상태 업데이트에서 제거했으므로,
+    if (track && (!state.currentTrack || state.currentTrack.id !== track.id)) {
+      console.log(`Index changed to ${state.index}, attempting to play new track ID: ${track.id}`); // 디버깅 로그 추가
+  
       //    여기서 seek(0)을 호출하여 명시적으로 처음부터 재생 ✨
       seek(0); // seek를 먼저 호출
       void play(track, state.index); // 그 다음 play 호출
     }
-  }, [state.index, state.queue, play, state.currentTrack, seek]); // seek 추가
+  }, [state.index, state.queue, play, seek, state.currentTrack?.id]); // seek 추가
 
 
   const ctx: Ctx = useMemo(
