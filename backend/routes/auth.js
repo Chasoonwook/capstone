@@ -33,8 +33,8 @@ function issueTokenAndSetCookie(res, payload) {
   const token = jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
   res.cookie(COOKIE_NAME, token, {
     httpOnly: true,
-    secure: isProd,            // 프로덕션에서만 secure
-    sameSite: isProd ? "none" : "lax", // 교차 사이트 쿠키 허용
+    secure: true,            // 프로덕션에서만 secure
+    sameSite: "none", // 교차 사이트 쿠키 허용
     path: "/",
     maxAge: 7 * 24 * 60 * 60 * 1000,   // 7일
   });
@@ -154,8 +154,8 @@ router.post("/login", async (req, res) => {
 router.post("/logout", (_req, res) => {
   res.clearCookie(COOKIE_NAME, {
     httpOnly: true,
-    secure: isProd,
-    sameSite: isProd ? "none" : "lax",
+    secure: true,
+    sameSite: "none",
     path: "/",
   });
   res.json({ ok: true });
