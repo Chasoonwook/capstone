@@ -198,12 +198,6 @@ export default function RecommendClient() {
     const run = async () => {
       if (photoId == null) return;
 
-      if (!onceMountedRef.current) {
-        onceMountedRef.current = true;
-      } else if (lastQueueSigRef.current && playlist.length > 0) {
-        return;
-      }
-
       setLoading(true);
       setError(null);
       try {
@@ -228,32 +222,31 @@ export default function RecommendClient() {
 
         const enhanced = await prefetchCoversAndUris(list);
 
-        const sig = JSON.stringify(
-          enhanced.map((t) => [t.id, t.spotify_uri, !!t.audioUrl]).concat([enhanced.length])
-        );
-
-        if (sig === lastQueueSigRef.current) {
-          if (!playlist.length) setPlaylist(enhanced);
-          return;
+        console.log("[RecommendClient] Enhanced list (after prefetch):", JSON.stringify(enhanced.slice(0, 2), null, 2));
+        // ✨ 첫 곡의 audioUrl, spotify_uri 확인 ✨
+        if (enhanced.length > 0) {
+            console.log(`[RecommendClient] First track details: audioUrl=${enhanced[0].audioUrl}, spotify_uri=${enhanced[0].spotify_uri}`);
         }
-        lastQueueSigRef.current = sig;
+
         setPlaylist(enhanced);
 
         if (enhanced.length > 0) {
+          console.log("[RecommendClient] Calling setQueueAndPlay with enhanced list.");
           setQueueAndPlay(enhanced, 0);
         } else {
+          console.log("[RecommendClient] No recommendations found, clearing queue.");
           setQueueAndPlay([], 0);
         }
-      } catch (e) {
+      } catch (e: any) {
         console.error(e);
-        setError("추천 목록을 불러오지 못했습니다.");
+        setError(e.message || "추천 목록을 불러오지 못했습니다.");
         setQueueAndPlay([], 0);
       } finally {
         setLoading(false);
       }
     };
     run();
-  }, [photoId, setQueueAndPlay, playlist.length]);
+  }, [photoId, setQueueAndPlay ]);
 
   // --- 현재 재생 정보/상태 ---
   const currentTrack = player.state.currentTrack;
