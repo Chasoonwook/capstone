@@ -1,10 +1,14 @@
 "use client"
 
-import { useMemo, useState, useEffect, useCallback } from "react"
+import { useMemo, useState, useEffect, useCallback, useRef } from "react"
 import { useSearchParams, useParams, useRouter } from "next/navigation"
 import { API_BASE } from "@/lib/api"
-import { ArrowLeft, Save, Music2, Calendar } from "lucide-react"
+import { ArrowLeft, Save, Music2, Calendar, Play } from "lucide-react"
 import { useAuthUser } from "@/hooks/useAuthUser"
+
+// ✅ PlayerContext 방식으로 재생
+import { usePlayer } from "@/contexts/PlayerContext"
+import type { Track } from "@/contexts/PlayerContext"
 
 type ExistingDiary = {
   id: number
@@ -22,6 +26,8 @@ const buildPhotoSrc = (photoId: string | number) => {
     fallback: `${API_BASE}/photos/${id}/binary`,
   }
 }
+
+// (참고) 직접 오디오 파일을 다루지 않음. PlayerContext가 Spotify/프리뷰를 해결.
 
 const fmtKoreanDate = (iso?: string | null) => {
   if (!iso) return ""
@@ -65,10 +71,12 @@ export default function DiaryPage() {
   const qs = useSearchParams()
   const { user } = useAuthUser?.() ?? { user: undefined }
 
+  const { setQueueAndPlay, state } = usePlayer()
+
   const rawPhotoId = params?.photoId ?? ""
   const photoId = Number(rawPhotoId)
-  const titleParam = qs.get("title") ?? "제목 없음"
-  const artistParam = qs.get("artist") ?? "Various"
+  const titleParam = (qs.get("title") ?? "").trim() || "제목 없음"
+  const artistParam = (qs.get("artist") ?? "").trim() || "Various"
   const dateParam = qs.get("date")
   const dateLabel = fmtKoreanDate(dateParam)
 
@@ -83,6 +91,11 @@ export default function DiaryPage() {
   const [saveError, setSaveError] = useState<string | null>(null)
   const [diaryId, setDiaryId] = useState<number | null>(null)
 
+  // ⬇️ 앨범아트(가능 시) 확보 후 트랙 구성
+  const [coverUrl, setCoverUrl] = useState<string | null>(null)
+  const [artTried, setArtTried] = useState(false)
+  const autoPlayedRef = useRef(false)
+
   const storageKey = useMemo(() => `diary_draft::${Number.isFinite(photoId) ? photoId : "unknown"}`, [photoId])
 
   useEffect(() => {
@@ -91,17 +104,7 @@ export default function DiaryPage() {
     setUserCheckDone(true)
   }, [user])
 
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(storageKey)
-      if (raw) {
-        const draft = JSON.parse(raw) as { subject?: string; content?: string }
-        if (typeof draft?.subject === "string") setSubject(draft.subject)
-        if (typeof draft?.content === "string") setContent(draft.content)
-      }
-    } catch {}
-  }, [storageKey])
-
+  // 기존 일기 불러오기
   useEffect(() => {
     if (!Number.isFinite(photoId)) return
     if (!userCheckDone || userId == null) return
@@ -118,6 +121,18 @@ export default function DiaryPage() {
       } catch {}
     })()
   }, [photoId, userId, userCheckDone])
+
+  // 로컬 임시 저장
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(storageKey)
+      if (raw) {
+        const draft = JSON.parse(raw) as { subject?: string; content?: string }
+        if (typeof draft?.subject === "string") setSubject(draft.subject)
+        if (typeof draft?.content === "string") setContent(draft.content)
+      }
+    } catch {}
+  }, [storageKey])
 
   useEffect(() => {
     try {
@@ -198,6 +213,61 @@ export default function DiaryPage() {
     userCheckDone,
   ])
 
+  // 🔎 SearchAndRequest.tsx와 동일한 배치 API로 앨범아트 1건 조회(가능하면)
+  const fetchCoverAndPlay = useCallback(async (auto = false) => {
+    const title = titleParam.trim()
+    const artist = artistParam.trim()
+    const keyId = `diary:${photoId}:${title.toLowerCase()}-${artist.toLowerCase()}`
+
+    // 이미 현재 곡이 동일하면 중복 재생 방지
+    const cur = state.currentTrack
+    if (auto && cur && (cur.title?.toLowerCase() ?? "") === title.toLowerCase() && (cur.artist?.toLowerCase() ?? "") === artist.toLowerCase()) {
+      return
+    }
+
+    let cover: string | null = null
+    if (!artTried && title && artist) {
+      setArtTried(true)
+      try {
+        const body = { pairs: [{ title, artist }] }
+        const r = await fetch("/api/spotify/search/batch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          cache: "no-store",
+        })
+        if (r.ok) {
+          const json = (await r.json()) as { items?: { albumImage: string | null }[] }
+          cover = json?.items?.[0]?.albumImage ?? null
+          setCoverUrl(cover)
+        }
+      } catch {
+        // 실패해도 무시하고 진행
+      }
+    }
+
+    const track: Track = {
+      id: keyId,
+      title: title || "제목 없음",
+      artist: artist || "Various",
+      coverUrl: cover ?? null,
+      // audioUrl/spotify_uri 등은 PlayerContext 내부의 resolve 로직에서 처리
+      selected_from: "diary",
+    }
+
+    setQueueAndPlay([track], 0)
+  }, [artistParam, titleParam, photoId, setQueueAndPlay, state.currentTrack, artTried])
+
+  // 페이지 진입 시 1회 자동 재생
+  useEffect(() => {
+    if (!Number.isFinite(photoId)) return
+    if (!titleParam && !artistParam) return
+    if (autoPlayedRef.current) return
+    autoPlayedRef.current = true
+    void fetchCoverAndPlay(true)
+  }, [photoId, titleParam, artistParam, fetchCoverAndPlay])
+
+  // 단축키: Ctrl/Cmd+S → 저장
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
@@ -209,6 +279,7 @@ export default function DiaryPage() {
     return () => window.removeEventListener("keydown", onKey)
   }, [saveDiary, saving])
 
+  // 떠날 때 경고
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
       if (subject || content) {
@@ -278,7 +349,29 @@ export default function DiaryPage() {
                 <div className="text-sm font-semibold text-foreground truncate">{titleParam}</div>
                 <div className="text-xs text-muted-foreground truncate mt-1">{artistParam}</div>
               </div>
+
+              {/* 수동 재생 버튼 (하단바로 제어 가능하지만, 여기서도 트리거 가능) */}
+              <button
+                onClick={() => fetchCoverAndPlay(false)}
+                className="px-3 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 flex items-center gap-2"
+                aria-label="재생"
+                title="재생"
+              >
+                <Play className="w-4 h-4" />
+                재생
+              </button>
             </div>
+
+            {/* (선택) 커버 프리뷰 */}
+            {coverUrl && (
+              <div className="mt-4">
+                <img
+                  src={coverUrl}
+                  alt="album cover"
+                  className="w-24 h-24 rounded-md object-cover border"
+                />
+              </div>
+            )}
           </div>
         </section>
 
@@ -306,7 +399,6 @@ export default function DiaryPage() {
         </section>
       </main>
 
-      {/* 하단 고정 액션: 임시저장 버튼 제거, 저장만 유지 */}
       <div className="fixed bottom-0 left-0 right-0 border-t border-border bg-background/95 backdrop-blur-xl shadow-lg">
         <div className="max-w-2xl mx-auto px-4 py-4 flex items-center gap-3">
           <button

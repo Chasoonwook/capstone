@@ -7,16 +7,22 @@ import { GlobalNowPlayingBar } from "@/components/player/GlobalNowPlayingBar";
 export default function ClientLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
-  // 메인 페이지("/")에서만 하단바 표시
-  const showBar = pathname === "/";
+  // 🔐 재생 허용 경로(컨텍스트 활성화): 메인(/), recommend, diary
+  const isAllowedRoute =
+    pathname === "/" ||
+    pathname.startsWith("/recommend") ||
+    pathname.startsWith("/diary/");
 
-  return (
-    <PlayerProvider>
-      {/* 페이지 콘텐츠 */}
+  // 🎛️ 하단 재생바는 diary 페이지만 표시
+  const showBar = pathname.startsWith("/diary/");
+
+  const content = (
+    <>
       <div className="min-h-screen">{children}</div>
-
-      {/* 전역 하단 내비게이션(플레이어 바) */}
       {showBar && <GlobalNowPlayingBar />}
-    </PlayerProvider>
+    </>
   );
+
+  // 허용 경로에서만 PlayerProvider 적용
+  return isAllowedRoute ? <PlayerProvider>{content}</PlayerProvider> : content;
 }

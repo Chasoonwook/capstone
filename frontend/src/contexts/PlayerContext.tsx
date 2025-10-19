@@ -23,7 +23,8 @@ export type Track = {
   spotify_uri?: string | null;        // spotify:track:<id>
   coverUrl?: string | null;
   duration?: number | null;           // 초 단위 (미리듣기일 때는 보통 null)
-  selected_from?: "main" | "sub" | "preferred" | null;
+  // ✅ "diary" 추가 (+ 검색/추천에서도 쓸 수 있게 search/recommend 확장)
+  selected_from?: "main" | "sub" | "preferred" | "search" | "recommend" | "diary" | null;
   spotify_track_id?: string | null;   // 순수 ID만
 };
 
