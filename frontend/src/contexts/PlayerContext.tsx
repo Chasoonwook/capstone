@@ -42,7 +42,7 @@ type Ctx = {
   volume: number;
   isSpotifyReady: boolean;
 
-  play: (track?: Track, index?: number) => Promise<void>;
+  play: (track?: Track, index?: number, startFromBeginning?: boolean) => Promise<void>; // startFromBeginning 추가
   pause: () => Promise<void>;
   togglePlayPause: () => Promise<void>;
   next: () => void;
@@ -58,29 +58,26 @@ const PlayerCtx = createContext<Ctx | null>(null);
 /* =======================
    검색 중복 방지/실패 캐시/스로틀
    ======================= */
-const inflightMap = new Map<string, Promise<Track>>(); // 동일 키 1-flight
-const failCache = new Map<string, number>();           // 실패 키 -> ts
-const FAIL_TTL_MS = 3 * 60 * 1000;                     // 실패 3분 동안 재검색 금지
-const MIN_GAP_MS = 800;                                 // 호출 간 최소 간격(스로틀)
+const inflightMap = new Map<string, Promise<Track>>();
+const failCache = new Map<string, number>();
+const FAIL_TTL_MS = 3 * 60 * 1000;
+const MIN_GAP_MS = 800;
 let lastHit = 0;
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** 재생 직전, 프리뷰/Spotify ID 없으면 1회만 검색해서 보강 */
 async function resolvePlayableSource(t: Track): Promise<Track> {
+    // ... (resolvePlayableSource 함수 내용은 기존과 동일) ...
   if (!t || t.audioUrl || t.spotify_uri || t.spotify_track_id || !t.title) return t;
 
   const key = `${t.title}|${t.artist ?? ""}`.trim().toLowerCase();
 
-  // 최근 실패한 곡은 건너뜀(429 폭주 방지)
   const lastFail = failCache.get(key) || 0;
   if (Date.now() - lastFail < FAIL_TTL_MS) return t;
 
-  // 동일 키 요청 진행 중이면 그 결과 재사용(1-flight)
   const inflight = inflightMap.get(key);
   if (inflight) return { ...t, ...(await inflight) };
 
   const p = (async (): Promise<Track> => {
-    // 스로틀: 호출 간 최소 간격 보장
     const gap = Date.now() - lastHit;
     if (gap < MIN_GAP_MS) await wait(MIN_GAP_MS - gap);
 
@@ -92,7 +89,6 @@ async function resolvePlayableSource(t: Track): Promise<Track> {
 
     let data: any = null;
 
-    // 과도 재시도 금지: 1회만 시도
     lastHit = Date.now();
     const resp = await fetch(`${API_BASE}/api/spotify/search?${qs.toString()}`, {
       credentials: "include",
@@ -101,7 +97,6 @@ async function resolvePlayableSource(t: Track): Promise<Track> {
     if (resp?.ok) {
       data = await resp.json();
     } else {
-      // 429/기타 실패 → 부정 캐시 기록
       failCache.set(key, Date.now());
       return t;
     }
@@ -162,10 +157,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     return isNaN(v) ? 0.8 : Math.min(1, Math.max(0, v));
   });
 
-  // 인덱스 변경 useEffect의 자동 호출을 억제(중복 play 방지)
   const suppressAutoPlayRef = useRef(false);
 
   const ensureAudio = useCallback(() => {
+    // ... (ensureAudio 함수 내용은 기존과 동일) ...
     if (!audioRef.current) {
       console.log("Creating Audio element for previews");
       const a = new Audio();
@@ -174,20 +169,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
       a.addEventListener("timeupdate", () => {
         if (state.playbackSource === "preview") {
-          setState((s) => ({
-            ...s,
-            curMs: a.currentTime * 1000,
-            durMs:
-              a.duration && isFinite(a.duration) ? a.duration * 1000 : s.durMs,
-          }));
+          setState((s) => ({ ...s, curMs: a.currentTime * 1000 }));
+            // duration 업데이트는 loadedmetadata에서만 처리하는 것이 더 안정적일 수 있음
         }
       });
       a.addEventListener("loadedmetadata", () => {
         if (state.playbackSource === "preview") {
           setState((s) => ({
             ...s,
-            durMs:
-              a.duration && isFinite(a.duration) ? a.duration * 1000 : s.durMs,
+            durMs: a.duration && isFinite(a.duration) ? a.duration * 1000 : 0 // 0으로 초기화
           }));
         }
       });
@@ -224,18 +214,32 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       const nextTrack = s.queue[nextIndex];
       return { ...s, index: nextIndex, currentTrack: nextTrack, curMs: 0 };
     });
-  }, [setIsPlaying]);
+  }, [setIsPlaying]); // 의존성 배열 유지
 
+  // ✨ play 함수 수정: startFromBeginning 플래그 추가 및 명시적 중지 로직 ✨
   const play = useCallback(
-    async (track?: Track, index?: number) => {
+    async (track?: Track, index?: number, startFromBeginning = true) => {
       const baseTrack = track ?? state.queue[index ?? state.index];
       const targetIndex = index ?? state.index;
       if (!baseTrack) return;
 
+      // ✨ 명시적으로 현재 재생 중지 ✨
+      try {
+        if (state.playbackSource === "spotify" && spotifyPlayer.ready && !spotifyPlayer.state.paused) {
+          await spotifyPlayer.pause();
+        } else if (state.playbackSource === "preview" && audioRef.current && !audioRef.current.paused) {
+          audioRef.current.pause();
+          if (startFromBeginning) audioRef.current.currentTime = 0; // 처음부터 재생 시 시간 초기화
+        }
+        setIsPlaying(false); // 상태 즉시 업데이트
+        await wait(50); // 잠시 대기
+      } catch (e) {
+        console.error("Error pausing previous track:", e);
+      }
+
       const targetTrack = await resolvePlayableSource(baseTrack);
 
-      const hasSpotify =
-        !!(targetTrack.spotify_uri || targetTrack.spotify_track_id);
+      const hasSpotify = !!(targetTrack.spotify_uri || targetTrack.spotify_track_id);
       const canPlaySpotify = isSpotifyConnected && hasSpotify;
       const source: "spotify" | "preview" | null = canPlaySpotify
         ? "spotify"
@@ -247,46 +251,63 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         `Play request: ${targetTrack.title} (Source: ${source || "None"})`
       );
 
-      // ✨ 상태 업데이트 시 curMs: 0 제거 ✨
+      // ✨ 상태 업데이트 시 startFromBeginning 고려 ✨
       setState((s) => ({
         ...s,
         index: targetIndex,
         currentTrack: targetTrack,
         playbackSource: source,
+        curMs: startFromBeginning ? 0 : s.curMs, // 처음부터 재생 플래그 반영
+        durMs: (startFromBeginning || source !== s.playbackSource)
+               ? (targetTrack.duration ? targetTrack.duration * 1000 : 0) // 새 곡/소스면 duration 초기화 시도
+               : s.durMs,
       }));
 
-      if (source === "spotify" && audioRef.current && !audioRef.current.paused) {
-        audioRef.current.pause();
-        audioRef.current.src = "";
-      }
-      if (
-        source === "preview" &&
-        spotifyPlayer.ready &&
-        !spotifyPlayer.state.paused
-      ) {
-        await spotifyPlayer.pause();
-      }
-
+      // 실제 재생
       if (source === "spotify") {
-        const uri =
-          targetTrack.spotify_uri ||
-          (targetTrack.spotify_track_id
-            ? `spotify:track:${targetTrack.spotify_track_id}`
-            : null);
+        const uri = targetTrack.spotify_uri || (targetTrack.spotify_track_id ? `spotify:track:${targetTrack.spotify_track_id}` : null);
         if (uri) {
-          await spotifyPlayer.playUris([uri]);
-          setIsPlaying(true);
-          return;
+          try {
+            await spotifyPlayer.playUris([uri]); // playUris는 항상 처음부터 재생
+            setIsPlaying(true);
+            return;
+          } catch (e) {
+             console.error("Spotify playUris failed:", e);
+             setIsPlaying(false);
+          }
         }
       }
 
       if (source === "preview") {
         const a = ensureAudio();
-        if (a.src !== targetTrack.audioUrl) {
-          a.src = targetTrack.audioUrl!;
+        const newSrc = targetTrack.audioUrl!;
+        let shouldLoad = a.src !== newSrc;
+
+        if (shouldLoad) {
+          a.src = newSrc;
           a.load();
         }
+
+        // ✨ 재생 시간 설정 ✨
+        if (startFromBeginning || shouldLoad) {
+            a.currentTime = 0;
+            // 상태 업데이트는 timeupdate 리스너에 맡기거나 여기서 강제
+            if (!shouldLoad) setState(s => ({ ...s, curMs: 0 }));
+        } else if (state.curMs > 0) {
+            // 이어서 재생 시 현재 시간 설정 시도
+            a.currentTime = state.curMs / 1000;
+        }
+
         try {
+          // shouldLoad 시 canplaythrough 기다리는 로직 추가 (선택 사항)
+          if (shouldLoad) {
+              await new Promise((resolve, reject) => {
+                  const canPlayHandler = () => { /* ... 리스너 제거 및 resolve ... */ };
+                  const errorHandler = (e: ErrorEvent) => { /* ... 리스너 제거 및 reject ... */ };
+                  a.addEventListener('canplaythrough', canPlayHandler, { once: true });
+                  a.addEventListener('error', errorHandler, { once: true });
+              });
+          }
           await a.play();
           setIsPlaying(true);
           return;
@@ -298,19 +319,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
       console.warn("No playable source for track:", targetTrack.title);
       setIsPlaying(false);
-      next();
+      next(); // 실패 시 다음 곡 시도
     },
-    [
-      state.index,
-      state.queue,
-      isSpotifyConnected,
-      spotifyPlayer,
-      ensureAudio,
-      next,
-    ]
+    // ✨ 의존성 배열 업데이트 ✨
+    [ state.queue, state.index, state.playbackSource, isSpotifyConnected, spotifyPlayer, ensureAudio, next, state.curMs ] // state.curMs 추가
   );
 
   const pause = useCallback(async () => {
+    // ... (pause 함수 내용은 기존과 동일) ...
     if (state.playbackSource === "spotify" && spotifyPlayer.ready) {
       await spotifyPlayer.pause();
       setIsPlaying(false);
@@ -320,8 +336,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     }
   }, [state.playbackSource, spotifyPlayer]);
 
-  // ✨ seek 함수 정의를 resume 함수보다 위로 이동 ✨
   const seek = useCallback(
+    // ... (seek 함수 내용은 기존과 동일) ...
     (ms: number) => {
       if (state.playbackSource === "spotify" && spotifyPlayer.ready) {
         spotifyPlayer.seek(ms);
@@ -330,126 +346,142 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         const targetTime = Math.max(0, ms / 1000);
         const duration =
           a.duration && isFinite(a.duration) ? a.duration : state.durMs / 1000;
-        a.currentTime = Math.min(
-          targetTime,
-          duration > 0 ? duration - 0.1 : 0
-        );
-         // ✨ 추가: seek 후 state 업데이트 강제 ✨
+        // seek 시 duration 초과 방지
+        a.currentTime = Math.min( targetTime, duration > 0 ? duration - 0.01 : 0 );
          setState(s => ({ ...s, curMs: a.currentTime * 1000 }));
       }
     },
     [state.playbackSource, spotifyPlayer, state.durMs]
   );
 
-  // ✨ resume 함수 정의 (이제 seek가 위에 정의됨) ✨
+  // ✨ resume 함수 수정: play 대신 내부 플레이어 resume 사용 ✨
   const resume = useCallback(async () => {
     if (state.playbackSource === "spotify" && spotifyPlayer.ready) {
-      await spotifyPlayer.resume();
+      await spotifyPlayer.resume(); // Spotify SDK의 resume 사용
       setIsPlaying(true);
     } else if (state.playbackSource === "preview" && audioRef.current) {
       try {
-        await audioRef.current.play();
+        await audioRef.current.play(); // Audio 요소의 play는 멈춘 지점부터 재생
         setIsPlaying(true);
       } catch (err) {
         console.error("Preview resume failed:", err);
         setIsPlaying(false);
       }
     } else if (state.currentTrack) {
-        suppressAutoPlayRef.current = true; // play 호출 전 플래그 설정
-        await play(state.currentTrack, state.index);
-        if (state.curMs > 0) {
-            setTimeout(() => { // seek를 약간 지연시켜 호출
-              seek(state.curMs);
-              suppressAutoPlayRef.current = false; // seek 완료 후 플래그 해제
-            }, 100);
-        } else {
-             suppressAutoPlayRef.current = false; // seek 필요 없으면 바로 해제
-        }
+        // Fallback: 재생 소스가 활성 상태가 아닐 때 (예: 페이지 로드 직후)
+        console.log("Resume fallback: calling play, starting from", state.curMs);
+        suppressAutoPlayRef.current = true;
+        // play 함수에 false를 전달하여 이어서 재생하도록 요청
+        await play(state.currentTrack, state.index, false);
+        suppressAutoPlayRef.current = false;
     }
-  // ✨ resume의 의존성 배열 수정 ✨
+  // ✨ 의존성 배열에서 play 제거 ✨
   }, [state.playbackSource, spotifyPlayer, state.currentTrack, state.index, state.curMs]);
+
 
   const togglePlayPause = useCallback(async () => {
     if (isPlaying) {
       await pause();
     } else {
-      await resume();
+      await resume(); // play 대신 resume 사용
     }
   }, [isPlaying, pause, resume]);
 
+  // ✨ prev 함수 수정: seek(0) 사용 및 play 직접 호출 제거 ✨
   const prev = useCallback(() => {
     if (state.playbackSource === "spotify" && spotifyPlayer.ready) {
-      spotifyPlayer.prev();
+      spotifyPlayer.prev(); // Spotify는 자체 처리
       return;
     }
     if (state.playbackSource === "preview" && audioRef.current) {
       const a = audioRef.current;
       if (a.currentTime > 3) {
-        a.currentTime = 0;
-        setState((s) => ({ ...s, curMs: 0 }));
-        // ✨ isPlaying이 false일 때 resume 대신 play 호출 (처음부터 재생) ✨
-        if (!isPlaying) play();
-      } else {
-        setState((s) => {
-          const prevIndex = Math.max(0, s.index - 1);
-          const prevTrack = s.queue[prevIndex];
-          // ✨ 이전 곡으로 갈 때는 curMs를 0으로 초기화 ✨
-          return { ...s, index: prevIndex, currentTrack: prevTrack, curMs: 0 };
-        });
-        // play 함수는 index 변경 useEffect에서 자동으로 호출됨
-      }
+        seek(0); // 현재 곡 처음으로 이동
+        if (!isPlaying) {
+            // 멈춘 상태였다면 resume 호출 (0초부터 시작)
+            resume();
+        }
+        // 이미 재생 중이었다면 seek(0)만으로 충분
+        return;
+      } 
     }
-  }, [state.playbackSource, spotifyPlayer, isPlaying, play, state.queue, state.index]); // state.index 추가
+
+    const prevIndex = Math.max(0, state.index - 1);    
+
+    if (prevIndex !== state.index && state.queue[prevIndex]) {
+        console.log(`Prev button: Moving to index ${prevIndex}`); // 디버깅 로그
+        // suppressAutoPlayRef 설정 불필요 (useEffect에서 처리)
+        setState((s) => {
+            const prevTrack = s.queue[prevIndex];
+            return {
+                ...s,
+                index: prevIndex,
+                currentTrack: prevTrack, // currentTrack도 업데이트
+                curMs: 0 // 이전 곡은 항상 처음부터 재생
+            };
+        });
+        // 실제 play 호출은 index 변경 useEffect에 맡김
+    } else {
+        console.log("Prev button: Already at the beginning or invalid index."); // 디버깅 로그
+        // 첫 곡에서 prev 누르면 처음으로 이동 (선택적 동작)
+        if (state.index === 0 && state.curMs > 0) {
+            seek(0);
+            if (!isPlaying) resume();
+        }
+    }
+
+  // ✨ 의존성 배열 업데이트: isPlaying, resume, seek 추가 ✨
+  }, [state.playbackSource, spotifyPlayer, state.queue, state.index, state.curMs, isPlaying, seek, resume]);
 
 
   const setVolume = useCallback(
+    // ... (setVolume 함수 내용은 기존과 동일) ...
     (v: number) => {
       const vv = Math.min(1, Math.max(0, v));
       _setVolume(vv);
       if (typeof window !== "undefined") {
-        try {
-          localStorage.setItem("player_volume", String(vv));
-        } catch {}
+        try { localStorage.setItem("player_volume", String(vv)); } catch {}
       }
       if (audioRef.current) audioRef.current.volume = vv;
-      // ✨ isSpotifyConnected 대신 spotifyPlayer 객체로 확인 ✨
-      if (spotifyPlayer.ready) {
+      if (spotifyPlayer.ready) { // isSpotifyConnected -> spotifyPlayer.ready
         spotifyPlayer.setVolume(vv);
       }
     },
-    [spotifyPlayer] // isSpotifyConnected 제거, spotifyPlayer 추가
+    [spotifyPlayer] // 의존성 변경
   );
 
   const setQueueAndPlay = useCallback(
+    // ... (setQueueAndPlay 함수 내용은 기존과 동일, 내부에서 play(..., true) 호출) ...
     (tracks: Track[], startIndex = 0) => {
       const safeIndex = Math.max(0, Math.min(startIndex, tracks.length - 1));
       const firstTrack = tracks[safeIndex] || null;
 
-      if (isPlaying) pause();
+      if (isPlaying) pause(); // 재생 중이면 일단 멈춤
 
-      suppressAutoPlayRef.current = true;
+      suppressAutoPlayRef.current = true; // 자동 재생 억제 시작
 
       setState((s) => ({
         ...s,
         queue: tracks,
         index: safeIndex,
         currentTrack: firstTrack,
-        curMs: 0, // ✨ 새 큐 설정 시에는 처음부터 재생하도록 curMs: 0 유지 ✨
+        curMs: 0, // 새 큐는 항상 처음부터
         durMs: firstTrack?.duration ? firstTrack.duration * 1000 : 0,
-        playbackSource: null,
+        playbackSource: null, // 재생 소스 초기화
       }));
 
-      // play 함수 호출 지연은 유지
+      // 약간의 지연 후 첫 곡 재생 시작 (startFromBeginning = true)
       setTimeout(() => {
-        void play(firstTrack, safeIndex);
-        suppressAutoPlayRef.current = false;
+        void play(firstTrack, safeIndex, true);
+        suppressAutoPlayRef.current = false; // 자동 재생 억제 해제
       }, 50);
     },
-    [isPlaying, pause, play]
+    [isPlaying, pause, play] // play 의존성 유지
   );
 
   // preview ended → next
   useEffect(() => {
+    // ... (preview ended useEffect 내용은 기존과 동일) ...
     const a = ensureAudio();
     const handleEnded = () => {
       if (state.playbackSource === "preview") next();
@@ -458,21 +490,20 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     return () => a.removeEventListener("ended", handleEnded);
   }, [ensureAudio, state.playbackSource, next]);
 
-  // 인덱스 변경 시 자동 재생 
+  // ✨ 인덱스 변경 시 자동 재생 useEffect 수정 ✨
   useEffect(() => {
-    // suppressAutoPlayRef가 true이면 아무것도 하지 않음 (큐 설정 중이므로)
-    if (suppressAutoPlayRef.current) return;
+    if (suppressAutoPlayRef.current) return; // 억제 중이면 실행 안 함
 
-    const track = state.queue[state.index];
-    // ✨ play 호출 조건 강화: suppress 중이 아니고, 트랙이 존재하고, 현재 트랙과 다를 때만 ✨
+    const track = state.queue[state.index]; // 현재 인덱스의 트랙
+
+    // 트랙이 유효하고, 현재 재생 중인 트랙이 없거나 ID가 다를 때만 실행
     if (track && (!state.currentTrack || state.currentTrack.id !== track.id)) {
-      console.log(`Index changed to ${state.index}, attempting to play new track ID: ${track.id}`); // 디버깅 로그 추가
-  
-      //    여기서 seek(0)을 호출하여 명시적으로 처음부터 재생 ✨
-      seek(0); // seek를 먼저 호출
-      void play(track, state.index); // 그 다음 play 호출
+      console.log(`Index changed to ${state.index}, playing new track ID: ${track.id} from beginning`);
+      // play 함수에 true를 전달하여 처음부터 재생하도록 함 (seek(0) 불필요)
+      void play(track, state.index, true);
     }
-  }, [state.index, state.queue, play, seek, state.currentTrack?.id]); // seek 추가
+    // ✨ 의존성 배열에서 seek 제거 ✨
+  }, [state.index, state.queue, play, state.currentTrack?.id]);
 
 
   const ctx: Ctx = useMemo(
@@ -480,13 +511,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       state,
       isPlaying,
       volume,
-      isSpotifyReady: spotifyPlayer.ready, // ready 상태는 그대로 사용
+      isSpotifyReady: spotifyPlayer.ready,
       togglePlayPause,
-      play,
+      play, // 수정된 play
       pause,
-      // resume, // resume은 노출 제외
+      // resume, // resume은 노출 안 함
       next,
-      prev,
+      prev, // 수정된 prev
       seek,
       setVolume,
       setQueueAndPlay,
@@ -495,10 +526,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       state,
       isPlaying,
       volume,
-      spotifyPlayer, // .ready 제거하고 객체 자체 사용
+      spotifyPlayer, // 객체 자체
       play,
       pause,
-      // resume 제거
       togglePlayPause,
       next,
       prev,
