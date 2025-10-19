@@ -1,3 +1,4 @@
+// app/diary/[photoId]/page.tsx
 "use client"
 
 import { useMemo, useState, useEffect, useCallback, useRef } from "react"
@@ -65,6 +66,22 @@ function pickNumericUserIdSync(maybeUser: any): number | null {
   return null
 }
 
+/* ──────────────────────────────────────────────
+   앨범 아트 세션 캐시 (SearchAndRequest와 동일한 형태)
+   ──────────────────────────────────────────────*/
+type ArtCache = Record<string, string | null>
+const SESSION_KEY = "albumArtCache_v1"
+const loadSessionArt = (): ArtCache => {
+  try { return JSON.parse(sessionStorage.getItem(SESSION_KEY) || "{}") } catch { return {} }
+}
+const saveSessionArt = (obj: ArtCache) => {
+  try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(obj)) } catch {}
+}
+// 캐시 키 정규화
+const norm = (s?: string | null) =>
+  (s || "").replace(/\s+/g, " ").replace(/[[(（【].*?[)\]）】]/g, "").trim().toLowerCase()
+const artKeyOf = (title: string, artist: string) => `${norm(title)} - ${norm(artist)}`
+
 export default function DiaryPage() {
   const router = useRouter()
   const params = useParams<{ photoId: string }>()
@@ -96,13 +113,22 @@ export default function DiaryPage() {
   const [artTried, setArtTried] = useState(false)
   const autoPlayedRef = useRef(false)
 
+  // ⬇️ 세션 캐시 상태
+  const [artCache, setArtCache] = useState<ArtCache>({})
+
   const storageKey = useMemo(() => `diary_draft::${Number.isFinite(photoId) ? photoId : "unknown"}`, [photoId])
 
+  // 유저 로드
   useEffect(() => {
     const id = pickNumericUserIdSync(user)
     setUserId(id)
     setUserCheckDone(true)
   }, [user])
+
+  // 세션 캐시 로딩
+  useEffect(() => {
+    setArtCache((prev) => ({ ...loadSessionArt(), ...prev }))
+  }, [])
 
   // 기존 일기 불러오기
   useEffect(() => {
@@ -122,7 +148,7 @@ export default function DiaryPage() {
     })()
   }, [photoId, userId, userCheckDone])
 
-  // 로컬 임시 저장
+  // 로컬 임시 저장 불러오기
   useEffect(() => {
     try {
       const raw = localStorage.getItem(storageKey)
@@ -134,6 +160,7 @@ export default function DiaryPage() {
     } catch {}
   }, [storageKey])
 
+  // 로컬 임시 저장 저장하기
   useEffect(() => {
     try {
       localStorage.setItem(storageKey, JSON.stringify({ subject, content }))
@@ -213,7 +240,7 @@ export default function DiaryPage() {
     userCheckDone,
   ])
 
-  // 🔎 SearchAndRequest.tsx와 동일한 배치 API로 앨범아트 1건 조회(가능하면)
+  // 🔎 SearchAndRequest.tsx와 동일한 배치 API로 앨범아트 1건 조회(가능하면) + 세션 캐시 사용
   const fetchCoverAndPlay = useCallback(async (auto = false) => {
     const title = titleParam.trim()
     const artist = artistParam.trim()
@@ -225,7 +252,15 @@ export default function DiaryPage() {
       return
     }
 
-    let cover: string | null = null
+    // 1) 세션 캐시 우선 반영
+    const k = artKeyOf(title, artist)
+    const cached = artCache[k]
+    if (typeof cached !== "undefined") {
+      setCoverUrl(cached)
+    }
+
+    // 2) 아직 배치 검색을 시도하지 않았고 title/artist가 있으면 한 번만 호출
+    let cover: string | null = typeof cached !== "undefined" ? cached : null
     if (!artTried && title && artist) {
       setArtTried(true)
       try {
@@ -237,26 +272,35 @@ export default function DiaryPage() {
           cache: "no-store",
         })
         if (r.ok) {
-          const json = (await r.json()) as { items?: { albumImage: string | null }[] }
-          cover = json?.items?.[0]?.albumImage ?? null
-          setCoverUrl(cover)
+          const json = (await r.json()) as { items?: { key?: string; albumImage: string | null }[] }
+          const album = json?.items?.[0]?.albumImage ?? null
+          cover = album
+          setCoverUrl(album)
+
+          // 세션 캐시에 저장
+          setArtCache((prev) => {
+            const next = { ...prev, [k]: album ?? null }
+            saveSessionArt(next)
+            return next
+          })
         }
       } catch {
-        // 실패해도 무시하고 진행
+        // 실패해도 무시하고 재생은 진행
       }
     }
 
+    // 3) 플레이어 큐 설정 및 재생
     const track: Track = {
       id: keyId,
       title: title || "제목 없음",
       artist: artist || "Various",
       coverUrl: cover ?? null,
-      // audioUrl/spotify_uri 등은 PlayerContext 내부의 resolve 로직에서 처리
+      // audioUrl/spotify_uri 등은 PlayerContext 내부 resolve가 처리
       selected_from: "diary",
     }
 
     setQueueAndPlay([track], 0)
-  }, [artistParam, titleParam, photoId, setQueueAndPlay, state.currentTrack, artTried])
+  }, [artistParam, titleParam, photoId, setQueueAndPlay, state.currentTrack, artTried, artCache])
 
   // 페이지 진입 시 1회 자동 재생
   useEffect(() => {
@@ -342,15 +386,26 @@ export default function DiaryPage() {
         <section className="mb-8">
           <div className="bg-primary/5 rounded-2xl p-4 border border-primary/10">
             <div className="flex items-center gap-4">
-              <div className="w-12 h-12 rounded-xl bg-primary flex items-center justify-center shrink-0">
-                <Music2 className="w-6 h-6 text-primary-foreground" />
-              </div>
+              {/* 앨범 커버(있으면) 또는 아이콘 */}
+              {coverUrl ? (
+                <img
+                  src={coverUrl}
+                  alt="앨범 커버"
+                  className="w-12 h-12 rounded-xl object-cover border shrink-0"
+                />
+              ) : (
+                <div className="w-12 h-12 rounded-xl bg-primary flex items-center justify-center shrink-0">
+                  <Music2 className="w-6 h-6 text-primary-foreground" />
+                </div>
+              )}
+
+              {/* 제목/가수 */}
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-semibold text-foreground truncate">{titleParam}</div>
                 <div className="text-xs text-muted-foreground truncate mt-1">{artistParam}</div>
               </div>
 
-              {/* 수동 재생 버튼 (하단바로 제어 가능하지만, 여기서도 트리거 가능) */}
+              {/* 재생 버튼 */}
               <button
                 onClick={() => fetchCoverAndPlay(false)}
                 className="px-3 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 flex items-center gap-2"
@@ -361,19 +416,9 @@ export default function DiaryPage() {
                 재생
               </button>
             </div>
-
-            {/* (선택) 커버 프리뷰 */}
-            {coverUrl && (
-              <div className="mt-4">
-                <img
-                  src={coverUrl}
-                  alt="album cover"
-                  className="w-24 h-24 rounded-md object-cover border"
-                />
-              </div>
-            )}
           </div>
         </section>
+
 
         <section className="space-y-6">
           <div>
