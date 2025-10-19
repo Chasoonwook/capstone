@@ -8,7 +8,7 @@ export type Song = {
   id: number | string;
   title: string;
   artist: string;
-  genre: string;
+  genre?: string;
   duration?: string;              // "mm:ss"
   image?: string | null;
   spotify_uri?: string | null;    // 있으면 Spotify SDK로 전체 재생

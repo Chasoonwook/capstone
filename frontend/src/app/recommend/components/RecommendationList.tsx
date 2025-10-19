@@ -25,7 +25,9 @@ export default function RecommendationList({
             key={song.id}
             onClick={() => onClickItem(song)}
             className={`flex items-center p-3 rounded-xl cursor-pointer transition-all duration-200 hover:bg-white/10 ${
-              active ? "bg-gradient-to-r from-purple-500/30 to-pink-500/30 border border-purple-400/50" : ""
+              active
+                ? "bg-gradient-to-r from-purple-500/30 to-pink-500/30 border border-purple-400/50"
+                : ""
             }`}
           >
             {cover ? (
@@ -44,17 +46,31 @@ export default function RecommendationList({
               <div className="w-12 h-12 rounded-lg mr-3 bg-gray-300/40" />
             )}
             <div className="flex-1 min-w-0">
-              <p className="text-white font-medium truncate text-sm">{song.title}</p>
+              <p className="text-white font-medium truncate text-sm">
+                {song.title}
+              </p>
               <p className="text-slate-300 text-xs truncate">{song.artist}</p>
             </div>
+
+            {/*
+             * * ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
+             * * [수정된 부분]
+             * 'genre'가 선택적(optional)이 되면서 undefined일 수 있으므로,
+             * 'song.genre' 값이 존재할 때만 배지를 렌더링하도록 수정합니다.
+             * * ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
+             */}
             <div className="flex-shrink-0 ml-2">
-              <Badge
-                variant="secondary"
-                className="bg-white/10 text-slate-300 text-xs px-2 py-0.5 border-0"
-              >
-                {song.genre}
-              </Badge>
+              {song.genre && (
+                <Badge
+                  variant="secondary"
+                  className="bg-white/10 text-slate-300 text-xs px-2 py-0.5 border-0"
+                >
+                  {song.genre}
+                </Badge>
+              )}
             </div>
+            {/* ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲ */}
+            
           </div>
         );
       })}
