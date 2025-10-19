@@ -358,20 +358,35 @@ export default function DiaryPage() {
   return (
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-40 bg-background/80 backdrop-blur-xl border-b border-border">
-        <div className="max-w-2xl mx-auto flex items-center gap-3 px-4 h-16">
+        {/* ✅ 헤더: 좌측(뒤로 + 타이틀) / 우측(저장 버튼) */}
+        <div className="max-w-2xl mx-auto flex items-center justify-between px-4 h-16">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => router.back()}
+              className="w-10 h-10 rounded-full bg-muted hover:bg-muted/80 hover:scale-105 flex items-center justify-center transition-all"
+              aria-label="뒤로"
+              type="button"
+            >
+              <ArrowLeft className="w-5 h-5 text-foreground" />
+            </button>
+            <h1 className="text-lg font-bold text-foreground">그림일기 작성</h1>
+          </div>
+
+          {/* ✅ 상단 저장 버튼 */}
           <button
-            onClick={() => router.back()}
-            className="w-10 h-10 rounded-full bg-muted hover:bg-muted/80 hover:scale-105 flex items-center justify-center transition-all"
-            aria-label="뒤로"
             type="button"
+            disabled={saving}
+            onClick={saveDiary}
+            className="h-10 px-4 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-semibold shadow-md transition-all disabled:opacity-60 flex items-center gap-2"
           >
-            <ArrowLeft className="w-5 h-5 text-foreground" />
+            <Save className="w-4 h-4" />
+            {saving ? "저장 중..." : "저장"}
           </button>
-          <h1 className="text-lg font-bold text-foreground">그림일기 작성</h1>
         </div>
       </header>
 
-      <main className="max-w-2xl mx-auto px-4 py-8 pb-32">
+      {/* 하단 고정바 제거했으므로 padding-bottom 축소 */}
+      <main className="max-w-2xl mx-auto px-4 py-8 pb-8">
         <section className="mb-8">
           <div className="bg-card p-5 rounded-2xl shadow-lg border border-border">
             <div className="relative rounded-xl overflow-hidden bg-muted aspect-[4/3] border-2 border-background">
@@ -463,22 +478,10 @@ export default function DiaryPage() {
         </section>
       </main>
 
-      <div className="fixed bottom-0 left-0 right-0 border-t border-border bg-background/95 backdrop-blur-xl shadow-lg">
-        <div className="max-w-2xl mx-auto px-4 py-4 flex items-center gap-3">
-          <button
-            type="button"
-            disabled={saving}
-            onClick={saveDiary}
-            className="flex-1 h-11 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-semibold shadow-md transition-all disabled:opacity-60 flex items-center justify-center gap-2"
-          >
-            <Save className="w-4 h-4" />
-            {saving ? "저장 중..." : "저장하기"}
-          </button>
-        </div>
-      </div>
+      {/* ⛔ 하단 고정 저장 바 제거됨 */}
 
       {saveError && (
-        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 bg-destructive text-destructive-foreground px-4 py-2 rounded-lg shadow-lg text-sm">
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-destructive text-destructive-foreground px-4 py-2 rounded-lg shadow-lg text-sm">
           {saveError}
         </div>
       )}
