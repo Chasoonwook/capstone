@@ -204,7 +204,7 @@ export default function RecommendClient() {
         setLoading(false);
       }
     })();
-  }, [photoId, setQueueAndPlay]);
+  }, [photoId]);
 
   const currentTrack = player.state.currentTrack;
   const isPlaying = player.isPlaying;
