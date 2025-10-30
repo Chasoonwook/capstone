@@ -168,27 +168,24 @@ export default function RecommendClient() {
       return;
     }
 
+    // 1. URL의 photoId와 현재 플레이어 큐의 소스(key)가 같은지 확인
+    const isSameQueueSource = playerState.queueKey === photoId;
+
     // 1. PlayerContext에 이미 큐가 있는지 확인합니다.
-    if (playerState.queue.length > 0 && playerState.currentTrack) {
-      // 2. 큐가 있다면?
-      //    API를 새로 호출하거나 큐를 리셋하지 않습니다.
-      //    대신, 현재 컨텍스트의 큐를 이 컴포넌트의 'playlist' 상태로 가져와서
-      //    하단 추천 목록 UI만 채워줍니다.
+    if (isSameQueueSource && playerState.queue.length > 0) {
       console.log("RecommendClient: Player already has a queue. Skipping fetch & setQueue.");
+      // API 호출과 큐 리셋을 건너뜁니다.
+      // 현재 컨텍스트 큐를 이 컴포넌트의 UI 목록(playlist)에 동기화만 합니다.
       setPlaylist(playerState.queue as TrackPlus[]); // UI 목록만 동기화
       setLoading(false);
       initialLoadDoneRef.current = true; // 로드 완료로 처리
       return; // 👈 여기서 useEffect 종료
     }
 
-    if (initialLoadDoneRef.current) {
-      setLoading(false);
-      return;
-    }
-
     (async () => {
       setLoading(true);
       setError(null);
+      console.log(`RecommendClient: Fetching NEW queue for photoId ${photoId}...`);
       try {
         const url = `${API_BASE}/api/recommendations/by-photo/${encodeURIComponent(photoId)}`;
         const res = await fetch(url, { credentials: "include" });
@@ -208,17 +205,30 @@ export default function RecommendClient() {
         }
 
         const enhanced = await prefetchCoversAndUris(list);
-        setPlaylist(enhanced);
-        setQueueAndPlay(enhanced, 0);
+
+        const playable = enhanced.filter(t => 
+          (isSpotifyConnected && (t.spotify_uri || t.spotify_track_id)) || // 스포티파이 재생 가능
+          (!isSpotifyConnected && t.audioUrl) // 또는 미리듣기 URL이 존재
+        );
+
+        if (enhanced.length > 0 && playable.length === 0) {
+          console.warn("No playable tracks found (Spotify not connected and no preview_url).");
+          setError("추천된 곡들의 미리듣기를 찾을 수 없습니다. Spotify 연동이 필요할 수 있습니다.");
+        } else if (enhanced.length > 0 && playable.length < enhanced.length) {
+          console.warn(`Filtered out ${enhanced.length - playable.length} unplayable tracks.`);
+        }
+
+        setPlaylist(playable);
+        setQueueAndPlay(playable, 0, photoId); // 2. photoId를 queueKey로 전달
         initialLoadDoneRef.current = true;
       } catch (e: any) {
         setError(e.message || "추천 목록을 불러오지 못했습니다.");
-        setQueueAndPlay([], 0);
+        setQueueAndPlay([], 0, photoId); // 빈 큐 설정
       } finally {
         setLoading(false);
       }
     })();
-  }, [photoId, playerState.queue, playerState.currentTrack]);
+  }, [photoId, playerState.queueKey, isSpotifyConnected]);
 
   const currentTrack = player.state.currentTrack;
   const isPlaying = player.isPlaying;
