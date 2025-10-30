@@ -159,7 +159,7 @@ export default function RecommendClient() {
     }
   }, []);
 
-  const { setQueueAndPlay } = player;
+  const { setQueueAndPlay, state: playerState } = player;
 
   useEffect(() => {
     if (photoId == null) {
@@ -167,6 +167,20 @@ export default function RecommendClient() {
       setError(null);
       return;
     }
+
+    // 1. PlayerContext에 이미 큐가 있는지 확인합니다.
+    if (playerState.queue.length > 0 && playerState.currentTrack) {
+      // 2. 큐가 있다면?
+      //    API를 새로 호출하거나 큐를 리셋하지 않습니다.
+      //    대신, 현재 컨텍스트의 큐를 이 컴포넌트의 'playlist' 상태로 가져와서
+      //    하단 추천 목록 UI만 채워줍니다.
+      console.log("RecommendClient: Player already has a queue. Skipping fetch & setQueue.");
+      setPlaylist(playerState.queue as TrackPlus[]); // UI 목록만 동기화
+      setLoading(false);
+      initialLoadDoneRef.current = true; // 로드 완료로 처리
+      return; // 👈 여기서 useEffect 종료
+    }
+
     if (initialLoadDoneRef.current) {
       setLoading(false);
       return;
@@ -204,7 +218,7 @@ export default function RecommendClient() {
         setLoading(false);
       }
     })();
-  }, [photoId, setQueueAndPlay]);
+  }, [photoId, playerState.queue, playerState.currentTrack]);
 
   const currentTrack = player.state.currentTrack;
   const isPlaying = player.isPlaying;
