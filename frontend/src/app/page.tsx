@@ -27,6 +27,9 @@ import { API_BASE } from "@/lib/api";
 // ✅ 컨텍스트에서 연동상태만 구독 (네트워크 호출 없음)
 import { useSpotifyStatus } from "../contexts/SpotifyStatusContext";
 
+// ✅ 추가: 자이로 기반 광택 래퍼
+import GyroShine from "@/components/ui/GyroShine";
+
 export default function Page() {
   const { user, isLoggedIn, logout } = useAuthUser();
   const router = useRouter();
@@ -143,13 +146,17 @@ export default function Page() {
                 <br />
                 딱 맞는 음악을 추천해드려요
               </p>
-              <button
-                onClick={() => setShowUploadModal(true)}
-                className="w-full bg-primary text-primary-foreground rounded-lg py-3 px-4 font-medium text-sm flex items-center justify-center gap-2 hover:bg-primary/90 transition-colors"
-              >
-                <Camera className="w-4 h-4" />
-                사진으로 감정 분석하기
-              </button>
+
+              {/* ✅ 자이로 광택 적용: 버튼을 GyroShine으로 감쌈 */}
+              <GyroShine className="rounded-lg" intensity={0.45} radius={220} smooth={0.2}>
+                <button
+                  onClick={() => setShowUploadModal(true)}
+                  className="w-full bg-primary text-primary-foreground rounded-lg py-3 px-4 font-medium text-sm flex items-center justify-center gap-2 hover:bg-primary/90 transition-colors"
+                >
+                  <Camera className="w-4 h-4" />
+                  사진으로 감정 분석하기
+                </button>
+              </GyroShine>
             </div>
           </section>
 
