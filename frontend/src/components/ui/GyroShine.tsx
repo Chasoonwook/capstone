@@ -2,48 +2,48 @@
 
 import { useEffect, useRef } from "react";
 
+type Props = {
+  children: React.ReactNode;
+  className?: string;
+  /** 반짝 강도(0~1) */
+  intensity?: number;
+  /** 하이라이트 반경(px) */
+  radius?: number;
+  /** 추적 부드러움(0~1, 클수록 관성 큼) */
+  smooth?: number;
+  /** 데스크톱에서 마우스 추적 활성화 */
+  mouseFallback?: boolean;
+};
+
 export default function GyroShine({
   children,
   className = "",
-  intensity = 0.35,
-  radius = 200,
-  smooth = 0.18,
-}: {
-  children: React.ReactNode;
-  className?: string;
-  intensity?: number;
-  radius?: number;
-  smooth?: number;
-}) {
+  intensity = 0.55,     // 더 선명하게
+  radius = 240,
+  smooth = 0.22,
+  mouseFallback = true,
+}: Props) {
   const ref = useRef<HTMLDivElement | null>(null);
-  const state = useRef({ x: 50, y: 50, tx: 50, ty: 50, raf: 0 });
+  const s = useRef({ x: 50, y: 50, tx: 50, ty: 50, raf: 0 });
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
 
-    const norm = (v: number, a: number, b: number) =>
-      Math.max(a, Math.min(b, v));
+    const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 
+    // iOS 권한 (터치 1회 후 요청)
     const askIOS = async () => {
-    try {
-        const anyWin = window as any;
-        const Ori = anyWin.DeviceOrientationEvent;
-        const Mot = anyWin.DeviceMotionEvent;
-
-        // iOS 13+ 일부는 Orientation, 일부는 Motion에만 붙어있을 수 있음
-        if (Ori && typeof Ori.requestPermission === "function") {
-        await Ori.requestPermission();
-        return;
-        }
-        if (Mot && typeof Mot.requestPermission === "function") {
-        await Mot.requestPermission();
-        return;
-        }
-        // 둘 다 없으면 아무 것도 안 함 (안드로이드/데스크탑 등)
-    } catch {
-        // 무시
-    }
+      try {
+        // @ts-ignore
+        const Ori = window.DeviceOrientationEvent;
+        // @ts-ignore
+        const Mot = window.DeviceMotionEvent;
+        // @ts-ignore
+        if (Ori?.requestPermission) await Ori.requestPermission();
+        // @ts-ignore
+        else if (Mot?.requestPermission) await Mot.requestPermission();
+      } catch {}
     };
     const onTapOnce = () => {
       askIOS();
@@ -54,39 +54,28 @@ export default function GyroShine({
     window.addEventListener("touchend", onTapOnce, { passive: true });
 
     const onOrient = (e: DeviceOrientationEvent) => {
-        // gamma: 좌우(-90 ~ 90)
-        // beta : 앞뒤(-180 ~ 180)
-        const gamma = e.gamma ?? 0;
-        const beta = e.beta ?? 0;
-
-        // 이동 범위 설정 (퍼센트 기준)
-        const rangeX = 30; // 좌우 이동 폭
-        const rangeY = 30; // 상하 이동 폭
-
-        // 중심 50%, 최대 ±range 만큼 이동
-        const tx = 50 + Math.max(-1, Math.min(1, gamma / 45)) * rangeX; // gamma는 -45~45 범위만 사용
-        const ty = 50 + Math.max(-1, Math.min(1, beta / 45)) * rangeY;  // beta도 -45~45 기준 비율화
-
-        state.current.tx = tx;
-        state.current.ty = ty;
-        };
-
+      const gamma = e.gamma ?? 0; // 좌/우
+      const beta = e.beta ?? 0;   // 상/하
+      s.current.tx = 50 + clamp(gamma / 45, -1, 1) * 32;
+      s.current.ty = 50 - clamp(beta / 45, -1, 1) * 28; // 위쪽에서 비추는 느낌
+    };
 
     const onPointer = (ev: PointerEvent) => {
+      if (!mouseFallback) return;
       const r = el.getBoundingClientRect();
-      state.current.tx = norm(((ev.clientX - r.left) / r.width) * 100, 0, 100);
-      state.current.ty = norm(((ev.clientY - r.top) / r.height) * 100, 0, 100);
+      s.current.tx = clamp(((ev.clientX - r.left) / r.width) * 100, 0, 100);
+      s.current.ty = clamp(((ev.clientY - r.top) / r.height) * 100, 0, 100);
     };
 
     const loop = () => {
-      const s = state.current;
-      s.x += (s.tx - s.x) * smooth;
-      s.y += (s.ty - s.y) * smooth;
-      el.style.setProperty("--gx", `${s.x}%`);
-      el.style.setProperty("--gy", `${s.y}%`);
-      s.raf = requestAnimationFrame(loop);
+      const st = s.current;
+      st.x += (st.tx - st.x) * smooth;
+      st.y += (st.ty - st.y) * smooth;
+      el.style.setProperty("--gx", `${st.x}%`);
+      el.style.setProperty("--gy", `${st.y}%`);
+      st.raf = requestAnimationFrame(loop);
     };
-    state.current.raf = requestAnimationFrame(loop);
+    s.current.raf = requestAnimationFrame(loop);
 
     window.addEventListener("deviceorientation", onOrient, true);
     el.addEventListener("pointermove", onPointer, { passive: true });
@@ -96,14 +85,14 @@ export default function GyroShine({
       el.removeEventListener("pointermove", onPointer);
       window.removeEventListener("click", onTapOnce);
       window.removeEventListener("touchend", onTapOnce);
-      cancelAnimationFrame(state.current.raf);
+      cancelAnimationFrame(s.current.raf);
     };
-  }, [smooth]);
+  }, [smooth, mouseFallback]);
 
   return (
     <div
       ref={ref}
-      className={`relative overflow-hidden ${className}`}
+      className={`relative overflow-hidden rounded-[24px] ${className}`}
       style={
         {
           "--shineRadius": `${radius}px`,
@@ -111,34 +100,80 @@ export default function GyroShine({
         } as React.CSSProperties
       }
     >
-      <div className="relative z-10">{children}</div>
+      {/* 0) 버튼 바탕: 블루 계열(영상 톤) */}
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-0 z-20"
+        className="absolute inset-0 z-[1] rounded-[24px]"
         style={{
-          background: `
-            conic-gradient(
-              from 0deg at var(--gx,50%) var(--gy,50%),
-              #ffd1ff, #a1c4fd, #c2ffd8, #fbc2eb, #ffd1ff
-            ),
-            radial-gradient(
-              circle at var(--gx,50%) var(--gy,50%),
-              rgba(255,255,255,calc(var(--shineAlpha,0.35)*0.95)) 0%,
-              rgba(255,255,255,calc(var(--shineAlpha,0.35)*0.55)) 20%,
-              rgba(255,255,255,0) var(--shineRadius,200px)
-            )
-          `,
+          background:
+            "linear-gradient(180deg, #2e6ff3 0%, #5da1ff 45%, #3f79ff 100%)",
+        }}
+      />
+
+      {/* 1) 외곽 네온 보더(보라 라인) */}
+      <div
+        aria-hidden
+        className="absolute inset-0 z-[20] rounded-[24px] pointer-events-none"
+        style={{
+          background:
+            "linear-gradient(#0000,#0000) padding-box, linear-gradient(120deg, #8c4aff, #7abbff) border-box",
+          border: "3px solid transparent",
+          filter:
+            "drop-shadow(0 2px 12px rgba(122,171,255,.55)) drop-shadow(0 0 16px rgba(140,74,255,.35))",
+        }}
+      />
+
+      {/* 2) 상/하 글로스(고정, 깜빡임 없음) */}
+      <div
+        aria-hidden
+        className="absolute inset-0 z-[25] rounded-[24px] pointer-events-none"
+        style={{
+          backgroundImage:
+            "linear-gradient(to bottom, rgba(255,255,255,.78), rgba(255,255,255,0) 42%), linear-gradient(to top, rgba(255,255,255,.35), rgba(255,255,255,0) 58%)",
           mixBlendMode: "screen" as any,
         }}
       />
+
+      {/* 3) 자이로 하이라이트: 고채도 무지개 + 약간의 색 농도 보정 */}
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-0 z-10 rounded-[999px]"
+        className="absolute inset-0 z-[30] pointer-events-none"
         style={{
-          boxShadow:
-            "inset 0 0 18px rgba(255,255,255,0.25), inset 0 0 4px rgba(255,255,255,0.9)",
+          background: `
+            radial-gradient(
+              circle at var(--gx,50%) var(--gy,50%),
+              rgba(255,255,255, calc(var(--shineAlpha,0.55) * 1.0)) 0%,
+              rgba(255,255,255, calc(var(--shineAlpha,0.55) * 0.75)) 12%,
+              rgba(255,255,255,0) var(--shineRadius,240px)
+            ),
+            conic-gradient(
+              from 0deg at var(--gx,50%) var(--gy,50%),
+              #fff1 0deg,
+              #ffe14c 50deg,
+              #b6ff30 110deg,
+              #39e7ff 170deg,
+              #a783ff 230deg,
+              #ffd2f0 290deg,
+              #fff1 360deg
+            )
+          `,
+          mixBlendMode: "screen" as any,
+          filter: "saturate(1.65) contrast(1.12)", // ← 색감 더 쨍하게
         }}
       />
+
+      {/* 4) 안쪽 유리감(입체) */}
+      <div
+        aria-hidden
+        className="absolute inset-0 z-[40] rounded-[24px] pointer-events-none"
+        style={{
+          boxShadow:
+            "inset 0 0 22px rgba(255,255,255,0.26), inset 0 0 7px rgba(255,255,255,0.96)",
+        }}
+      />
+
+      {/* 콘텐츠(텍스트/아이콘) — 투명 배경 유지 */}
+      <div className="relative z-[60]">{children}</div>
     </div>
   );
 }
