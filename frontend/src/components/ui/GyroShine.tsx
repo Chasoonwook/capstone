@@ -54,12 +54,23 @@ export default function GyroShine({
     window.addEventListener("touchend", onTapOnce, { passive: true });
 
     const onOrient = (e: DeviceOrientationEvent) => {
-      const gamma = e.gamma ?? 0;
-      const beta = e.beta ?? 0;
-      const range = 30;
-      state.current.tx = 50 + norm(gamma / 45, -1, 1) * range;
-      state.current.ty = 50 + norm(beta / 90, -1, 1) * range;
-    };
+        // gamma: 좌우(-90 ~ 90)
+        // beta : 앞뒤(-180 ~ 180)
+        const gamma = e.gamma ?? 0;
+        const beta = e.beta ?? 0;
+
+        // 이동 범위 설정 (퍼센트 기준)
+        const rangeX = 30; // 좌우 이동 폭
+        const rangeY = 30; // 상하 이동 폭
+
+        // 중심 50%, 최대 ±range 만큼 이동
+        const tx = 50 + Math.max(-1, Math.min(1, gamma / 45)) * rangeX; // gamma는 -45~45 범위만 사용
+        const ty = 50 + Math.max(-1, Math.min(1, beta / 45)) * rangeY;  // beta도 -45~45 기준 비율화
+
+        state.current.tx = tx;
+        state.current.ty = ty;
+        };
+
 
     const onPointer = (ev: PointerEvent) => {
       const r = el.getBoundingClientRect();
