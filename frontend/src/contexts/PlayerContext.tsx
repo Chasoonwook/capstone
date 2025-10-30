@@ -394,7 +394,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       state.queue,
       state.index,
       state.playbackSource,
-      state.curMs,
+      //state.curMs,
       isSpotifyConnected,
       spotifyPlayer,
       ensureAudio,
@@ -458,7 +458,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     spotifyPlayer,
     state.currentTrack,
     state.index,
-    state.curMs,
+    //state.curMs,
     play,
   ]);
 
