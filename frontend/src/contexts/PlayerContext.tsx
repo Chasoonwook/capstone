@@ -256,11 +256,21 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const play = useCallback(
     async (track?: Track, index?: number, startFromBeginning = true) => {
+      // 1. 재생 대상 트랙과 인덱스 확정
       const baseTrack = track ?? state.queue[index ?? state.index];
       const targetIndex = index ?? state.index;
       if (!baseTrack) {
         console.log("[PlayerContext] Play cancelled: No base track found.");
         return;
+      }
+
+      if (
+        state.currentTrack?.id === baseTrack.id && // 현재 재생 중인 트랙 ID와 같고
+        isPlaying && // 현재 '재생 중' 상태이며
+        !startFromBeginning // 처음부터 다시 재생하는 경우가 아니라면
+      ) {
+        console.log("[PlayerContext] Play cancelled: Already playing the same track.");
+        return; // 함수 실행을 여기서 중단하여 불필요한 API 호출 방지
       }
 
       // 이전 소스 정지
@@ -389,6 +399,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       spotifyPlayer,
       ensureAudio,
       setIsPlaying,
+      state.currentTrack,
+      isPlaying,
     ]
   );
 
