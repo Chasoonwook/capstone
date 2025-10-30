@@ -148,10 +148,17 @@ export default function Page() {
               </p>
 
               {/* ✅ 자이로 광택 적용: 버튼을 GyroShine으로 감쌈 */}
-              <GyroShine className="rounded-lg" intensity={0.45} radius={220} smooth={0.2}>
+              <GyroShine
+                className="rounded-[24px]"
+                intensity={0.55}   // 반짝 강도 ↑
+                radius={240}       // 하이라이트 범위
+                smooth={0.22}
+                mouseFallback      // 데스크톱 마우스 추적 ON
+              >
                 <button
                   onClick={() => setShowUploadModal(true)}
-                  className="w-full bg-primary text-primary-foreground rounded-lg py-3 px-4 font-medium text-sm flex items-center justify-center gap-2 hover:bg-primary/90 transition-colors"
+                  className="relative w-full bg-transparent text-white rounded-[24px] py-4 px-6 font-semibold text-sm sm:text-base flex items-center justify-center gap-2 select-none"
+                  style={{ textShadow: "0 1px 2px rgba(0,0,0,.35)" }}
                 >
                   <Camera className="w-4 h-4" />
                   사진으로 감정 분석하기
