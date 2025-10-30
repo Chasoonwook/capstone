@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -128,11 +128,21 @@ async function prefetchCoversAndUris(list: TrackPlus[]): Promise<TrackPlus[]> {
 
 export default function RecommendClient() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const player = usePlayer();
   const { status: spotifyStatus } = useSpotifyStatus();
   const isSpotifyConnected = (spotifyStatus?.connected ?? false) && player.isSpotifyReady;
 
-  const [photoId, setPhotoId] = useState<string | null>(null);
+  const photoId = useMemo(() => {
+    const id = searchParams.get("photoId") || searchParams.get("photoID") || searchParams.get("id");
+    if (id) {
+      // URL이 바뀔 때마다 세션 스토리지도 갱신
+      const route = `/recommend?photoId=${encodeURIComponent(id)}`;
+      try { sessionStorage.setItem("lastPlayerRoute", route); } catch {}
+    }
+    return id;
+  }, [searchParams]);
+  
   const analyzedPhotoUrl = useMemo(() => buildPhotoSrc(photoId), [photoId]);
   const [playlist, setPlaylist] = useState<TrackPlus[]>([]);   // ✅ TrackPlus
   const [loading, setLoading] = useState(true);
@@ -147,17 +157,6 @@ export default function RecommendClient() {
     []
   );
   const playlistTitle = `${userNameFallback || "내"} 플레이리스트`;
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const qs = new URLSearchParams(window.location.search);
-    const id = qs.get("photoId") || qs.get("photoID") || qs.get("id");
-    setPhotoId(id);
-    if (id) {
-      const route = `/recommend?photoId=${encodeURIComponent(id)}`;
-      try { sessionStorage.setItem("lastPlayerRoute", route); } catch {}
-    }
-  }, []);
 
   const { setQueueAndPlay, state: playerState } = player;
 
