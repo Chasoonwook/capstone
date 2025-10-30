@@ -35,6 +35,7 @@ export type PlayerState = {
   durMs: number;                      // 전체 길이(ms)
   currentTrack: Track | null;
   playbackSource: "preview" | "spotify" | null;
+  queueKey?: string | null;           // 큐 식별용 키 (선택적)
 };
 
 type Ctx = {
@@ -50,7 +51,7 @@ type Ctx = {
   prev: () => void;
   seek: (ms: number) => void;
   setVolume: (v: number) => void;
-  setQueueAndPlay: (tracks: Track[], startIndex?: number) => void;
+  setQueueAndPlay: (tracks: Track[], startIndex?: number, queueKey?: string | null) => void;
 };
 
 const PlayerCtx = createContext<Ctx | null>(null);
@@ -206,6 +207,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     durMs: 0,
     currentTrack: null,
     playbackSource: null,
+    queueKey: null,
   });
   const [isPlaying, setIsPlaying] = useState(false);
   const [volume, _setVolume] = useState<number>(() => {
@@ -532,7 +534,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   );
 
   const setQueueAndPlay = useCallback(
-    (tracks: Track[], startIndex = 0) => {
+    //queueKey 파라미터를 받도록 수정
+    (tracks: Track[], startIndex = 0, queueKey: string | null = null) => {
       const safeIndex = Math.max(0, Math.min(startIndex, tracks.length - 1));
       const firstTrack = tracks[safeIndex] || null;
 
@@ -548,6 +551,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         curMs: 0,
         durMs: firstTrack?.duration ? firstTrack.duration * 1000 : 0,
         playbackSource: null,
+        queueKey: queueKey ?? null,
       }));
 
       setTimeout(() => {
