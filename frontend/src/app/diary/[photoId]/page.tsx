@@ -1,4 +1,3 @@
-// app/diary/[photoId]/page.tsx
 "use client"
 
 import { useMemo, useState, useEffect, useCallback, useRef } from "react"
@@ -27,8 +26,6 @@ const buildPhotoSrc = (photoId: string | number) => {
     fallback: `${API_BASE}/photos/${id}/binary`,
   }
 }
-
-// (참고) 직접 오디오 파일을 다루지 않음. PlayerContext가 Spotify/프리뷰를 해결.
 
 const fmtKoreanDate = (iso?: string | null) => {
   if (!iso) return ""
@@ -67,7 +64,7 @@ function pickNumericUserIdSync(maybeUser: any): number | null {
 }
 
 /* ──────────────────────────────────────────────
-   앨범 아트 세션 캐시 (SearchAndRequest와 동일한 형태)
+   앨범 아트 세션 캐시
    ──────────────────────────────────────────────*/
 type ArtCache = Record<string, string | null>
 const SESSION_KEY = "albumArtCache_v1"
@@ -77,7 +74,6 @@ const loadSessionArt = (): ArtCache => {
 const saveSessionArt = (obj: ArtCache) => {
   try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(obj)) } catch {}
 }
-// 캐시 키 정규화
 const norm = (s?: string | null) =>
   (s || "").replace(/\s+/g, " ").replace(/[[(（【].*?[)\]）】]/g, "").trim().toLowerCase()
 const artKeyOf = (title: string, artist: string) => `${norm(title)} - ${norm(artist)}`
@@ -92,15 +88,24 @@ export default function DiaryPage() {
 
   const rawPhotoId = params?.photoId ?? ""
   const photoId = Number(rawPhotoId)
-  const titleParam = (qs.get("title") ?? "").trim() || "제목 없음"
-  const artistParam = (qs.get("artist") ?? "").trim() || "Various"
+
+  // ❗URL 파라미터(있으면 우선 사용)
+  const urlTitle = (qs.get("title") ?? "").trim()
+  const urlArtist = (qs.get("artist") ?? "").trim()
   const dateParam = qs.get("date")
   const dateLabel = fmtKoreanDate(dateParam)
 
-  const { primary, fallback } = useMemo(() => buildPhotoSrc(Number.isFinite(photoId) ? photoId : 0), [photoId])
+  const { primary, fallback } = useMemo(
+    () => buildPhotoSrc(Number.isFinite(photoId) ? photoId : 0),
+    [photoId]
+  )
 
   const [userId, setUserId] = useState<number | null>(null)
   const [userCheckDone, setUserCheckDone] = useState(false)
+
+  // ✅ 곡 정보의 단일 소스
+  const [musicTitle, setMusicTitle] = useState<string>(urlTitle || "")
+  const [musicArtist, setMusicArtist] = useState<string>(urlArtist || "")
 
   const [subject, setSubject] = useState<string>("")
   const [content, setContent] = useState<string>("")
@@ -108,15 +113,15 @@ export default function DiaryPage() {
   const [saveError, setSaveError] = useState<string | null>(null)
   const [diaryId, setDiaryId] = useState<number | null>(null)
 
-  // ⬇️ 앨범아트(가능 시) 확보 후 트랙 구성
   const [coverUrl, setCoverUrl] = useState<string | null>(null)
   const [artTried, setArtTried] = useState(false)
   const autoPlayedRef = useRef(false)
-
-  // ⬇️ 세션 캐시 상태
   const [artCache, setArtCache] = useState<ArtCache>({})
 
-  const storageKey = useMemo(() => `diary_draft::${Number.isFinite(photoId) ? photoId : "unknown"}`, [photoId])
+  const storageKey = useMemo(
+    () => `diary_draft::${Number.isFinite(photoId) ? photoId : "unknown"}`,
+    [photoId]
+  )
 
   // 유저 로드
   useEffect(() => {
@@ -130,7 +135,7 @@ export default function DiaryPage() {
     setArtCache((prev) => ({ ...loadSessionArt(), ...prev }))
   }, [])
 
-  // 기존 일기 불러오기
+  // ✅ 기존 일기 불러오며 곡 스냅샷 보강
   useEffect(() => {
     if (!Number.isFinite(photoId)) return
     if (!userCheckDone || userId == null) return
@@ -143,10 +148,37 @@ export default function DiaryPage() {
           if (exist?.id) setDiaryId(exist.id)
           setSubject((prev) => (prev ? prev : (exist?.subject ?? "")))
           setContent((prev) => (prev ? prev : (exist?.content ?? "")))
+          // ✨ URL이 비어있다면 다이어리 스냅샷으로 보강
+          if (!urlTitle && exist?.music_title_snapshot) setMusicTitle(exist.music_title_snapshot)
+          if (!urlArtist && exist?.music_artist_snapshot) setMusicArtist(exist.music_artist_snapshot)
         }
       } catch {}
     })()
-  }, [photoId, userId, userCheckDone])
+  }, [photoId, userId, userCheckDone, urlTitle, urlArtist])
+
+  // ✅ 히스토리에서 한 번 더 보강 (일기 스냅샷도 없는 경우 대비)
+  useEffect(() => {
+    if (!Number.isFinite(photoId)) return
+    if (musicTitle && musicArtist) return // 이미 확보됨
+    ;(async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/history/by-photo?photo_id=${encodeURIComponent(String(photoId))}`, {
+          credentials: "include",
+          cache: "no-store",
+        })
+        if (r.ok) {
+          const h = await r.json() as {
+            title_snapshot?: string | null
+            artist_snapshot?: string | null
+            title?: string | null
+            artist?: string | null
+          }
+          if (!musicTitle) setMusicTitle(h?.title_snapshot || h?.title || "제목 없음")
+          if (!musicArtist) setMusicArtist(h?.artist_snapshot || h?.artist || "Various")
+        }
+      } catch {}
+    })()
+  }, [photoId, musicTitle, musicArtist])
 
   // 로컬 임시 저장 불러오기
   useEffect(() => {
@@ -185,8 +217,9 @@ export default function DiaryPage() {
       const commonBody = {
         subject,
         content,
-        music_title: titleParam,
-        music_artist: artistParam,
+        // ✅ 일관된 곡 정보 소스 사용
+        music_title: musicTitle || "제목 없음",
+        music_artist: musicArtist || "Various",
         diary_at: dateParam || null,
       }
 
@@ -217,9 +250,7 @@ export default function DiaryPage() {
         if (saved?.id) setDiaryId(saved.id)
       } catch {}
 
-      try {
-        localStorage.removeItem(storageKey)
-      } catch {}
+      try { localStorage.removeItem(storageKey) } catch {}
       router.push("/")
     } catch (e: any) {
       setSaveError(e?.message ?? "저장에 실패했습니다.")
@@ -227,26 +258,25 @@ export default function DiaryPage() {
       setSaving(false)
     }
   }, [
-    artistParam,
-    dateParam,
     diaryId,
     photoId,
     router,
     storageKey,
     subject,
-    titleParam,
     content,
     userId,
     userCheckDone,
+    dateParam,
+    musicTitle,
+    musicArtist,
   ])
 
-  // 🔎 배치 API로 앨범커버 + (가능하면) previewUrl/spotifyUri 확보 → 트랙에 주입
+  // 🔎 앨범커버/미리듣기 확보 후 재생 — 단일 소스(musicTitle/Artist) 사용
   const fetchCoverAndPlay = useCallback(async (auto = false) => {
-    const title = titleParam.trim()
-    const artist = artistParam.trim()
+    const title = (musicTitle || "제목 없음").trim()
+    const artist = (musicArtist || "Various").trim()
     const keyId = `diary:${photoId}:${title.toLowerCase()}-${artist.toLowerCase()}`
 
-    // 이미 현재 곡이 동일하면 자동 재시도 생략
     const cur = state.currentTrack
     if (
       auto &&
@@ -257,14 +287,12 @@ export default function DiaryPage() {
       return
     }
 
-    // 1) 세션 캐시 우선 반영
     const k = artKeyOf(title, artist)
     const cached = artCache[k]
     if (typeof cached !== "undefined") {
       setCoverUrl(cached)
     }
 
-    // 2) 배치 검색 1회 (앨범커버 + previewUrl/spotifyUri 확보 시도)
     let cover: string | null = typeof cached !== "undefined" ? cached : null
     let previewUrl: string | null = null
     let spotifyUri: string | null = null
@@ -295,7 +323,6 @@ export default function DiaryPage() {
 
           if (cover != null) setCoverUrl(cover)
 
-          // 세션 캐시에 저장
           setArtCache((prev) => {
             const next = { ...prev, [k]: cover ?? null }
             saveSessionArt(next)
@@ -303,33 +330,31 @@ export default function DiaryPage() {
           })
         }
       } catch {
-        // 실패해도 재생 시도는 계속
+        // ignore
       }
     }
 
-    // 3) 플레이어 큐 설정 및 재생
     const track: Track = {
       id: keyId,
-      title: title || "제목 없음",
-      artist: artist || "Various",
+      title,
+      artist,
       coverUrl: cover ?? null,
-      // 🔹 미리듣기/스포티파이 URI를 가능하면 채워넣기
       audioUrl: previewUrl ?? undefined,
       spotify_uri: spotifyUri ?? undefined,
       selected_from: "diary",
     }
 
     setQueueAndPlay([track], 0)
-  }, [artistParam, titleParam, photoId, setQueueAndPlay, state.currentTrack, artTried, artCache])
+  }, [musicTitle, musicArtist, photoId, setQueueAndPlay, state.currentTrack, artTried, artCache])
 
   // 페이지 진입 시 1회 자동 재생
   useEffect(() => {
     if (!Number.isFinite(photoId)) return
-    if (!titleParam && !artistParam) return
+    if (!musicTitle && !musicArtist) return
     if (autoPlayedRef.current) return
     autoPlayedRef.current = true
     void fetchCoverAndPlay(true)
-  }, [photoId, titleParam, artistParam, fetchCoverAndPlay])
+  }, [photoId, musicTitle, musicArtist, fetchCoverAndPlay])
 
   // 단축키: Ctrl/Cmd+S → 저장
   useEffect(() => {
@@ -358,7 +383,6 @@ export default function DiaryPage() {
   return (
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-40 bg-background/80 backdrop-blur-xl border-b border-border">
-        {/* ✅ 헤더: 좌측(뒤로 + 타이틀) / 우측(저장 버튼) */}
         <div className="max-w-2xl mx-auto flex items-center justify-between px-4 h-16">
           <div className="flex items-center gap-3">
             <button
@@ -372,7 +396,6 @@ export default function DiaryPage() {
             <h1 className="text-lg font-bold text-foreground">그림일기 작성</h1>
           </div>
 
-          {/* ✅ 상단 저장 버튼 */}
           <button
             type="button"
             disabled={saving}
@@ -385,7 +408,6 @@ export default function DiaryPage() {
         </div>
       </header>
 
-      {/* 하단 고정바 제거했으므로 padding-bottom 축소 */}
       <main className="max-w-2xl mx-auto px-4 py-8 pb-8">
         <section className="mb-8">
           <div className="bg-card p-5 rounded-2xl shadow-lg border border-border">
@@ -421,7 +443,6 @@ export default function DiaryPage() {
         <section className="mb-8">
           <div className="bg-primary/5 rounded-2xl p-4 border border-primary/10">
             <div className="flex items-center gap-4">
-              {/* 앨범 커버(있으면) 또는 아이콘 */}
               {coverUrl ? (
                 <img
                   src={coverUrl}
@@ -434,13 +455,15 @@ export default function DiaryPage() {
                 </div>
               )}
 
-              {/* 제목/가수 */}
               <div className="min-w-0 flex-1">
-                <div className="text-sm font-semibold text-foreground truncate">{titleParam}</div>
-                <div className="text-xs text-muted-foreground truncate mt-1">{artistParam}</div>
+                <div className="text-sm font-semibold text-foreground truncate">
+                  {musicTitle || "제목 없음"}
+                </div>
+                <div className="text-xs text-muted-foreground truncate mt-1">
+                  {musicArtist || "Various"}
+                </div>
               </div>
 
-              {/* 재생 버튼 */}
               <button
                 onClick={() => fetchCoverAndPlay(false)}
                 className="px-3 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 flex items-center gap-2"
@@ -477,8 +500,6 @@ export default function DiaryPage() {
           </div>
         </section>
       </main>
-
-      {/* ⛔ 하단 고정 저장 바 제거됨 */}
 
       {saveError && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-destructive text-destructive-foreground px-4 py-2 rounded-lg shadow-lg text-sm">
