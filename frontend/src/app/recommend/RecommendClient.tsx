@@ -280,16 +280,32 @@ export default function RecommendClient() {
 
   // 백엔드로 피드백을 전송
   const sendFeedback = async (feedbackValue: 1 | -1) => {
-    // 현재 곡이나 사진 id가 없으면 전송 중단
-    if (!currentTrack || !currentTrack.db_music_id || !photoId) {
-      console.warn("Feedback aborted: missing track DB_ID or photo context.");
+    
+    // parseInt는 null이나 ""를 NaN으로 변환합니다.
+    const uid_str = typeof window !== "undefined" ? localStorage.getItem("uid") : null;
+    const final_user_id = uid_str ? parseInt(uid_str, 10) : NaN;
+    
+    const final_photo_id = photoId ? parseInt(photoId, 10) : NaN;
+    
+    // db_music_id는 이미 number | null 타입일 수 있으므로 Number()를 사용 (null -> 0)
+    const final_music_id = (currentTrack && currentTrack.db_music_id) 
+      ? Number(currentTrack.db_music_id) 
+      : NaN;
+
+    // ✅ 2. 유효성 검사 강화 (NaN이거나 0 이하인 ID는 거부)
+    if (!final_user_id || final_user_id <= 0) {
+      console.warn("Feedback aborted: Invalid User ID.", uid_str);
+      setError("피드백을 보내려면 로그인이 필요합니다.");
       return;
     }
-
-    const uid = typeof window !== "undefined" ? localStorage.getItem("uid") : null;
-    if (!uid) {
-      console.warn("Feedback aborted: missing user context.");
-      setError("피드백을 보내려면 로그인이 필요합니다."); // (선택적) 사용자에게 오류 표시
+    if (!final_photo_id || final_photo_id <= 0) {
+      console.warn("Feedback aborted: Invalid Photo ID.", photoId);
+      setError("유효하지 않은 사진 정보입니다.");
+      return;
+    }
+    if (!final_music_id || final_music_id <= 0) {
+      console.warn("Feedback aborted: Invalid Music ID.", currentTrack?.db_music_id);
+      setError("피드백을 보낼 수 없는 곡입니다.");
       return;
     }
 
@@ -302,10 +318,10 @@ export default function RecommendClient() {
         } as HeadersInit,
         credentials: "include", // authRequired API는 이 옵션이 필수입니다.
         body: JSON.stringify({
-          user_id: Number(uid),
-          music_id: Number(currentTrack.db_music_id),
+          user_id: final_user_id,
+          music_id: final_music_id,
           feedback: feedbackValue, // 1 (좋아요) 또는 -1 (싫어요)
-          photo_id: Number(photoId),
+          photo_id: final_photo_id,
         }),
       });
 
