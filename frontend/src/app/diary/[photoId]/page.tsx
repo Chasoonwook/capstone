@@ -15,8 +15,11 @@ type ExistingDiary = {
   subject: string | null
   content: string | null
   diary_at: string | null
+  // 스냅샷 + 일반 필드 모두 커버
   music_title_snapshot?: string | null
   music_artist_snapshot?: string | null
+  music_title?: string | null
+  music_artist?: string | null
 }
 
 const buildPhotoSrc = (photoId: string | number) => {
@@ -135,7 +138,7 @@ export default function DiaryPage() {
     setArtCache((prev) => ({ ...loadSessionArt(), ...prev }))
   }, [])
 
-  // ✅ 기존 일기 불러오며 곡 스냅샷 보강
+  // ✅ 기존 일기 불러오며 곡 스냅샷 보강 (스냅샷 → 일반 필드)
   useEffect(() => {
     if (!Number.isFinite(photoId)) return
     if (!userCheckDone || userId == null) return
@@ -148,15 +151,21 @@ export default function DiaryPage() {
           if (exist?.id) setDiaryId(exist.id)
           setSubject((prev) => (prev ? prev : (exist?.subject ?? "")))
           setContent((prev) => (prev ? prev : (exist?.content ?? "")))
-          // ✨ URL이 비어있다면 다이어리 스냅샷으로 보강
-          if (!urlTitle && exist?.music_title_snapshot) setMusicTitle(exist.music_title_snapshot)
-          if (!urlArtist && exist?.music_artist_snapshot) setMusicArtist(exist.music_artist_snapshot)
+
+          if (!urlTitle) {
+            const mt = exist?.music_title_snapshot ?? exist?.music_title
+            if (mt) setMusicTitle(mt)
+          }
+          if (!urlArtist) {
+            const ma = exist?.music_artist_snapshot ?? exist?.music_artist
+            if (ma) setMusicArtist(ma)
+          }
         }
       } catch {}
     })()
   }, [photoId, userId, userCheckDone, urlTitle, urlArtist])
 
-  // ✅ 히스토리에서 한 번 더 보강 (일기 스냅샷도 없는 경우 대비)
+  // ✅ 히스토리에서 한 번 더 보강 (일기 정보도 없는 경우 대비)
   useEffect(() => {
     if (!Number.isFinite(photoId)) return
     if (musicTitle && musicArtist) return // 이미 확보됨
@@ -179,6 +188,33 @@ export default function DiaryPage() {
       } catch {}
     })()
   }, [photoId, musicTitle, musicArtist])
+
+  // ✅ URL 정규화: 최종 확정된 제목/가수/날짜를 쿼리에 반영
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (!Number.isFinite(photoId)) return
+    // 제목과 가수 둘 다 있어야 정규화
+    if (!(musicTitle && musicArtist)) return
+
+    const cur = new URL(window.location.href)
+    const hasTitle = !!cur.searchParams.get("title")
+    const hasArtist = !!cur.searchParams.get("artist")
+    const hasDate = !!cur.searchParams.get("date")
+
+    // 이미 필요한 파라미터가 모두 채워져 있으면 스킵
+    if (hasTitle && hasArtist /* date는 옵션 */) return
+
+    const idEnc = encodeURIComponent(String(photoId))
+    const titleEnc = encodeURIComponent(musicTitle)
+    const artistEnc = encodeURIComponent(musicArtist)
+    const dateEnc = dateParam ? `&date=${encodeURIComponent(dateParam)}` : ""
+
+    const next = `/diary/${idEnc}?title=${titleEnc}&artist=${artistEnc}${dateEnc}`
+    // 동일하면 교체 불필요
+    if (decodeURI(cur.pathname + cur.search) !== decodeURI(next)) {
+      router.replace(next)
+    }
+  }, [photoId, musicTitle, musicArtist, dateParam, router])
 
   // 로컬 임시 저장 불러오기
   useEffect(() => {
@@ -347,10 +383,10 @@ export default function DiaryPage() {
     setQueueAndPlay([track], 0)
   }, [musicTitle, musicArtist, photoId, setQueueAndPlay, state.currentTrack, artTried, artCache])
 
-  // 페이지 진입 시 1회 자동 재생
+  // 페이지 진입 시 1회 자동 재생 (제목+가수 둘 다 준비된 후)
   useEffect(() => {
     if (!Number.isFinite(photoId)) return
-    if (!musicTitle && !musicArtist) return
+    if (!(musicTitle && musicArtist)) return
     if (autoPlayedRef.current) return
     autoPlayedRef.current = true
     void fetchCoverAndPlay(true)
