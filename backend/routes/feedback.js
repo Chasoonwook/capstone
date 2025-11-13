@@ -39,12 +39,12 @@ router.post("/feedback", authRequired, async (req, res) => {
       `INSERT INTO user_song_feedback
          (user_id, music_id, feedback, photo_id, context_main_mood, context_sub_mood)
        VALUES ($1,$2,$3,$4,$5,$6)
-       ON CONFLICT (user_id, music_id)
+       ON CONFLICT (user_id, music_id, photo_id)
        DO UPDATE SET
          feedback = EXCLUDED.feedback,
-         photo_id = EXCLUDED.photo_id,
          context_main_mood = EXCLUDED.context_main_mood,
-         context_sub_mood  = EXCLUDED.context_sub_mood`,
+         context_sub_mood  = EXCLUDED.context_sub_mood,
+         created_at = NOW()`,
       [
         userId,
         musicId,
