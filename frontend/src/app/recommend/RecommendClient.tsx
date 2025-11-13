@@ -277,6 +277,13 @@ export default function RecommendClient() {
       return;
     }
 
+    const uid = typeof window !== "undefined" ? localStorage.getItem("uid") : null;
+    if (!uid) {
+      console.warn("Feedback aborted: missing user context.");
+      setError("피드백을 보내려면 로그인이 필요합니다."); // (선택적) 사용자에게 오류 표시
+      return;
+    }
+
     try {
       const res = await fetch(`${API_BASE}/api/feedback`, {
         method: "POST",
@@ -286,19 +293,23 @@ export default function RecommendClient() {
         } as HeadersInit,
         credentials: "include", // authRequired API는 이 옵션이 필수입니다.
         body: JSON.stringify({
-          music_id: currentTrack.id,
-          feedback: feedbackValue, // 1 (좋아요) 또는 -1 (싫어요)
+          user_id: Number(uid),
+          music_id: Number(currentTrack.id),
+          feedback: Number(feedbackValue), // 1 (좋아요) 또는 -1 (싫어요)
           photo_id: photoId,
         }),
       });
 
       if (!res.ok) {
         console.warn("Failed to send feedback to server:", res.status);
+        setError(`피드백 전송에 실패했습니다. (코드: ${res.status})`);
       } else {
         console.log(`Feedback (value: ${feedbackValue}) successfully sent.`);
+        setError(null);
       }
     } catch (e) {
       console.error("Error sending feedback:", e);
+      setError("피드백 전송 중 오류가 발생했습니다.");
     }
   };
 
