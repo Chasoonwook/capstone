@@ -10,7 +10,7 @@ import {
   ListMusic, Upload, VolumeX, Volume1, Volume2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { API_BASE } from "@/lib/api";
+import { API_BASE, authHeaders } from "@/lib/api";
 import { usePlayer, Track } from "@/contexts/PlayerContext";
 import { useSpotifyStatus } from "@/contexts/SpotifyStatusContext";
 import { formatTime } from "./utils/media";
@@ -282,7 +282,8 @@ export default function RecommendClient() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-        },
+          ...authHeaders(),
+        } as HeadersInit,
         credentials: "include", // authRequired API는 이 옵션이 필수입니다.
         body: JSON.stringify({
           music_id: currentTrack.id,
