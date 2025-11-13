@@ -5,29 +5,63 @@ import { useSearchParams, useParams, useRouter } from "next/navigation"
 import { API_BASE, apiUrl } from "@/lib/api"
 import { ArrowLeft, Save, Music2, Calendar, Play } from "lucide-react"
 import { useAuthUser } from "@/hooks/useAuthUser"
-
-// ✅ PlayerContext 방식으로 재생
 import { usePlayer } from "@/contexts/PlayerContext"
 import type { Track } from "@/contexts/PlayerContext"
 
+/** 서버 응답 타입(필드가 없을 수도 있어 optional 처리) */
 type ExistingDiary = {
   id: number
-  subject: string | null
-  content: string | null
-  diary_at: string | null
-  // 스냅샷 + 일반 필드 모두 커버
+  subject?: string | null
+  content?: string | null
+  diary_at?: string | null
   music_title_snapshot?: string | null
   music_artist_snapshot?: string | null
   music_title?: string | null
   music_artist?: string | null
 }
 
+type HistoryByPhoto = {
+  title_snapshot?: string | null
+  artist_snapshot?: string | null
+  title?: string | null
+  artist?: string | null
+  created_at?: string | number | null
+  createdAt?: string | number | null
+  history_created_at?: string | number | null
+  saved_at?: string | number | null
+  analyzed_at?: string | number | null
+  updated_at?: string | number | null
+  timestamp?: string | number | null
+  date?: string | number | null
+  time?: string | number | null
+}
+
+/** 이미지 URL */
 const buildPhotoSrc = (photoId: string | number) => {
   const id = encodeURIComponent(String(photoId))
   return {
     primary: `${API_BASE}/api/photos/${id}/binary`,
     fallback: `${API_BASE}/photos/${id}/binary`,
   }
+}
+
+/** 히스토리에서 사용하는 날짜 우선순위와 동일하게 ISO로 뽑기 */
+function pickDateISO(h: Partial<HistoryByPhoto> | null | undefined): string | null {
+  const v =
+    h?.created_at ??
+    h?.createdAt ??
+    h?.history_created_at ??
+    h?.saved_at ??
+    h?.analyzed_at ??
+    h?.updated_at ??
+    h?.timestamp ??
+    h?.date ??
+    h?.time ??
+    null
+  if (v == null) return null
+  const d = typeof v === "number" ? new Date(v) : new Date(String(v))
+  if (isNaN(d.getTime())) return null
+  return d.toISOString()
 }
 
 const fmtKoreanDate = (iso?: string | null) => {
@@ -66,16 +100,20 @@ function pickNumericUserIdSync(maybeUser: any): number | null {
   return null
 }
 
-/* ──────────────────────────────────────────────
-   앨범 아트 세션 캐시
-   ──────────────────────────────────────────────*/
+/** 앨범커버 세션 캐시 */
 type ArtCache = Record<string, string | null>
 const SESSION_KEY = "albumArtCache_v1"
 const loadSessionArt = (): ArtCache => {
-  try { return JSON.parse(sessionStorage.getItem(SESSION_KEY) || "{}") } catch { return {} }
+  try {
+    return JSON.parse(sessionStorage.getItem(SESSION_KEY) || "{}")
+  } catch {
+    return {}
+  }
 }
 const saveSessionArt = (obj: ArtCache) => {
-  try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(obj)) } catch {}
+  try {
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(obj))
+  } catch {}
 }
 const norm = (s?: string | null) =>
   (s || "").replace(/\s+/g, " ").replace(/[[(（【].*?[)\]）】]/g, "").trim().toLowerCase()
@@ -86,17 +124,15 @@ export default function DiaryPage() {
   const params = useParams<{ photoId: string }>()
   const qs = useSearchParams()
   const { user } = useAuthUser?.() ?? { user: undefined }
-
   const { setQueueAndPlay, state } = usePlayer()
 
   const rawPhotoId = params?.photoId ?? ""
   const photoId = Number(rawPhotoId)
 
-  // ❗URL 파라미터(있으면 우선 사용)
+  // 현재 URL 파라미터
   const urlTitle = (qs.get("title") ?? "").trim()
   const urlArtist = (qs.get("artist") ?? "").trim()
-  const dateParam = qs.get("date")
-  const dateLabel = fmtKoreanDate(dateParam)
+  const urlDate = (qs.get("date") ?? "").trim()
 
   const { primary, fallback } = useMemo(
     () => buildPhotoSrc(Number.isFinite(photoId) ? photoId : 0),
@@ -106,9 +142,10 @@ export default function DiaryPage() {
   const [userId, setUserId] = useState<number | null>(null)
   const [userCheckDone, setUserCheckDone] = useState(false)
 
-  // ✅ 곡 정보의 단일 소스
-  const [musicTitle, setMusicTitle] = useState<string>(urlTitle || "")
-  const [musicArtist, setMusicArtist] = useState<string>(urlArtist || "")
+  // 화면에 보여줄 곡 정보(단일 소스)
+  const [musicTitle, setMusicTitle] = useState<string>(urlTitle)
+  const [musicArtist, setMusicArtist] = useState<string>(urlArtist)
+  const [dateISO, setDateISO] = useState<string>(urlDate || "")
 
   const [subject, setSubject] = useState<string>("")
   const [content, setContent] = useState<string>("")
@@ -126,19 +163,107 @@ export default function DiaryPage() {
     [photoId]
   )
 
-  // 유저 로드
+  /** 유저 로드 */
   useEffect(() => {
     const id = pickNumericUserIdSync(user)
     setUserId(id)
     setUserCheckDone(true)
   }, [user])
 
-  // 세션 캐시 로딩
+  /** 세션 캐시 로드 */
   useEffect(() => {
     setArtCache((prev) => ({ ...loadSessionArt(), ...prev }))
   }, [])
 
-  // ✅ 기존 일기 불러오며 곡 스냅샷 보강 (스냅샷 → 일반 필드)
+  /**
+   * ✅ URL 정규화: 진입 시 title/artist 중 하나라도 없으면
+   * 1) 다이어리(by-photo)에서 스냅샷/일반필드로 보강
+   * 2) 그래도 없으면 히스토리(by-photo)에서 보강 + 날짜 ISO 확보
+   * 3) HistoryStrip 과 동일한 쿼리 포맷으로 router.replace()
+   */
+  useEffect(() => {
+    if (!Number.isFinite(photoId)) return
+
+    const needNormalize = !(urlTitle && urlArtist) // 하나라도 비었으면 정규화
+    if (!needNormalize) {
+      // 이미 쿼리가 갖춰져 있으면 state도 맞춰둠
+      setMusicTitle(urlTitle)
+      setMusicArtist(urlArtist)
+      setDateISO(urlDate || "")
+      return
+    }
+
+    let cancelled = false
+    ;(async () => {
+      // 1) 다이어리 우선
+      let finalTitle = ""
+      let finalArtist = ""
+      let finalDateISO: string | null = urlDate || null
+
+      try {
+        // 다이어리
+        const r = await fetch(
+          `${API_BASE}/api/diaries/by-photo?user_id=${userId ?? ""}&photo_id=${encodeURIComponent(
+            String(photoId),
+          )}`,
+          { credentials: "include" },
+        )
+        if (r.ok) {
+          const d = (await r.json()) as ExistingDiary
+          finalTitle = d?.music_title_snapshot || d?.music_title || ""
+          finalArtist = d?.music_artist_snapshot || d?.music_artist || ""
+          // 다이어리에는 날짜가 없을 수 있으므로 그대로 두기
+        }
+      } catch {}
+
+      // 2) 히스토리 보강(없을 때만 / 또는 날짜 보강)
+      if (!finalTitle || !finalArtist || !finalDateISO) {
+        try {
+          const r2 = await fetch(
+            `${API_BASE}/api/history/by-photo?photo_id=${encodeURIComponent(String(photoId))}`,
+            { credentials: "include", cache: "no-store" },
+          )
+          if (r2.ok) {
+            const h = (await r2.json()) as HistoryByPhoto
+            if (!finalTitle) finalTitle = h?.title_snapshot || h?.title || ""
+            if (!finalArtist) finalArtist = h?.artist_snapshot || h?.artist || ""
+            if (!finalDateISO) finalDateISO = pickDateISO(h)
+          }
+        } catch {}
+      }
+
+      // 3) 마지막 안전장치(그래도 없으면 기본값)
+      if (!finalTitle) finalTitle = "제목 없음"
+      if (!finalArtist) finalArtist = "Various"
+
+      // 상태 반영
+      if (cancelled) return
+      setMusicTitle(finalTitle)
+      setMusicArtist(finalArtist)
+      setDateISO(finalDateISO ?? "")
+
+      // 4) HistoryStrip 과 동일한 인코딩으로 URL 정규화
+      const idEnc = encodeURIComponent(String(photoId))
+      const titleEnc = encodeURIComponent(finalTitle)
+      const artistEnc = encodeURIComponent(finalArtist)
+      const datePart = finalDateISO ? `&date=${encodeURIComponent(finalDateISO)}` : ""
+      const next = `/diary/${idEnc}?title=${titleEnc}&artist=${artistEnc}${datePart}`
+
+      // 현재와 다르면 교체(히스토리 추가 없이)
+      const cur = typeof window !== "undefined" ? decodeURI(window.location.pathname + window.location.search) : ""
+      if (cur !== decodeURI(next)) {
+        router.replace(next)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+    // urlTitle/urlArtist 가 비어 있는 경우에만 발동하도록 의존성 구성
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [photoId, userId, userCheckDone])
+
+  /** 다이어리 자체 내용(제목/내용) 로드 */
   useEffect(() => {
     if (!Number.isFinite(photoId)) return
     if (!userCheckDone || userId == null) return
@@ -151,90 +276,32 @@ export default function DiaryPage() {
           if (exist?.id) setDiaryId(exist.id)
           setSubject((prev) => (prev ? prev : (exist?.subject ?? "")))
           setContent((prev) => (prev ? prev : (exist?.content ?? "")))
-
-          if (!urlTitle) {
-            const mt = exist?.music_title_snapshot ?? exist?.music_title
-            if (mt) setMusicTitle(mt)
-          }
-          if (!urlArtist) {
-            const ma = exist?.music_artist_snapshot ?? exist?.music_artist
-            if (ma) setMusicArtist(ma)
-          }
         }
       } catch {}
     })()
-  }, [photoId, userId, userCheckDone, urlTitle, urlArtist])
+  }, [photoId, userId, userCheckDone])
 
-  // ✅ 히스토리에서 한 번 더 보강 (일기 정보도 없는 경우 대비)
-  useEffect(() => {
-    if (!Number.isFinite(photoId)) return
-    if (musicTitle && musicArtist) return // 이미 확보됨
-    ;(async () => {
-      try {
-        const r = await fetch(`${API_BASE}/api/history/by-photo?photo_id=${encodeURIComponent(String(photoId))}`, {
-          credentials: "include",
-          cache: "no-store",
-        })
-        if (r.ok) {
-          const h = await r.json() as {
-            title_snapshot?: string | null
-            artist_snapshot?: string | null
-            title?: string | null
-            artist?: string | null
-          }
-          if (!musicTitle) setMusicTitle(h?.title_snapshot || h?.title || "제목 없음")
-          if (!musicArtist) setMusicArtist(h?.artist_snapshot || h?.artist || "Various")
-        }
-      } catch {}
-    })()
-  }, [photoId, musicTitle, musicArtist])
-
-  // ✅ URL 정규화: 최종 확정된 제목/가수/날짜를 쿼리에 반영
-  useEffect(() => {
-    if (typeof window === "undefined") return
-    if (!Number.isFinite(photoId)) return
-    // 제목과 가수 둘 다 있어야 정규화
-    if (!(musicTitle && musicArtist)) return
-
-    const cur = new URL(window.location.href)
-    const hasTitle = !!cur.searchParams.get("title")
-    const hasArtist = !!cur.searchParams.get("artist")
-    const hasDate = !!cur.searchParams.get("date")
-
-    // 이미 필요한 파라미터가 모두 채워져 있으면 스킵
-    if (hasTitle && hasArtist /* date는 옵션 */) return
-
-    const idEnc = encodeURIComponent(String(photoId))
-    const titleEnc = encodeURIComponent(musicTitle)
-    const artistEnc = encodeURIComponent(musicArtist)
-    const dateEnc = dateParam ? `&date=${encodeURIComponent(dateParam)}` : ""
-
-    const next = `/diary/${idEnc}?title=${titleEnc}&artist=${artistEnc}${dateEnc}`
-    // 동일하면 교체 불필요
-    if (decodeURI(cur.pathname + cur.search) !== decodeURI(next)) {
-      router.replace(next)
-    }
-  }, [photoId, musicTitle, musicArtist, dateParam, router])
-
-  // 로컬 임시 저장 불러오기
+  /** 로컬 임시 저장 불러오기 */
+  const draftKey = storageKey
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(storageKey)
+      const raw = localStorage.getItem(draftKey)
       if (raw) {
         const draft = JSON.parse(raw) as { subject?: string; content?: string }
         if (typeof draft?.subject === "string") setSubject(draft.subject)
         if (typeof draft?.content === "string") setContent(draft.content)
       }
     } catch {}
-  }, [storageKey])
+  }, [draftKey])
 
-  // 로컬 임시 저장 저장하기
+  /** 로컬 임시 저장 저장 */
   useEffect(() => {
     try {
-      localStorage.setItem(storageKey, JSON.stringify({ subject, content }))
+      localStorage.setItem(draftKey, JSON.stringify({ subject, content }))
     } catch {}
-  }, [storageKey, subject, content])
+  }, [draftKey, subject, content])
 
+  /** 저장 */
   const saveDiary = useCallback(async () => {
     if (!Number.isFinite(photoId)) {
       setSaveError("잘못된 사진 ID입니다.")
@@ -253,10 +320,9 @@ export default function DiaryPage() {
       const commonBody = {
         subject,
         content,
-        // ✅ 일관된 곡 정보 소스 사용
         music_title: musicTitle || "제목 없음",
         music_artist: musicArtist || "Various",
-        diary_at: dateParam || null,
+        diary_at: dateISO || null,
       }
 
       let res: Response
@@ -286,104 +352,96 @@ export default function DiaryPage() {
         if (saved?.id) setDiaryId(saved.id)
       } catch {}
 
-      try { localStorage.removeItem(storageKey) } catch {}
+      try {
+        localStorage.removeItem(draftKey)
+      } catch {}
       router.push("/")
     } catch (e: any) {
       setSaveError(e?.message ?? "저장에 실패했습니다.")
     } finally {
       setSaving(false)
     }
-  }, [
-    diaryId,
-    photoId,
-    router,
-    storageKey,
-    subject,
-    content,
-    userId,
-    userCheckDone,
-    dateParam,
-    musicTitle,
-    musicArtist,
-  ])
+  }, [diaryId, photoId, router, draftKey, subject, content, userId, userCheckDone, dateISO, musicTitle, musicArtist])
 
-  // 🔎 앨범커버/미리듣기 확보 후 재생 — 단일 소스(musicTitle/Artist) 사용
-  const fetchCoverAndPlay = useCallback(async (auto = false) => {
-    const title = (musicTitle || "제목 없음").trim()
-    const artist = (musicArtist || "Various").trim()
-    const keyId = `diary:${photoId}:${title.toLowerCase()}-${artist.toLowerCase()}`
+  /** 앨범커버/미리듣기 확보 후 재생 */
+  const fetchCoverAndPlay = useCallback(
+    async (auto = false) => {
+      const title = (musicTitle || "제목 없음").trim()
+      const artist = (musicArtist || "Various").trim()
+      if (!title || !artist) return
 
-    const cur = state.currentTrack
-    if (
-      auto &&
-      cur &&
-      (cur.title?.toLowerCase() ?? "") === title.toLowerCase() &&
-      (cur.artist?.toLowerCase() ?? "") === artist.toLowerCase()
-    ) {
-      return
-    }
-
-    const k = artKeyOf(title, artist)
-    const cached = artCache[k]
-    if (typeof cached !== "undefined") {
-      setCoverUrl(cached)
-    }
-
-    let cover: string | null = typeof cached !== "undefined" ? cached : null
-    let previewUrl: string | null = null
-    let spotifyUri: string | null = null
-
-    if (!artTried && title && artist) {
-      setArtTried(true)
-      try {
-        const body = { pairs: [{ title, artist }] }
-        const r = await fetch(apiUrl("/spotify/search/batch"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-          cache: "no-store",
-          credentials: "include",
-        })
-        if (r.ok) {
-          const json = (await r.json()) as {
-            items?: Array<{
-              albumImage?: string | null
-              previewUrl?: string | null
-              spotifyUri?: string | null
-            }>
-          }
-          const item = json?.items?.[0]
-          cover = item?.albumImage ?? cover ?? null
-          previewUrl = item?.previewUrl ?? null
-          spotifyUri = item?.spotifyUri ?? null
-
-          if (cover != null) setCoverUrl(cover)
-
-          setArtCache((prev) => {
-            const next = { ...prev, [k]: cover ?? null }
-            saveSessionArt(next)
-            return next
-          })
-        }
-      } catch {
-        // ignore
+      const keyId = `diary:${photoId}:${title.toLowerCase()}-${artist.toLowerCase()}`
+      const cur = state.currentTrack
+      if (
+        auto &&
+        cur &&
+        (cur.title?.toLowerCase() ?? "") === title.toLowerCase() &&
+        (cur.artist?.toLowerCase() ?? "") === artist.toLowerCase()
+      ) {
+        return
       }
-    }
 
-    const track: Track = {
-      id: keyId,
-      title,
-      artist,
-      coverUrl: cover ?? null,
-      audioUrl: previewUrl ?? undefined,
-      spotify_uri: spotifyUri ?? undefined,
-      selected_from: "diary",
-    }
+      const k = artKeyOf(title, artist)
+      const cached = artCache[k]
+      if (typeof cached !== "undefined") {
+        setCoverUrl(cached)
+      }
 
-    setQueueAndPlay([track], 0)
-  }, [musicTitle, musicArtist, photoId, setQueueAndPlay, state.currentTrack, artTried, artCache])
+      let cover: string | null = typeof cached !== "undefined" ? cached : null
+      let previewUrl: string | null = null
+      let spotifyUri: string | null = null
 
-  // 페이지 진입 시 1회 자동 재생 (제목+가수 둘 다 준비된 후)
+      if (!artTried) {
+        setArtTried(true)
+        try {
+          const body = { pairs: [{ title, artist }] }
+          const r = await fetch(apiUrl("/spotify/search/batch"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+            cache: "no-store",
+            credentials: "include",
+          })
+          if (r.ok) {
+            const json = (await r.json()) as {
+              items?: Array<{
+                albumImage?: string | null
+                previewUrl?: string | null
+                spotifyUri?: string | null
+              }>
+            }
+            const item = json?.items?.[0]
+            cover = item?.albumImage ?? cover ?? null
+            previewUrl = item?.previewUrl ?? null
+            spotifyUri = item?.spotifyUri ?? null
+
+            if (cover != null) setCoverUrl(cover)
+            setArtCache((prev) => {
+              const next = { ...prev, [k]: cover ?? null }
+              saveSessionArt(next)
+              return next
+            })
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      const track: Track = {
+        id: keyId,
+        title,
+        artist,
+        coverUrl: cover ?? null,
+        audioUrl: previewUrl ?? undefined,
+        spotify_uri: spotifyUri ?? undefined,
+        selected_from: "diary",
+      }
+      setQueueAndPlay([track], 0)
+    },
+    [musicTitle, musicArtist, photoId, setQueueAndPlay, state.currentTrack, artTried, artCache],
+  )
+
+  /** 자동 재생: 제목+가수 모두 준비된 뒤 1회 */
   useEffect(() => {
     if (!Number.isFinite(photoId)) return
     if (!(musicTitle && musicArtist)) return
@@ -392,7 +450,7 @@ export default function DiaryPage() {
     void fetchCoverAndPlay(true)
   }, [photoId, musicTitle, musicArtist, fetchCoverAndPlay])
 
-  // 단축키: Ctrl/Cmd+S → 저장
+  /** 단축키: Ctrl/Cmd+S 저장 */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
@@ -404,7 +462,7 @@ export default function DiaryPage() {
     return () => window.removeEventListener("keydown", onKey)
   }, [saveDiary, saving])
 
-  // 떠날 때 경고
+  /** 이탈 경고 */
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
       if (subject || content) {
@@ -415,6 +473,12 @@ export default function DiaryPage() {
     window.addEventListener("beforeunload", handler)
     return () => window.removeEventListener("beforeunload", handler)
   }, [subject, content])
+
+  const dateLabel = fmtKoreanDate(dateISO)
+  const { primary: imgPrimary, fallback: imgFallback } = useMemo(
+    () => buildPhotoSrc(Number.isFinite(photoId) ? photoId : 0),
+    [photoId],
+  )
 
   return (
     <div className="min-h-screen bg-background">
@@ -449,7 +513,7 @@ export default function DiaryPage() {
           <div className="bg-card p-5 rounded-2xl shadow-lg border border-border">
             <div className="relative rounded-xl overflow-hidden bg-muted aspect-[4/3] border-2 border-background">
               <img
-                src={primary || "/placeholder.svg"}
+                src={imgPrimary || "/placeholder.svg"}
                 alt="선택한 사진"
                 className="w-full h-full object-cover"
                 crossOrigin="anonymous"
@@ -457,7 +521,7 @@ export default function DiaryPage() {
                   const img = e.currentTarget as HTMLImageElement & { __fb?: boolean }
                   if (!img.__fb) {
                     img.__fb = true
-                    img.src = fallback
+                    img.src = imgFallback
                   } else {
                     img.src = "/placeholder.svg"
                   }
