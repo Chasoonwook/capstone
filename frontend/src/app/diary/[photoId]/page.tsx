@@ -124,6 +124,7 @@ export default function DiaryPage() {
   const urlTitle = (qs.get("title") ?? "").trim()
   const urlArtist = (qs.get("artist") ?? "").trim()
   const urlDate = (qs.get("date") ?? "").trim()
+  const urlMusicId = (qs.get("db_music_id") ?? "").trim()
 
   const { primary, fallback } = useMemo(
     () => buildPhotoSrc(Number.isFinite(photoId) ? photoId : 0),
@@ -392,6 +393,7 @@ export default function DiaryPage() {
 
     const track: Track = {
       id: keyId,
+      db_music_id: urlMusicId ? Number(urlMusicId) : null,
       title,
       artist,
       coverUrl: cover ?? null,
@@ -400,7 +402,7 @@ export default function DiaryPage() {
       selected_from: "diary",
     }
     setQueueAndPlay([track], 0)
-  }, [musicTitle, musicArtist, photoId, setQueueAndPlay, state.currentTrack, artTried, artCache])
+  }, [musicTitle, musicArtist, photoId, setQueueAndPlay, state.currentTrack, artTried, artCache, urlMusicId])
 
   // 최초 진입 자동 재생
   useEffect(() => {

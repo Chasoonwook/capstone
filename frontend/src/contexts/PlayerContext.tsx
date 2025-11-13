@@ -17,6 +17,7 @@ import { API_BASE } from "@/lib/api";
 /** 트랙 모델 */
 export type Track = {
   id: string | number;
+  db_music_id?: number | null; // 뮤직아이디
   title: string;
   artist: string;
   audioUrl?: string | null;           // 30초 미리듣기 (Spotify preview / Deezer / iTunes)

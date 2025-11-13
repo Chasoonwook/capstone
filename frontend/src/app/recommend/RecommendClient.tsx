@@ -34,6 +34,14 @@ const normalizeTrack = (raw: any, idx: number): TrackPlus | null => {
   const artist = raw?.artist ?? raw?.music_artist ?? raw?.singer ?? "Unknown";
   if (!title) return null;
 
+  const db_music_id = Number.isFinite(Number(raw?.music_id))
+    ? Number(raw.music_id)
+    : Number.isFinite(Number(raw?.id)) // raw.id가 music_id일 수도 있음
+    ? Number(raw.id)
+    : null;
+
+  const player_id = db_music_id ?? `${title}-${artist}-${idx}`;
+  
   const preview = raw?.audio_url ?? raw?.preview_url ?? raw?.previewUrl ?? raw?.stream_url ?? null;
   const audioUrl = preview === "EMPTY" ? null : preview;
 
@@ -56,7 +64,8 @@ const normalizeTrack = (raw: any, idx: number): TrackPlus | null => {
 
   // ▲ TrackPlus로 반환하므로 genre 포함 가능
   return {
-    id: raw?.id ?? raw?.music_id ?? idx,
+    id: player_id,
+    db_music_id: db_music_id,
     title,
     artist,
     audioUrl,
@@ -272,8 +281,8 @@ export default function RecommendClient() {
   // 백엔드로 피드백을 전송
   const sendFeedback = async (feedbackValue: 1 | -1) => {
     // 현재 곡이나 사진 id가 없으면 전송 중단
-    if (!currentTrack || !photoId) {
-      console.warn("Feedback aborted: missing track or photo context.");
+    if (!currentTrack || !currentTrack.db_music_id || !photoId) {
+      console.warn("Feedback aborted: missing track DB_ID or photo context.");
       return;
     }
 
@@ -294,9 +303,9 @@ export default function RecommendClient() {
         credentials: "include", // authRequired API는 이 옵션이 필수입니다.
         body: JSON.stringify({
           user_id: Number(uid),
-          music_id: Number(currentTrack.id),
-          feedback: Number(feedbackValue), // 1 (좋아요) 또는 -1 (싫어요)
-          photo_id: photoId,
+          music_id: Number(currentTrack.db_music_id),
+          feedback: feedbackValue, // 1 (좋아요) 또는 -1 (싫어요)
+          photo_id: Number(photoId),
         }),
       });
 
