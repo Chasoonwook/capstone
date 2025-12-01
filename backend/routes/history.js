@@ -6,14 +6,7 @@ const axios = require('axios');
 
 const router = express.Router();
 
-/* ──────────────────────────────────────────────────────────────
- * 런타임 플래그 (환경변수로 제어)
- * ──────────────────────────────────────────────────────────────
- * REFRESH_RANKINGS_AFTER_SAVE: 저장 후 랭킹 갱신 트리거 여부 (기본 true)
- * REFRESH_WAIT: 랭킹 갱신을 응답 전에 대기할지 (기본 false: 비대기)
- * SKIP_META_LOOKUP: 메타 조회 스킵 (기본 false)
- * DEBUG_LOG_BODY: 요청 바디 요약 로그 (기본 false)
- * ────────────────────────────────────────────────────────────── */
+// 환경 변수 설정
 const REFRESH_RANKINGS_AFTER_SAVE = process.env.REFRESH_RANKINGS_AFTER_SAVE !== 'false';
 const REFRESH_WAIT = process.env.REFRESH_WAIT === 'true';
 const SKIP_META_LOOKUP = process.env.SKIP_META_LOOKUP === 'true';
@@ -24,18 +17,18 @@ const upload = multer({
   limits: { fileSize: 20 * 1024 * 1024 },
 });
 
-// 허용 값만 통과, 나머지는 null 처리
+// selected_from 정규화 
 function normalizeSelectedFrom(v) {
   return v === 'main' || v === 'sub' ? v : null;
 }
 
-// 숫자 파싱 헬퍼
+// 숫자 변환 
 function toInt(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
 
-/** 트랜잭션 밖에서 안전하게 music 메타를 찾아오는 헬퍼 (없으면 null) */
+// 안전한 music 메타 조회 (실패 무시)
 async function fetchMusicMetaSafe(musicId) {
   if (SKIP_META_LOOKUP) return null;
 
@@ -47,30 +40,27 @@ async function fetchMusicMetaSafe(musicId) {
   ];
   for (const sql of candidates) {
     try {
-      const r = await pool.query(sql, [musicId]); // 트랜잭션 아님
+      const r = await pool.query(sql, [musicId]); 
       if (r.rowCount > 0) return r.rows[0];
     } catch (e) {
-      // 스키마 불일치면 다음 후보
+      // 무시
     }
   }
   return null;
 }
 
-/** 내부: 랭킹 리프레시 호출 (HTTP) */
+// 랭킹 갱신 트리거
 async function triggerRefresh(req) {
   const BASE =
     process.env.BACKEND_BASE_URL ||
     `${req.protocol}://${req.get('host')}`;
 
-  // NOTE: 서버-서버 호출이므로 CORS 무관. 타임아웃은 넉넉히.
+  // 타임아웃 30초
   await axios.post(`${BASE}/api/rankings/refresh`, {}, { timeout: 30000 });
 }
 
-/**
- * POST /api/history
- * body: { user_id, photo_id, music_id, selected_from?('main'|'sub') }
- * 동작: music 메타 조회(실패 무시) → history "항상 INSERT" → 커밋 후 랭킹 갱신 트리거
- */
+// POST /api/history
+// 기록 삽입
 router.post('/', async (req, res) => {
   if (DEBUG_LOG_BODY) {
     try {
@@ -93,7 +83,7 @@ router.post('/', async (req, res) => {
       .json({ error: 'user_id, photo_id, music_id are required (numbers)' });
   }
 
-  // 1) 트랜잭션 밖에서 메타 조회(실패 무시)
+  // 트랜잭션 밖에서 메타 조회(실패 무시)
   let title = null,
     artist = null,
     genre = null,
@@ -113,12 +103,11 @@ router.post('/', async (req, res) => {
     );
   }
 
-  // 2) 항상 INSERT (업데이트/업서트 금지)
+  // 트랜잭션 내 삽입
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
-    // created_at은 DB DEFAULT에 맡김 (없어도 실패 안 하도록)
     const inRes = await client.query(
       `
       INSERT INTO history (
@@ -139,11 +128,11 @@ router.post('/', async (req, res) => {
 
     await client.query('COMMIT');
 
-    // 3) 커밋 이후 랭킹 갱신 트리거
+    // 커밋 이후 랭킹 갱신 트리거
     let refreshed = false;
     if (REFRESH_RANKINGS_AFTER_SAVE) {
       if (REFRESH_WAIT) {
-        // (옵션) 응답 전에 대기 — 디버그/관리자용
+
         try {
           await triggerRefresh(req);
           refreshed = true;
@@ -151,7 +140,7 @@ router.post('/', async (req, res) => {
           console.warn('[history] rankings refresh failed(wait):', e?.message || e);
         }
       } else {
-        // 기본: 비대기 fire-and-forget
+        
         setImmediate(async () => {
           try {
             await triggerRefresh(req);
@@ -159,14 +148,14 @@ router.post('/', async (req, res) => {
             console.warn('[history] rankings refresh failed(async):', e?.message || e);
           }
         });
-        refreshed = true; // 트리거 시도 성공으로 간주
+        refreshed = true; 
       }
     }
 
     return res.status(201).json({ ...saved, rankings_refreshed: refreshed });
   } catch (err) {
     await client.query('ROLLBACK');
-    // 어떤 제약/컬럼에서 실패했는지 자세히 남김
+    // 디버깅
     console.error('[API][POST /api/history] Insert failed', {
       code: err?.code,
       message: err?.message,
@@ -188,7 +177,8 @@ router.post('/', async (req, res) => {
   }
 });
 
-/** GET /api/history?user_id=123 */
+// GET /api/history
+// 목록 조회
 router.get('/', async (req, res) => {
   const userId = toInt(req.query.user_id);
   if (!userId) return res.status(400).json({ error: 'user_id is required' });
@@ -213,7 +203,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-/** 편집본 바이너리 */
+// 편집본 바이너리 조회
 router.get('/:id/edited-image/binary', async (req, res) => {
   try {
     const id = toInt(req.params.id);
@@ -233,7 +223,7 @@ router.get('/:id/edited-image/binary', async (req, res) => {
   }
 });
 
-/** 편집본 업로드 */
+// 편집본 이미지 업로드
 router.post('/:id/edited-image', upload.single('file'), async (req, res) => {
   try {
     const id = toInt(req.params.id);
@@ -261,44 +251,6 @@ router.post('/:id/edited-image', upload.single('file'), async (req, res) => {
   } catch (e) {
     console.error('[API][POST /api/history/:id/edited-image] Error:', e);
     return res.status(500).json({ error: 'upload failed', details: String(e?.message || e) });
-  }
-});
-
-/* ──────────────────────────────────────────────────────────────
- * 임시 디버그 라우트 — 가장 단순한 INSERT만 수행
- * 문제 해결 후 삭제 권장
- * ────────────────────────────────────────────────────────────── */
-router.post('/__debug_insert', async (_req, res) => {
-  const user_id = 999999;
-  const photo_id = Date.now() % 1000000000;
-  const music_id = 1;
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const r = await client.query(
-      `INSERT INTO history (user_id, photo_id, music_id)
-       VALUES ($1,$2,$3)
-       RETURNING history_id, created_at`,
-      [user_id, photo_id, music_id]
-    );
-    await client.query('COMMIT');
-    return res.json({ ok: true, row: r.rows[0] });
-  } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('[__debug_insert] failed', {
-      code: err?.code,
-      message: err?.message,
-      detail: err?.detail,
-      constraint: err?.constraint,
-      table: err?.table,
-      column: err?.column,
-    });
-    return res
-      .status(500)
-      .json({ ok: false, error: err?.message, detail: err?.detail, code: err?.code });
-  } finally {
-    client.release();
   }
 });
 

@@ -1,16 +1,12 @@
+// AI가 분석 결과를 업로드
 const express = require('express');
 const pool = require('../db');
 
 const router = express.Router();
 
-/**
- * AI가 분석 결과를 업로드
- * body: { photo_id, time: "night", background: "natural", emotion: "angry" }
- * → mood_mapping 으로 main_mood/sub_mood 자동 매핑
- * 
- * AI 에서 POST 요청으로 /api/ai/results 로 보낼 수 있도록
- */
+//mood_mapping 으로 main_mood/sub_mood 자동 매핑
 
+// AI 에서 POST 요청으로 /api/ai/results 로 보낼 수 있도록 구현
 router.post('/results', async (req, res) => {
   try {
     const { photo_id, time, background, emotion } = req.body || {};
@@ -24,7 +20,7 @@ router.post('/results', async (req, res) => {
     try {
       await client.query('BEGIN');
 
-      // 매핑 조회
+      // 매핑 조회 main_mood/sub_mood 자동 매핑
       const mapSql = `
         SELECT main_mood, sub_mood
         FROM mood_mapping

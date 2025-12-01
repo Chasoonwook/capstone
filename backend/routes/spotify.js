@@ -1,6 +1,5 @@
 // routes/spotify.js
-// Spotify Web Playback + REST 프록시 라우터 (커버/미리듣기/SDK 토큰 포함)
-
+// Spotify 연동 관련 라우터
 const express = require("express");
 const axios = require("axios");
 const crypto = require("crypto");
@@ -10,7 +9,7 @@ const router = express.Router();
 
 const CLIENT_ID     = process.env.SPOTIFY_CLIENT_ID;
 const CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
-const REDIRECT_URI  = process.env.SPOTIFY_REDIRECT_URI; // e.g. https://.../api/spotify/callback
+const REDIRECT_URI  = process.env.SPOTIFY_REDIRECT_URI; 
 const FRONT_BASE    = process.env.FRONT_BASE || "https://capstone-front-tau.vercel.app";
 
 const CK_ACCESS  = "sp_access";
@@ -26,14 +25,14 @@ const SCOPE = [
   "user-modify-playback-state",
 ].join(" ");
 
-// axios (업스트림 지연 방어)
+// Axios 인스턴스
 const axiosSpotify = axios.create({ timeout: 10000 });
 
-// /me 캐시
-const meCache = new Map(); // key: accessToken, val: { ts, profile, pending? }
+// 토큰별 /me 캐시
+const meCache = new Map(); 
 const ME_TTL_MS = 60 * 1000;
 
-/* ─────────────── utils ─────────────── */
+// 유틸리티 함수
 const b64url = (bufOrStr) =>
   Buffer.from(bufOrStr).toString("base64").replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"");
 
@@ -45,7 +44,7 @@ const b64urlToStr = (s="") => {
 
 const safeReturnTo = (val) => (typeof val === "string" && /^\/(?!\/)/.test(val) ? val : "/");
 
-/** 공통: 액세스/리프레시 쿠키 쓰기/지우기 */
+// 쿠키 설정 함수
 function setAccessCookie(res, token, expiresInSec) {
   if (!token) return;
   res.cookie(CK_ACCESS, token, {
@@ -66,7 +65,7 @@ function clearSpotifyCookies(res) {
   res.clearCookie(CK_REFRESH, opt);
 }
 
-/** App용(Client Credentials) 토큰 */
+// 앱 토큰 획득 
 async function getAppToken() {
   const resp = await axios.post(
     "https://accounts.spotify.com/api/token",
@@ -83,7 +82,7 @@ async function getAppToken() {
   return resp.data?.access_token || null;
 }
 
-/** 토큰 리프레시 */
+// 토큰 갱신
 async function refreshAccessToken(refreshToken) {
   try {
     const body = new URLSearchParams({
@@ -96,14 +95,14 @@ async function refreshAccessToken(refreshToken) {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       timeout: 10000,
     });
-    return r.data; // { access_token, expires_in, ... }
+    return r.data;
   } catch (e) {
     console.error("[spotify] refreshAccessToken:", e?.response?.data || e.message);
     return null;
   }
 }
 
-/** 에러 투명화: axios 에러를 상태/바디 그대로 전달 */
+// Axios 오류 포맷팅
 function formatAxiosErr(e) {
   const status = e?.response?.status || 500;
   const data = e?.response?.data || { error: e.message || "unknown_error" };
@@ -111,10 +110,7 @@ function formatAxiosErr(e) {
   return { status, data };
 }
 
-/**
- * 공통 호출: 쿠키 access로 호출 → 401/403이면 refresh로 갱신 후 1회 재시도
- * 실패 시, 실제 Spotify의 status/data를 그대로 반환(throw)
- */
+// Spotify API 호출 (쿠키 기반, 자동 리프레시)
 async function callSpotifyWithCookies(req, res, method, url, data, params) {
   let access = req.cookies?.[CK_ACCESS] || null;
   const refresh = req.cookies?.[CK_REFRESH] || null;
@@ -134,12 +130,12 @@ async function callSpotifyWithCookies(req, res, method, url, data, params) {
     if (!refresh || (status !== 401 && status !== 403)) {
       throw e1;
     }
-    // refresh
+    
     const ref = await refreshAccessToken(refresh);
     if (!ref || typeof ref.access_token !== 'string' || !ref.access_token) {
         console.error("[callSpotifyWithCookies] Refresh failed or returned invalid token:", ref);
-        clearSpotifyCookies(res); // 문제가 있는 토큰 관련 쿠키 삭제
-        throw e1; // 원래 오류 다시 발생시킴
+        clearSpotifyCookies(res); 
+        throw e1; 
     }
 
     setAccessCookie(res, ref.access_token, ref.expires_in);
@@ -148,11 +144,10 @@ async function callSpotifyWithCookies(req, res, method, url, data, params) {
   }
 }
 
-/* ─────────────── 디버그 & 상태 ─────────────── */
-
+// 헬스체크
 router.get("/__health", (req, res) => res.json({ ok: true }));
 
-/** 라우터/환경/세션 상태 확인용 */
+// 디버그 정보
 router.get("/__debug", (req, res) => {
   res.json({
     ok: true,
@@ -169,14 +164,14 @@ router.get("/__debug", (req, res) => {
   });
 });
 
-/** 가벼운 상태: 쿠키만 기준 */
+// 연결 상태 조회
 router.get("/status", (req, res) => {
   res.json({
     connected: !!req.cookies?.[CK_ACCESS] || !!req.cookies?.[CK_REFRESH],
   });
 });
 
-/* ─────────────── 로그인 시작 ─────────────── */
+// 로그인/인가 시작
 router.get(["/login", "/authorize"], (req, res) => {
   const returnTo = safeReturnTo(req.query.return);
   const state = b64url(JSON.stringify({ r: returnTo }));
@@ -201,7 +196,7 @@ router.get(["/login", "/authorize"], (req, res) => {
   res.redirect(`https://accounts.spotify.com/authorize?${p.toString()}`);
 });
 
-/* ─────────────── 콜백 ─────────────── */
+// 콜백 처리
 router.get("/callback", async (req, res) => {
   try {
     const { code, state } = req.query;
@@ -240,43 +235,43 @@ router.get("/callback", async (req, res) => {
   }
 });
 
-/* ─────────────── /me (캐시 + 레이트리밋 완화) ─────────────── */
-
-// 429 대응 전역 백오프(모든 유저 공통. 필요 시 per-IP로 확장 가능)
+// /me 엔드포인트 캐싱 및 글로벌 백오프
 let GLOBAL_BACKOFF_UNTIL = 0;
 
+// GET /api/spotify/me
+// 현재 사용자 프로필 조회
 router.get("/me", async (req, res) => {
   const access = req.cookies?.[CK_ACCESS] || null;
   try {
-    // 아직 연결 안 된 상태: 항상 200으로
+    
     if (!access) {
       return res.json({ connected: false });
     }
 
     const now = Date.now();
 
-    // 글로벌 백오프 중이면 호출 생략하고 바로 false
+    // 글로벌 백오프 중이면 바로 응답
     if (now < GLOBAL_BACKOFF_UNTIL) {
       return res.json({ connected: false, rate_limited: true, backoff: Math.ceil((GLOBAL_BACKOFF_UNTIL - now)/1000) });
     }
 
     const cached = meCache.get(access);
 
-    // 토큰별 캐시 HIT
+    // 캐시 유효하면 사용
     if (cached && cached.profile && now - cached.ts < ME_TTL_MS) {
       return res.json({ connected: true, profile: cached.profile, cached: true });
     }
 
-    // 누군가 이미 호출 중이면 그거 기다렸다가 결과 사용
+    // 진행 중인 요청이 있으면 대기했다 사용
     if (cached?.pending) {
       await cached.pending;
       const again = meCache.get(access);
       if (again?.profile) {
         return res.json({ connected: true, profile: again.profile, cached: true });
       }
-      // pending 끝났는데도 profile이 없다면 아래에서 새로 시도
     }
 
+    // 새 요청 시작
     const pending = (async () => {
       const r = await callSpotifyWithCookies(req, res, "GET", "https://api.spotify.com/v1/me");
       const profile = r.data;
@@ -292,14 +287,14 @@ router.get("/me", async (req, res) => {
   } catch (e) {
     const status = e?.response?.status || 500;
 
-    // 401/403(토큰 만료/권한 문제) → 연결 안 된 것으로 처리
+    // 401/403 → 연결 끊김
     if (status === 401 || status === 403) {
       return res.json({ connected: false });
     }
 
-    // 429(Spotify rate limit) → 항상 200 + 글로벌 백오프
+    // 429 레이트 리밋
     if (status === 429) {
-      // Spotify가 주는 Retry-After 헤더(초) 사용, 기본 10초 (상한 60초)
+    
       const retryAfterSec = Math.min(
         60,
         Number(e?.response?.headers?.["retry-after"] || 10)
@@ -313,21 +308,19 @@ router.get("/me", async (req, res) => {
       });
     }
 
-    // 그 외 오류도 200으로 완화
+    // 기타 오류
     console.error("[/api/spotify/me] unexpected:", status, e?.response?.data || e.message);
     return res.json({ connected: false });
   } finally {
-    // pending 플래그 정리
+    
     const c = meCache.get(access);
     if (c) meCache.set(access, { ts: c.ts, profile: c.profile });
   }
 });
 
 
-/* ─────────────── SDK 전용 토큰 (중요!) ─────────────── */
-// Web Playback SDK 에 공급할 액세스 토큰 반환.
-// - sp_access가 있으면 그대로 반환
-// - 없고 sp_refresh가 있으면 refresh로 새 토큰 발급 후 반환
+// GET /api/spotify/token
+// 액세스 토큰 조회 (필요시 리프레시 시도)
 router.get("/token", async (req, res) => {
   try {
     const access = req.cookies?.[CK_ACCESS] || null;
@@ -352,9 +345,8 @@ router.get("/token", async (req, res) => {
   }
 });
 
-/* ─────────────── 재생 관련 (메서드 양쪽 허용) ─────────────── */
-
-// 디바이스 목록
+// GET /api/spotify/devices
+// 사용자 디바이스 목록 조회
 router.get("/devices", async (req, res) => {
   try {
     const r = await callSpotifyWithCookies(req, res, "GET", "https://api.spotify.com/v1/me/player/devices");
@@ -365,7 +357,7 @@ router.get("/devices", async (req, res) => {
   }
 });
 
-// transfer (PUT/POST 둘 다 허용)
+// transfer 
 async function handleTransfer(req, res) {
   try {
     await callSpotifyWithCookies(
@@ -381,7 +373,7 @@ async function handleTransfer(req, res) {
 router.put("/transfer", handleTransfer);
 router.post("/transfer", handleTransfer);
 
-// play (PUT/POST 둘 다 허용)
+// play 
 async function handlePlay(req, res) {
   try {
     const url = new URL("https://api.spotify.com/v1/me/player/play");
@@ -396,7 +388,7 @@ async function handlePlay(req, res) {
 router.put("/play", handlePlay);
 router.post("/play", handlePlay);
 
-// pause (PUT/POST 둘 다 허용)
+// pause 
 async function handlePause(req, res) {
   try {
     await callSpotifyWithCookies(req, res, "PUT", "https://api.spotify.com/v1/me/player/pause", {});
@@ -409,7 +401,6 @@ async function handlePause(req, res) {
 router.put("/pause", handlePause);
 router.post("/pause", handlePause);
 
-// next/previous(POST)
 router.post("/next", async (req, res) => {
   try {
     await callSpotifyWithCookies(req, res, "POST", "https://api.spotify.com/v1/me/player/next", {});
@@ -430,9 +421,7 @@ router.post("/previous", async (req, res) => {
   }
 });
 
-/* ───────────────────────────────────────────────────────────
-   검색 (커버/미리듣기 포함) — 쿠키 기반 → 실패 시 App 토큰 폴백
-   ─────────────────────────────────────────────────────────── */
+// 트랙 정보 압축
 function compactTrack(t) {
   if (!t) return null;
   const imgs = t.album?.images || [];
@@ -449,9 +438,9 @@ function compactTrack(t) {
   };
 }
 
+// 트랙 검색 
 router.get("/search", async (req, res) => {
   try {
-    // title/artist를 받아 q로 합쳐줌
     let q = req.query.q || req.query.query;
     const title = req.query.title;
     const artist = req.query.artist;
@@ -464,7 +453,7 @@ router.get("/search", async (req, res) => {
     const limit = Math.min(Math.max(Number(req.query.limit || 5), 1), 5);
     if (!q) return res.status(400).json({ error: "missing_q" });
 
-    // 캐싱 로직
+    // 캐시 조회
     const cacheKey = `search:q=${q}:limit=${limit}`;
     const cachedData = spotifyApiCache.get(cacheKey);
 
@@ -477,14 +466,14 @@ router.get("/search", async (req, res) => {
 
     let data;
     try {
-      // 1) 사용자 토큰으로 시도
+      // 사용자 토큰으로 시도
       const r = await callSpotifyWithCookies(
         req, res, "GET", "https://api.spotify.com/v1/search", null,
         { q: String(q), type: "track", limit }
       );
       data = r.data;
     } catch (e) {
-      // 2) 로그인 안 되어있거나 401 → Client Credentials Flow로 fallback
+      // 앱 토큰으로 폴백
       const appToken = await getAppToken();
       const r2 = await axios.get("https://api.spotify.com/v1/search", {
         params: { q: String(q), type: "track", limit },
@@ -507,10 +496,8 @@ router.get("/search", async (req, res) => {
   }
 });
 
-/* ───────────────────────────────────────────────────────────
-   단일 트랙 상세 (커버/미리듣기 보강용)
-   GET /api/spotify/tracks/:id
-   ─────────────────────────────────────────────────────────── */
+// GET /api/spotify/tracks/:id
+// 단일 트랙 조회
 router.get("/tracks/:id", async (req, res) => {
   try {
     const id = String(req.params.id || "").trim();
@@ -552,21 +539,20 @@ router.get("/tracks/:id", async (req, res) => {
   }
 });
 
-/* ───────────────────────────────────────────────────────────
-   배치 검색: [{title, artist}] → { items: [{key, ...compactTrack}] }
-   ─────────────────────────────────────────────────────────── */
+// POST /api/spotify/search/batch
+// 트랙 정보 일괄 검색
 router.post("/search/batch", async (req, res) => {
   try {
     const pairs = Array.isArray(req.body?.pairs) ? req.body.pairs : [];
     if (pairs.length === 0) return res.json({ items: [] });
 
-    // 1) 사용자 토큰이 있으면 재사용
+    // 사용자 토큰이 있으면 재사용
     let bearer = null;
     const access = req.cookies?.[CK_ACCESS];
     if (access) {
       bearer = `Bearer ${access}`;
     } else {
-      // 2) 없으면 Client Credentials 1회 발급
+      // 없으면 앱 토큰 1회 발급
       const appToken = await getAppToken();
       bearer = `Bearer ${appToken}`;
       res.set("Cache-Control", "public, max-age=120");
@@ -575,30 +561,30 @@ router.post("/search/batch", async (req, res) => {
     const norm = (s = "") =>
       String(s || "")
         .replace(/\s+/g, " ")
-        .replace(/[[(（【].*?[)\]）】]/g, "") // 괄호 내용 제거 (프론트엔드와 동일하게)
+        .replace(/[[(（【].*?[)\]）】]/g, "")
         .trim()
         .toLowerCase();
 
-    // 키 생성 규칙 (프론트 keyOf와 동일)
+    // 키 생성 규칙
     const makeKey = (t, a) => `${norm(t)} - ${norm(a)}`;
     const results = {};
-    const itemsToFetch = []; // API로 조회해야 할 항목들
+    const itemsToFetch = []; 
 
     for (const { title, artist } of pairs) {
       const key = makeKey(title, artist);
       const cacheKey = `search:q=track:${String(title||'').trim()} artist:${String(artist||'').trim()}:limit=1`;
-      const cachedItem = spotifyApiCache.get(cacheKey); // 단일 트랙 결과를 가져옴 (배열 아님)
+      const cachedItem = spotifyApiCache.get(cacheKey); 
 
       if (cachedItem) {
         console.log(`[Batch Cache HIT] ${cacheKey}`);
         results[key] = { key, ...compactTrack(cachedItem) };
       } else {
         console.log(`[Batch Cache MISS] ${cacheKey}`);
-        itemsToFetch.push({ title, artist, cacheKey }); // 캐시에 없으면 조회 목록에 추가
+        itemsToFetch.push({ title, artist, cacheKey }); 
       }
     }
 
-    // 간단 동시성 제한(5개씩)
+    // API 호출 및 캐싱
     const chunk = (arr, n) => arr.reduce((acc, _, i) => (i % n ? acc : acc.concat([arr.slice(i, i + n)])), []);
     
     const groups = chunk(pairs, 5);
@@ -606,7 +592,7 @@ router.post("/search/batch", async (req, res) => {
     for (const g of groups) {
       const tasks = g.map(async ({ title, artist, cacheKey }) => {
         const q = `${title ? `track:${title}` : ""}${artist ? ` artist:${artist}` : ""}`.trim();
-        if (!q) return { cacheKey, trackData: null, originalTitle: title, originalArtist: artist }; // 검색어 없으면 null
+        if (!q) return { cacheKey, trackData: null, originalTitle: title, originalArtist: artist }; 
 
         try {
           const r = await axios.get("https://api.spotify.com/v1/search", {
@@ -618,30 +604,28 @@ router.post("/search/batch", async (req, res) => {
           return { cacheKey, trackData, originalTitle: title, originalArtist: artist };
         } catch (err) {
           console.error(`[Batch API Error] q=${q}:`, err?.response?.status || err.message);
-          return { cacheKey, trackData: null, originalTitle: title, originalArtist: artist }; // API 오류 시 null
+          return { cacheKey, trackData: null, originalTitle: title, originalArtist: artist }; 
         }
       });
 
     const responses = await Promise.all(tasks);
 
     for (const responseItem of responses) {
-        // --- responseItem 및 내부 속성 유효성 검사 강화 ---
+        // 응답 항목 유효성 검사
         if (!responseItem || typeof responseItem !== 'object') {
             console.error("[Batch Processing Error] Invalid response item:", responseItem);
-            continue; // 다음 항목으로 건너뛰기
+            continue; 
         }
 
         const { trackData, originalTitle, originalArtist } = responseItem;
-        
         const key = makeKey(originalTitle, originalArtist);
 
         if (typeof key !== 'string' || !key) {
             console.error(`[Batch Processing Error] Generated key is invalid. Original: title='${originalTitle}', artist='${originalArtist}'. Response item:`, responseItem);
-            // key가 없으면 results에 추가할 수 없으므로 건너뛰거나 기본값 처리
             continue;
         }
         
-        // API 호출 결과를 캐시에 저장 (오류 시 저장 안 함)
+        // 캐시에 저장
         if (trackData) {
 
           const currentCacheKey = `search:q=track:${String(originalTitle||'').trim()} artist:${String(originalArtist||'').trim()}:limit=1`;
@@ -649,7 +633,7 @@ router.post("/search/batch", async (req, res) => {
             if (typeof currentCacheKey === 'string' && currentCacheKey) {
                 spotifyApiCache.set(currentCacheKey, trackData);
             } else {
-                // cacheKey가 유효하지 않으면 로그만 남김
+                // 캐시 키가 유효하지 않으면 로그만 남김
                 console.warn(`[Batch Cache Warn] Invalid or missing cacheKey for key: ${key}, cannot cache.`);
             }
         }
@@ -657,24 +641,23 @@ router.post("/search/batch", async (req, res) => {
         const c = compactTrack(trackData) || { id: null, title: originalTitle, artist: originalArtist, album: null, albumImage: null, preview_url: null, spotify_uri: null };
         results[key] = { key, ...c };
       }
-      // --- 캐싱 로직 끝 ---
     }
 
     const orderedResults = pairs.map(({ title, artist }) => {
-        const key = makeKey(title, artist); // 최종 정렬 시에도 동일한 makeKey 사용
-        // 결과 객체에 해당 key가 없을 경우 (오류 등으로 인해) 대비하여 기본값 반환
+        const key = makeKey(title, artist); 
         return results[key] || { key, id: null, title, artist, album: null, albumImage: null, preview_url: null, spotify_uri: null };
     });
 
     return res.json({ items: orderedResults });
   } catch (e) {
-    console.error("[/api/spotify/search/batch] Handler Error:", e); // <-- 전체 에러 로깅 추가
+    console.error("[/api/spotify/search/batch] Handler Error:", e); 
     const { status, data } = formatAxiosErr(e);
     res.status(status || 500).json(data || { error: "Batch search failed" });
   }
 });
 
-/* ─────────────── 연결 해제 ─────────────── */
+// POST /api/spotify/logout
+// 연결 해제
 router.post("/logout", (req, res) => {
   clearSpotifyCookies(res);
   res.json({ ok: true });

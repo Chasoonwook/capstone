@@ -11,24 +11,18 @@ const pool = require("./db");
 const app = express();
 app.set("trust proxy", 1);
 
-/* =======================================================================
-   Body parsers (JSON/폼) — req.body가 비는 문제 방지
-   ======================================================================= */
+// 요청 본문 파싱
 app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-/* =======================================================================
-   요청별 응답 타임아웃 120초 (외부 API 지연 대비)
-   ======================================================================= */
+// 타임아웃 120초 설정
 app.use((req, res, next) => {
   res.setTimeout(120000);
   next();
 });
 
-/* =======================================================================
-   CORS 설정
-   ======================================================================= */
+// CORS 설정
 const FRONT_BASE = process.env.FRONT_BASE || "https://capstone-front-tau.vercel.app";
 
 const allowedOrigins = [
@@ -37,35 +31,30 @@ const allowedOrigins = [
   FRONT_BASE,
 ];
 
-// 자기 자신(배포 주소)도 허용
+// Render 배포 환경의 도메인도 허용
 const selfOrigin = process.env.RENDER_EXTERNAL_URL || (process.env.RENDER_EXTERNAL_HOSTNAME ? `https://${process.env.RENDER_EXTERNAL_HOSTNAME}` : null);
 if (selfOrigin && !allowedOrigins.includes(selfOrigin)) {
   allowedOrigins.push(selfOrigin);
 }
 
-console.log("[CORS] Allowed Origins:", allowedOrigins); // 허용 목록 확인용 로그
+console.log("[CORS] Allowed Origins:", allowedOrigins); 
 
 app.use(cors({
   origin: function (origin, callback) {
-    // !origin은 Postman 등 origin 없는 요청 허용 (개발 시 유용)
-    // 실제 배포 시에는 !origin을 제거하거나 더 엄격하게 관리할 수 있음
     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
-      console.log(`[CORS] Allowing origin: ${origin || 'server-to-server'}`); // 허용 로그
+      console.log(`[CORS] Allowing origin: ${origin || 'server-to-server'}`); 
       callback(null, true);
     } else {
-      console.error(`[CORS] Blocking origin: ${origin}`); // 차단 로그
+      console.error(`[CORS] Blocking origin: ${origin}`); 
       callback(new Error('Not allowed by CORS'));
     }
   },
-  credentials: true, // 쿠키 공유 허용
-  exposedHeaders: ['Set-Cookie'], // 필요 시 Set-Cookie 헤더 노출
-  // allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-User-Id'], // 명시적으로 헤더 지정 가능 (기본값으로도 충분할 수 있음)
-  optionsSuccessStatus: 204 // OPTIONS 요청에 204 응답
+  credentials: true, 
+  exposedHeaders: ['Set-Cookie'], 
+  optionsSuccessStatus: 204 
 }));
 
-/* =======================================================================
-   health
-   ======================================================================= */
+// 헬스 체크 및 기본 라우트
 app.get("/", (_req, res) => res.send("정상작동"));
 app.get("/health", async (_req, res) => {
   try {
@@ -77,9 +66,8 @@ app.get("/health", async (_req, res) => {
   }
 });
 
-/* =======================================================================
-   Spotify 라우터 (가장 먼저 마운트)
-   ======================================================================= */
+
+//Spotify 라우터    
 let SPOTIFY_MOUNTED = false;
 let SPOTIFY_FILE_EXISTS = false;
 
@@ -108,9 +96,7 @@ try {
   console.error("[router] FAILED to mount /api/spotify:", (e && (e.stack || e.message)) || e);
 }
 
-/* =======================================================================
-   SDK용 토큰 엔드포인트 (쿠키→유효 access_token 반환)
-   ======================================================================= */
+// SDK용 토큰 엔드포인트 
 const CK_ACCESS = "sp_access";
 const CK_REFRESH = "sp_refresh";
 const SPOTIFY_CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;
@@ -129,13 +115,15 @@ async function refreshAccessToken(refreshToken) {
       body.toString(),
       { headers: { "Content-Type": "application/x-www-form-urlencoded" }, timeout: 10000 }
     );
-    return resp.data; // { access_token, expires_in, ... }
+    return resp.data;
   } catch (e) {
     console.error("[spotify] refreshAccessToken error:", e?.response?.data || e.message);
     return null;
   }
 }
 
+// GET /api/spotify/token
+// SDK용 액세스 토큰 제공
 app.get("/api/spotify/token", async (req, res) => {
   try {
     let access = req.cookies?.[CK_ACCESS] || null;
@@ -155,7 +143,7 @@ app.get("/api/spotify/token", async (req, res) => {
         res.set("Cache-Control", "no-store");
         return res.json({ access_token: access, expires_in: expiresIn });
       } catch {
-        // access 만료 → 아래에서 refresh 시도
+        
       }
     }
 
@@ -187,19 +175,13 @@ app.get("/api/spotify/token", async (req, res) => {
   }
 });
 
-/* =======================================================================
-   ✨ (추가) 검색용 라우트 4종 — 프론트의 Search/Player에서 사용
-   - /api/spotify/search, /api/spotify/search/batch
-   - /api/deezer/search,  /api/itunes/search
-   ======================================================================= */
-
-/** ─ Spotify: 앱 크리덴셜 토큰 캐시 (사용자 연동 없어도 검색 가능) ─ */
+// Spotify 클라이언트 크레덴셜 토큰 캐시
 let _ccToken = null;
 let _ccExpireAt = 0;
 async function getClientCredentialsToken() {
   if (!_ccToken || Date.now() >= _ccExpireAt) {
     if (!SPOTIFY_CLIENT_ID || !SPOTIFY_CLIENT_SECRET) {
-      return null; // 환경변수 없으면 건너뜀
+      return null; 
     }
     const body = new URLSearchParams({ grant_type: "client_credentials" });
     const basic = Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString("base64");
@@ -212,12 +194,13 @@ async function getClientCredentialsToken() {
     });
     _ccToken = resp.data?.access_token || null;
     const ttl = Number(resp.data?.expires_in || 300);
-    _ccExpireAt = Date.now() + (ttl - 30) * 1000; // 30초 여유
+    _ccExpireAt = Date.now() + (ttl - 30) * 1000; 
   }
   return _ccToken;
 }
 
-/** GET /api/spotify/search?title=&artist=&limit=1 */
+// GET /api/spotify/search
+// 트랙 검색
 app.get("/api/spotify/search", async (req, res) => {
   try {
     const { title = "", artist = "", limit = "1" } = req.query;
@@ -227,7 +210,6 @@ app.get("/api/spotify/search", async (req, res) => {
     const token = await getClientCredentialsToken();
 
     if (!token || !query) {
-      // 토큰 혹은 쿼리가 없으면 프론트가 fallback(deezer/itunes) 하도록 빈 구조 반환
       return res.json({ tracks: { items: [] } });
     }
 
@@ -237,7 +219,6 @@ app.get("/api/spotify/search", async (req, res) => {
       timeout: 12000,
     });
 
-    // 프론트는 data.tracks.items 또는 data.items 등 유연히 읽음
     res.json({ tracks: r.data?.tracks || { items: [] } });
   } catch (e) {
     console.warn("[/api/spotify/search] fallback with empty:", e?.response?.data || e.message);
@@ -245,14 +226,13 @@ app.get("/api/spotify/search", async (req, res) => {
   }
 });
 
-/** POST /api/spotify/search/batch  { pairs: [{title, artist}, ...] } */
+// POST /api/spotify/search/batch
 app.post("/api/spotify/search/batch", async (req, res) => {
   try {
     const pairs = Array.isArray(req.body?.pairs) ? req.body.pairs : [];
     if (pairs.length === 0) return res.json({ items: [] });
 
     const token = await getClientCredentialsToken();
-    // 토큰 없으면 앨범 이미지 없이 키만 돌려주기 (프론트는 null 허용)
     if (!token) {
       return res.json({
         items: pairs.map((p) => ({
@@ -301,7 +281,8 @@ app.post("/api/spotify/search/batch", async (req, res) => {
   }
 });
 
-/** GET /api/deezer/search?title=&artist=&limit=1  (공식 공개 API) */
+// GET /api/deezer/search
+// Deezer 검색
 app.get("/api/deezer/search", async (req, res) => {
   try {
     const { title = "", artist = "", limit = "1" } = req.query;
@@ -313,7 +294,6 @@ app.get("/api/deezer/search", async (req, res) => {
       String(limit)
     )}`;
     const r = await axios.get(url, { timeout: 12000 });
-    // 프론트는 data.data[0] 형태를 읽을 수 있음
     res.json(r.data || { data: [] });
   } catch (e) {
     console.warn("[/api/deezer/search] fallback with empty:", e?.response?.data || e.message);
@@ -321,7 +301,8 @@ app.get("/api/deezer/search", async (req, res) => {
   }
 });
 
-/** GET /api/itunes/search?title=&artist=&limit=1  (공식 공개 API) */
+// GET /api/itunes/search
+// 아이튠즈 검색
 app.get("/api/itunes/search", async (req, res) => {
   try {
     const { title = "", artist = "", limit = "1", country = "KR" } = req.query;
@@ -336,7 +317,6 @@ app.get("/api/itunes/search", async (req, res) => {
       },
       timeout: 12000,
     });
-    // 프론트는 data.results[0] 형태를 읽음
     res.json(r.data || { results: [] });
   } catch (e) {
     console.warn("[/api/itunes/search] fallback with empty:", e?.response?.data || e.message);
@@ -344,9 +324,7 @@ app.get("/api/itunes/search", async (req, res) => {
   }
 });
 
-/* =======================================================================
-   라우터 자동 로더
-   ======================================================================= */
+// 라우터 로드 헬퍼
 function loadRoute(relPath) {
   try {
     const abs = path.join(__dirname, relPath);
@@ -368,9 +346,7 @@ function loadRoute(relPath) {
   }
 }
 
-/**
- * ✅ rankings 라우터는 구버전 경로도 함께 마운트
- */
+// 라우터 마운트
 const mounts = [
   ["/api/photos", "routes/photos"],
   ["/api/recommendations", "routes/recommendations"],
@@ -398,9 +374,7 @@ for (const [base, rel] of mounts) {
 }
 console.log("[router] mounted:", mounted);
 
-/* =======================================================================
-   debug routes listing
-   ======================================================================= */
+// 디버그 모든 라우트 나열
 function collectRoutes(layer, prefix = "") {
   const out = [];
   if (layer.route && layer.route.path) {
@@ -435,9 +409,7 @@ app.get("/debug/routes", (_req, res) => {
   }
 });
 
-/* =======================================================================
-   debug db
-   ======================================================================= */
+// DB 연결 정보 디버그
 app.get("/debug/db", async (_req, res) => {
   try {
     const who = await pool.query(
@@ -450,9 +422,7 @@ app.get("/debug/db", async (_req, res) => {
   }
 });
 
-/* =======================================================================
-   404 & 500
-   ======================================================================= */
+// 404 및 에러 핸들러
 app.use((req, res, next) => {
   if (res.headersSent) return next();
   res.status(404).json({ error: "not found", path: req.originalUrl });
@@ -462,9 +432,7 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: "internal error" });
 });
 
-/* =======================================================================
-   start
-   ======================================================================= */
+// 서버 시작
 const PORT = Number(process.env.PORT || 5000);
 app.listen(PORT, () => {
   const base =

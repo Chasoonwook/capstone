@@ -3,18 +3,15 @@ const express = require("express");
 const router = express.Router();
 const pool = require("../db");
 
-// JS 폴백 키 생성기 (DB 함수 실패 시 사용)
+// JS 폴백 키 생성기 
 function computeSongKeyJS(title, artist) {
   const t = (title || "").toLowerCase();
   const a = (artist || "").toLowerCase();
-  // 악센트 제거는 생략하고 공백만 제거
   return (a + " - " + t).replace(/\s+/g, "");
 }
 
-/**
- * POST /api/music-requests
- * body: { user_id:number, title:string, artist?:string }
- */
+// POST /api/music-requests
+// 사용자 곡 요청 생성
 router.post("/", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -25,7 +22,7 @@ router.post("/", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // 1) song_key 계산 (우선 DB 함수, 실패 시 JS 폴백)
+    // song_key 계산 
     let song_key;
     try {
       const { rows } = await client.query(
@@ -39,7 +36,7 @@ router.post("/", async (req, res) => {
       song_key = computeSongKeyJS(title, artist);
     }
 
-    // 2) 유저-곡 요청 삽입 (중복이면 무시)
+    // 유저-곡 요청 삽입 (중복이면 무시)
     const { rows } = await client.query(
       `INSERT INTO user_song_requests (user_id, song_key, title, artist)
        VALUES ($1, $2, $3, $4)
@@ -53,7 +50,7 @@ router.post("/", async (req, res) => {
       return res.status(409).json({ error: "already_requested" });
     }
 
-    // 3) 최신 카운트 조회(트리거가 증가시킨 값)
+    // 최신 카운트 조회
     const { rows: c } = await client.query(
       "SELECT request_count FROM music_requests WHERE song_key=$1",
       [song_key]
@@ -67,12 +64,12 @@ router.post("/", async (req, res) => {
     });
   } catch (err) {
     try { await client.query("ROLLBACK"); } catch {}
-    // FK 위반(배포 DB에 해당 user_id가 없음)
+    
     if (err?.code === "23503") {
       console.error("[POST] FK violation users(user_id):", err?.detail);
       return res.status(400).json({ error: "unknown_user_id" });
     }
-    // (이론상 ON CONFLICT로 처리되지만 안전망)
+    
     if (err?.code === "23505") {
       return res.status(409).json({ error: "already_requested" });
     }
@@ -85,9 +82,7 @@ router.post("/", async (req, res) => {
   }
 });
 
-/**
- * GET /api/music-requests/count?title=...&artist=...
- */
+// 곡 요청 수 조회
 router.get("/count", async (req, res) => {
   try {
     const { title, artist } = req.query;
@@ -121,9 +116,8 @@ router.get("/count", async (req, res) => {
   }
 });
 
-/**
- * DELETE /api/music-requests?user_id=1&title=...&artist=...
- */
+// DELETE /api/music-requests
+// 사용자 곡 요청 삭제
 router.delete("/", async (req, res) => {
   const client = await pool.connect();
   try {

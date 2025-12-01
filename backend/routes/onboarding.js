@@ -3,17 +3,14 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 
-/**
- * 선호 장르 저장
- * PUT /api/users/me/genres
- * body: { user_id?: number, genres: string[] }
- */
+// GET /api/users/me/onboarding
+// 선호 장르 저장
 router.get('/users/me/onboarding', async (req, res) => {
   const userId =
     (req.user && req.user.id) ||
     req.headers['x-user-id'] ||
-    req.query.user_id ||  // 옵션
-    req.body?.user_id;    // 옵션
+    req.query.user_id || 
+    req.body?.user_id;    
 
   if (!userId) return res.status(400).json({ error: 'user_id required' });
 
@@ -28,7 +25,7 @@ router.get('/users/me/onboarding', async (req, res) => {
     );
 
     if (rows.length === 0) return res.status(404).json({ error: 'user not found' });
-    // 프론트가 기대하는 구조로 그대로 반환
+    // 선호 장르 및 온보딩 상태 반환
     return res.json({
       genre_setup_complete: rows[0].genre_setup_complete,
       preferred_genres: rows[0].preferred_genres,
@@ -39,6 +36,8 @@ router.get('/users/me/onboarding', async (req, res) => {
   }
 });
 
+// PUT /api/users/me/genres
+// 선호 장르 저장
 router.put('/users/me/genres', async (req, res) => {
   const userId = (req.user && req.user.id) || req.body?.user_id || req.headers['x-user-id'];
   if (!userId) return res.status(400).json({ error: 'user_id required' });
@@ -60,6 +59,8 @@ router.put('/users/me/genres', async (req, res) => {
   }
 });
 
+// PUT /api/users/me/onboarding 
+// 온보딩 완료 플래그 설정
 router.put('/users/me/onboarding', async (req, res) => {
   const userId = (req.user && req.user.id) || req.body?.user_id || req.headers['x-user-id'];
   if (!userId) return res.status(400).json({ error: 'user_id required' });

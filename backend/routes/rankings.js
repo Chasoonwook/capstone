@@ -3,18 +3,14 @@ const router = express.Router();
 const pool = require("../db");
 const axios = require("axios");
 
-/* ──────────────────────────────────────────────────────────────
- * 0) 공통 유틸
- * ──────────────────────────────────────────────────────────────*/
+// 공통 상수
 function clampLimit(v) {
   const n = Number(v);
   if (!Number.isFinite(n)) return 50;
   return Math.max(1, Math.min(n, 100));
 }
 
-/* ──────────────────────────────────────────────────────────────
- * 1) Spotify 커버 (Client Credentials) + 인메모리 캐시
- * ──────────────────────────────────────────────────────────────*/
+// Spotify 커버 이미지 조회 관련
 const SPOTIFY_CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;
 const SPOTIFY_CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
 
@@ -42,7 +38,8 @@ async function getSpotifyAccessToken() {
   return _spToken;
 }
 
-const coverCache = new Map(); // key: `${title}__${artist}` -> url/null
+// Spotify 커버 이미지 캐시 및 조회
+const coverCache = new Map(); 
 const makeCoverKey = (title, artist) =>
   `${(title || "").trim().toLowerCase()}__${(artist || "").trim().toLowerCase()}`;
 
@@ -79,6 +76,7 @@ async function fetchSpotifyCoverUrl(title, artist) {
   }
 }
 
+// 여러 항목에 커버 이미지 첨부
 async function attachCovers(items) {
   const uniqPairs = new Map();
   for (const it of items) {
@@ -99,7 +97,7 @@ async function attachCovers(items) {
   });
 }
 
-/** ───────── 안전한 메타 테이블 감지 (information_schema 기반) ───────── */
+// 안전한 음악 메타 조회 
 async function detectMusicMeta() {
   const candidates = ['musics', 'music', 'songs'];
 
@@ -147,7 +145,8 @@ async function detectMusicMeta() {
   return null;
 }
 
-/** ───────── id 배열 → {id:{title,artist,genre,album_image_url}} 맵 ───────── */
+// 음악 메타 맵 조회
+// id 배열 → Map(id → {title, artist, genre, album_image_url})
 async function fetchMusicMetaMap(ids) {
   const uniq = Array.from(new Set(ids)).filter(v => Number.isFinite(Number(v)));
   if (uniq.length === 0) return new Map();
@@ -192,6 +191,7 @@ async function fetchMusicMetaMap(ids) {
   }
 }
 
+// DB 행과 메타 병합
 function mergeRowsWithMeta(rows, metaMap) {
   return rows.map((r) => {
     const mm = metaMap.get(Number(r.music_id)) || {};
@@ -200,7 +200,6 @@ function mergeRowsWithMeta(rows, metaMap) {
       music_id: r.music_id,
       play_count: r.play_count,
       last_played: r.last_played,
-      // ▲ 양수: 상승, ▼ 음수: 하락, null: 신규/비교불가(주/월)
       rank_change: r.rank_change ?? null,
       music_title: mm.title ?? null,
       music_artist: mm.artist ?? null,
@@ -210,11 +209,9 @@ function mergeRowsWithMeta(rows, metaMap) {
   });
 }
 
-/* ──────────────────────────────────────────────────────────────
- * 3) 주간: 목표 주차 선택 + 직전 주차 랭크 대비 변화량 + 일간 NEW/변동
- *    - 이번 주 랭킹이 없으면 최신 주차로 폴백
- * ──────────────────────────────────────────────────────────────*/
+
 // GET /api/rankings/weekly?limit=50
+// 주간 랭킹 조회
 router.get("/weekly", async (req, res) => {
   const limit = clampLimit(req.query.limit);
   const sql = `
@@ -340,12 +337,8 @@ router.get("/weekly", async (req, res) => {
   }
 });
 
-
-/* ──────────────────────────────────────────────────────────────
- * 4) 월간: 이번 달 기준 + 직전 달 랭크 대비 변화량 + 일간 NEW/변동
- *    - 이번 달이 비어있으면 최신 달로 폴백
- * ──────────────────────────────────────────────────────────────*/
 // GET /api/rankings/monthly?limit=50
+// 월간 랭킹 조회
 router.get("/monthly", async (req, res) => {
   const limit = clampLimit(req.query.limit);
   const sql = `
@@ -462,16 +455,13 @@ router.get("/monthly", async (req, res) => {
   }
 });
 
-
-/* ──────────────────────────────────────────────────────────────
- * 5) 집계 리프레시
- *    - 랭크 계산을 ROW_NUMBER()로 변경해 '중복 랭크' 영구 차단
- * ──────────────────────────────────────────────────────────────*/
+// POST /api/rankings/refresh
+// 랭킹 새로고침
 router.post("/refresh", async (_req, res) => {
   try {
     await pool.query("BEGIN");
 
-    // 주간 (이번 주)
+    // 이번주 주간
     await pool.query(`
       WITH kst AS ( SELECT now() AT TIME ZONE 'Asia/Seoul' AS now_kst ),
       w AS (
@@ -509,7 +499,7 @@ router.post("/refresh", async (_req, res) => {
         generated_at = now();
     `);
 
-    // 월간 (이번 달)
+    // 이번달 월간
     await pool.query(`
       WITH kst AS ( SELECT now() AT TIME ZONE 'Asia/Seoul' AS now_kst ),
       m AS (

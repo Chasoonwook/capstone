@@ -5,7 +5,7 @@ const multer = require("multer");
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const axios = require("axios");
-const FormData = require("form-data"); // 파일보내기위해 추가
+const FormData = require("form-data");
 
 const router = express.Router();
 
@@ -31,7 +31,7 @@ function apiBase(req) {
   return `${req.protocol}://${req.get("host")}/api`;
 }
 
-/* ── 공통 CORS 헬퍼 ─────────────────────────────────────────────── */
+// CORS 허용 설정
 function allowCORS(req, res) {
   const origin = req.headers.origin || "*";
   res.set("Access-Control-Allow-Origin", origin);
@@ -41,7 +41,7 @@ function allowCORS(req, res) {
   res.set("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
 }
 
-// ⭐️ mood 매핑 함수를 AI 서버의 응답 형식에 맞게 단순화
+// mood 매핑 함수를 AI 서버의 응답 형식에 맞게 단순화
 async function resolveMood(client, timeLabel, background, emotion) {
   const t = (timeLabel || "").trim().toLowerCase();
   const b = (background || "").trim().toLowerCase();
@@ -60,13 +60,12 @@ async function resolveMood(client, timeLabel, background, emotion) {
   return q.rows[0] || { main_mood: null, sub_mood: null };
 }
 
-/* 디버그 */
+// 헬스체크
 router.get("/_who", (_req,res) =>
   res.json({ from:"routes/photos.js", analyzePath:"/api/photos/analyze" })
 );
 
-/* 바이너리 내려주기 (CORS 포함) */
-/* 바이너리 내려주기 (CORS 포함) — bytea(hex) → Buffer 변환 */
+// 바이너리 사진 조회
 router.get("/:photoId/binary", async (req, res) => {
   try {
     const { photoId } = req.params;
@@ -80,16 +79,16 @@ router.get("/:photoId/binary", async (req, res) => {
     let buf;
 
     if (Buffer.isBuffer(content)) {
-      buf = content; // 이미 Buffer
+      buf = content; 
     } else if (typeof content === "string") {
       if (content.startsWith("\\x")) {
-        // Postgres bytea hex 문자열
+        // PostgreSQL의 bytea 형식으로 저장된 경우
         buf = Buffer.from(content.slice(2), "hex");
       } else if (content.startsWith("data:")) {
-        // data URL 형태로 저장된 경우
+        // data URI 형식으로 저장된 경우
         buf = Buffer.from(content.split(",")[1] || "", "base64");
       } else {
-        // 혹시 모를 base64/일반 문자열 대비
+        // 기타 base64 인코딩된 문자열로 저장된 경우
         try { buf = Buffer.from(content, "base64"); }
         catch { buf = Buffer.from(content); }
       }
@@ -102,14 +101,15 @@ router.get("/:photoId/binary", async (req, res) => {
     res.set("Cross-Origin-Resource-Policy", "cross-origin");
     res.set("Content-Type", mime_type || "application/octet-stream");
     res.set("Content-Length", String(buf.length));
-    res.end(buf); // ✅ 진짜 바이너리로 응답
+    res.end(buf); 
   } catch (e) {
     console.error("[photos/binary] error:", e);
     res.status(500).send("Error");
   }
 });
 
-/* 업로더(업서트) – 편집본 저장: multipart/form-data 의 file 필드 사용 */
+// POST / PUT /api/photos/:photoId/binary
+// 사진 바이너리 업서트
 async function upsertBinary(req, res) {
   const photoId = Number(req.params.photoId);
   if (!Number.isFinite(photoId)) {
@@ -149,7 +149,8 @@ router.options("/:photoId/binary", (req,res) => { allowCORS(req,res); res.sendSt
 router.post("/:photoId/binary", upload.single("file"), upsertBinary);
 router.put("/:photoId/binary",  upload.single("file"), upsertBinary);
 
-/* 서명 URL 발급 */
+// GET /api/photos/:photoId/signed-url
+// 사진에 접근할 수 있는 서명된 URL 생성
 router.get("/:photoId/signed-url", (req,res)=>{
   try {
     const { photoId } = req.params;
@@ -162,7 +163,7 @@ router.get("/:photoId/signed-url", (req,res)=>{
   }
 });
 
-/* 내부 유틸: 이미지가 실제로 200 나오는지 짧게 확인 (최대 5회, 80ms 간격) */
+// 이미지가 접근 가능해질 때까지 대기 (최대 5회)
 async function waitImageVisible(imageUrl) {
   for (let i = 0; i < 5; i++) {
     try {
@@ -181,7 +182,8 @@ async function waitImageVisible(imageUrl) {
   return false;
 }
 
-// GET /api/photo-analysis/:photoId (프론트 디버깅용)
+// GET /api/photo-analysis/:photoId
+// 사진 분석 결과 조회
 router.get("/photo-analysis/:photoId", async (req, res) => {
   const photoId = Number(req.params.photoId);
   if (!Number.isFinite(photoId)) return res.status(400).json({ error: "bad id" });
@@ -197,7 +199,8 @@ router.get("/photo-analysis/:photoId", async (req, res) => {
   res.json(rows[0]);
 });
 
-// ⭐️ 업로드 + 즉시 분석 API (새로운 AI 서버 호출 방식으로 수정)
+// POST /api/photos/analyze
+// 사진 업로드 및 분석
 router.post("/analyze", upload.single("file"), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: "no file" });
@@ -207,7 +210,7 @@ router.post("/analyze", upload.single("file"), async (req, res) => {
   try {
     const { buffer, originalname, mimetype } = req.file;
 
-    // AI 서버 호출 (파일 직접 전송)
+    // AI 서버 호출
     const form = new FormData();
     form.append('file', buffer, { filename: originalname, contentType: mimetype });
 
@@ -224,7 +227,7 @@ router.post("/analyze", upload.single("file"), async (req, res) => {
 
     await client.query("BEGIN");
 
-    // 원본 이미지 photos DB에 저장
+    // 원본 사진 DB에 저장
     const ins = await client.query(
       `INSERT INTO photos (original_name, mime_type, content, created_at) VALUES ($1, $2, $3, now()) RETURNING photo_id`,
       [originalname, mimetype, buffer]
@@ -257,20 +260,21 @@ router.post("/analyze", upload.single("file"), async (req, res) => {
   }
 });
 
-/* 기존 사진 id 재분석 */
+// POST /api/photos/:photoId/analyze
+// 기존 사진에 대해 분석 수행
 router.post("/:photoId/analyze", async (req, res) => {
   const client = await pool.connect();
   try {
     const { photoId } = req.params;
 
-    // DB에서 이미지 데이터(buffer) 가져오기
+    // DB에서 이미지 데이터 가져오기
     const photoRes = await client.query(`SELECT content, original_name, mime_type FROM photos WHERE photo_id=$1`, [photoId]);
     if (!photoRes.rows.length) {
       return res.status(404).json({ error: "photo not found" });
     }
     const { content: buffer, original_name: originalname, mime_type: mimetype } = photoRes.rows[0];
 
-    // AI 서버 호출 (파일 직접 전송)
+    // AI 서버 호출
     const form = new FormData();
     form.append('file', buffer, { filename: originalname || 'image.jpg', contentType: mimetype });
 

@@ -7,11 +7,11 @@ const axios = require("axios");
 const pool = require("../db");
 const router = express.Router();
 
-/* ===================== utils ===================== */
+// 문자열 정규화 함수
 const norm = (s) => (typeof s === "string" ? s.trim() : null);
 const lowTrim = (s) => (typeof s === "string" ? s.trim().toLowerCase() : s);
 
-/** 라벨 후보: 원형 / ' 분위기' 추가·제거 / '…함'↔'…한' 변형 */
+// 라벨 후보군 빌더
 function buildLabelCandidates(label) {
   const s = typeof label === "string" ? label.trim() : "";
   if (!s) return [];
@@ -25,7 +25,7 @@ function buildLabelCandidates(label) {
   return Array.from(set).map((x) => x.toLowerCase());
 }
 
-/** 사용자의 선호 장르 (쿼리 or 헤더) */
+// 선호 장르 
 function getPreferredGenres(req) {
   if (typeof req.query.genres === "string") {
     return req.query.genres.split(",").map((x) => x.trim()).filter(Boolean);
@@ -39,7 +39,7 @@ function getPreferredGenres(req) {
   return [];
 }
 
-/** 사용자 id (쿼리 or 헤더: x-user-id) */
+// 사용자 ID 추출
 function getUserId(req) {
   const q = req.query.user_id;
   const h = req.headers["x-user-id"];
@@ -49,7 +49,7 @@ function getUserId(req) {
   return Number.isFinite(n) ? n : null;
 }
 
-/* ===================== 후보 풀 로더 ===================== */
+// 라벨 및 장르로 후보곡 조회
 async function fetchCandidatesByLabels({ candidates, limit, genres }) {
   if (!candidates?.length || !limit) return [];
   const params = [];
@@ -141,7 +141,7 @@ async function countByLabels({ candidates, genres }) {
   return out;
 }
 
-/* =============== 가중치 계산 관련 =============== */
+// 가중치 계산
 const W = { moodMain: 1.0, moodSub: 0.7, song: 1.0, pop: 0.3, recency: 0.2 };
 const TAU_DAYS = 30;
 
@@ -228,23 +228,18 @@ function randomSampleK(arr, k, used) {
   return out;
 }
 
-/* ===================== (선택) Spotify 보강 ===================== */
-/**
- * 스포티파이 연결된 사용자인 경우, 제목+아티스트로 1건 검색하여
- * album_image / spotify_track_id / preview_url 을 보강한다.
- * 실패해도 조용히 폴백한다.
- */
+// 스포티파이 보강
 async function enrichWithSpotify(req, list) {
   if (!Array.isArray(list) || list.length === 0) return list;
 
-  // 사용자 쿠키가 없으면 보강 시도 자체를 생략(로그 스팸/지연 방지)
+  // 사용자 쿠키가 없으면 보강 시도를 생략
   const ck = req.headers.cookie || "";
   if (!/sp_access=|sp_refresh=/.test(ck)) return list;
 
   const baseUrl = `${req.protocol}://${req.get("host")}`;
 
   async function fillOne(item) {
-    // 이미 값이 충분하면 패스
+     
     const hasPreview = item.preview_url && item.preview_url !== "EMPTY";
     if (item.spotify_track_id && item.album_image && hasPreview) return item;
 
@@ -268,7 +263,6 @@ async function enrichWithSpotify(req, list) {
       return {
         ...item,
         album_image: item.album_image || albumImg,
-        // 서버에서 미리 'EMPTY' → null 로 정규화
         preview_url: hasPreview ? item.preview_url : (preview || null),
         spotify_track_id: item.spotify_track_id || trackId,
       };
@@ -277,16 +271,17 @@ async function enrichWithSpotify(req, list) {
     }
   }
 
-  // 병렬 요청(최대 10곡) — 필요하면 여기서 배치/세마포로 제한 가능
+  // 병렬 보강
   return await Promise.all(list.map(fillOne));
 }
 
-/* ===================== 핑 ===================== */
+// 헬스체크
 router.get("/__ping", (_req, res) => {
   res.json({ ok: true, from: "routes/recommendations.js", version: "recs-v6+enrich+normalize" });
 });
 
-/* =============== by-photo: 5 + 2 + 3 = 10 (가중치/랜덤 혼합) =============== */
+// GET /api/recommendations/by-photo/:photoId?debug
+// 사진 기반 추천곡 조회
 router.get("/by-photo/:photoId", async (req, res) => {
   const debug = String(req.query.debug || "") === "1";
   try {
@@ -295,7 +290,7 @@ router.get("/by-photo/:photoId", async (req, res) => {
       return res.status(400).json({ error: "bad photoId" });
     }
 
-    // 1) 사진의 최신 분석값(배경 포함)
+    // 사진의 최신 분석 결과 조회
     const { rows: aRows } = await pool.query(
       `SELECT main_mood, sub_mood, background
          FROM photo_analysis
@@ -319,14 +314,14 @@ router.get("/by-photo/:photoId", async (req, res) => {
 
     const main_mood = norm(aRows[0].main_mood);
     const sub_mood  = norm(aRows[0].sub_mood);
-    const background = lowTrim(aRows[0].background); // ex) 'mountain', 'beach'
+    const background = lowTrim(aRows[0].background); 
     const preferred_genres = getPreferredGenres(req);
     const userId = getUserId(req);
 
     const mainCandsKey = buildLabelCandidates(main_mood);
     const subCandsKey  = buildLabelCandidates(sub_mood);
 
-    // 2) 후보 풀 넉넉히 수집
+    // 후보 풀 수집
     const [mainPool, subPool, prefPool] = await Promise.all([
       mainCandsKey.length ? fetchCandidatesByLabels({ candidates: mainCandsKey, limit: 200 }) : Promise.resolve([]),
       subCandsKey.length  ? fetchCandidatesByLabels({ candidates: subCandsKey,  limit: 200 }) : Promise.resolve([]),
@@ -335,7 +330,7 @@ router.get("/by-photo/:photoId", async (req, res) => {
         : Promise.resolve([]),
     ]);
 
-    // 3) 유저 곡 피드백 점수(지수 감가) 로드
+    // 유저 곡 피드백 점수 로드
     const idSet = new Set([
       ...mainPool.map((x) => x.music_id),
       ...subPool.map((x) => x.music_id),
@@ -344,7 +339,7 @@ router.get("/by-photo/:photoId", async (req, res) => {
     const allIds = Array.from(idSet);
     const songScoreMap = await loadFeedbackScores(userId, allIds);
 
-    // 4) 가중치/랜덤 샘플링
+    // 곡 샘플링
     const used = new Set();
 
     const mainPicked = weightedSampleK(mainPool, 5, makeScorer(songScoreMap, "main"), used);
@@ -384,7 +379,7 @@ router.get("/by-photo/:photoId", async (req, res) => {
       prefPicked = prefPicked.concat(extra);
     }
 
-    // 5) 최종 페이로드 (+ 스포티파이 보강)
+    // 최종 페이로드 구성
     const payload = {
       main_mood,
       sub_mood,

@@ -5,22 +5,17 @@ const pool = require("../db");
 
 const router = express.Router();
 
-/**
- * GET /api/images/:photoId?token=...
- * - 토큰 검증(JWT id === :photoId, exp 유효)
- * - DB에서 photos.photo_id 로 조회
- * - mime_type으로 Content-Type 설정 후 content 바이너리 응답
- */
+// 사진 조회
 router.get("/:photoId", async (req, res) => {
   const { photoId } = req.params;
   const { token } = req.query;
 
-  // 1) 토큰 존재
+  // 토큰 존재 확인
   if (!token) {
     return res.status(401).send("Unauthorized");
   }
 
-  // 2) 토큰 검증
+  // 토큰 검증 
   let payload;
   try {
     payload = jwt.verify(token, process.env.IMG_TOKEN_SECRET);
@@ -28,12 +23,12 @@ router.get("/:photoId", async (req, res) => {
     return res.status(401).send("Unauthorized");
   }
 
-  // 3) 토큰의 id === 경로 id
+  // 토큰의 id 와 photoId 비교
   if (String(payload.id) !== String(photoId)) {
     return res.status(401).send("Unauthorized");
   }
 
-  // 4) 사진 레코드 조회 (중요: photo_id 로!)
+  // photo_id로 사진 레코드 조회
   try {
     const { rows } = await pool.query(
       "SELECT mime_type, content FROM photos WHERE photo_id = $1 LIMIT 1",

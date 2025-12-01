@@ -5,17 +5,14 @@ const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const pool = require("../db");
 
-/* =========================
- * JWT / Cookie 설정
- * ========================= */
+
+ // JWT,Cookie 설정
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
 const JWT_EXPIRES_IN = "7d";
 const COOKIE_NAME = "app_token";
 const isProd = process.env.NODE_ENV === "production";
 
-/* =========================
- * 유틸
- * ========================= */
+// 유틸리티 함수
 const trim = (s) => (s ?? "").toString().trim();
 const toKoreanGender = (g) => {
   if (!g) return null;
@@ -26,22 +23,20 @@ const toKoreanGender = (g) => {
 };
 const digitsOnly = (s) => (s ? String(s).replace(/\D/g, "") : null);
 
-/** JWT 발급 + httpOnly 쿠키 심기
- *  - 프론트/백 분리 배포를 고려해 sameSite/secure 조정
- */
+// JWT 발급 및 httpOnly 쿠키 설정
 function issueTokenAndSetCookie(res, payload) {
   const token = jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
   res.cookie(COOKIE_NAME, token, {
     httpOnly: true,
-    secure: true,            // 프로덕션에서만 secure
-    sameSite: "none", // 교차 사이트 쿠키 허용
+    secure: true,            
+    sameSite: "none", 
     path: "/",
-    maxAge: 7 * 24 * 60 * 60 * 1000,   // 7일
+    maxAge: 7 * 24 * 60 * 60 * 1000,  
   });
   return token;
 }
 
-/** 요청에서 토큰 추출 (쿠키 우선 → Authorization: Bearer ...) */
+// 요청에서 토큰 추출 (쿠키 우선, 없으면 Authorization 헤더)
 function pickToken(req) {
   const c = req.cookies?.[COOKIE_NAME];
   if (c) return c;
@@ -50,9 +45,7 @@ function pickToken(req) {
   return null;
 }
 
-/** 인증 미들웨어
- *  - 성공 시 req.auth = { sub, email, iat, exp }
- */
+// 요청에 auth 정보(req.auth) 추가
 async function authRequired(req, res, next) {
   try {
     const token = pickToken(req);
@@ -65,11 +58,7 @@ async function authRequired(req, res, next) {
   }
 }
 
-/* =========================
- * 라우트
- * ========================= */
-
-// REGISTER
+// 회원가입
 router.post("/register", async (req, res) => {
   try {
     const name = trim(req.body?.name);
@@ -100,7 +89,7 @@ router.post("/register", async (req, res) => {
     const token = issueTokenAndSetCookie(res, { sub: user.id, email: user.email });
 
     res.status(201).json({
-      token, // 참고용
+      token,
       user: { id: user.id, name: user.name, email: user.email },
       onboarding_done: false,
       genre_setup_complete: user.genre_setup_complete,
@@ -114,7 +103,7 @@ router.post("/register", async (req, res) => {
   }
 });
 
-// LOGIN
+// 로그인 시 토큰 발급 및 쿠키 설정
 router.post("/login", async (req, res) => {
   try {
     const email = trim(req.body?.email);
@@ -139,7 +128,7 @@ router.post("/login", async (req, res) => {
     const token = issueTokenAndSetCookie(res, { sub: u.id, email: u.email });
 
     res.json({
-      token, // 참고용
+      token,
       user: { id: u.id, name: u.name, email: u.email },
       onboarding_done: u.onboarding_done,
       genre_setup_complete: u.genre_setup_complete,
@@ -150,7 +139,7 @@ router.post("/login", async (req, res) => {
   }
 });
 
-// LOGOUT
+// 로그아웃 시 쿠키 삭제
 router.post("/logout", (_req, res) => {
   res.clearCookie(COOKIE_NAME, {
     httpOnly: true,
@@ -161,7 +150,7 @@ router.post("/logout", (_req, res) => {
   res.json({ ok: true });
 });
 
-// ME
+// 현재 사용자 정보 조회
 router.get("/me", authRequired, async (req, res) => {
   try {
     const userId = Number(req.auth?.sub);
@@ -192,9 +181,6 @@ router.get("/me", authRequired, async (req, res) => {
   }
 });
 
-/* =========================
- * export
- *  - router 기본 내보내기 + 미들웨어도 함께 노출
- * ========================= */
-router.authRequired = authRequired;        // 함수 속성으로 추가
-module.exports = router;                   // 다른 라우터에서 require("./auth").authRequired 로 접근 가능
+// 인증 미들웨어 내보내기
+router.authRequired = authRequired;        
+module.exports = router;                   

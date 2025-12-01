@@ -1,24 +1,20 @@
 // routes/feedback.js
 const express = require("express");
 const pool = require("../db");
-const auth = require("./auth");              // auth 라우터 모듈
-const authRequired = auth.authRequired;      // 미들웨어 참조
+const auth = require("./auth");              
+const authRequired = auth.authRequired;      
 
 const router = express.Router();
 
-/**
- * 곡 단위 피드백 업서트
- * POST /api/feedback
- * body: { music_id, feedback: 1 | -1, photo_id?, context_main_mood?, context_sub_mood? }
- * - user_id는 body에 안 보냄 (토큰에서 추출)
- */
+// POST /api/feedback
+// 사용자 곡 피드백 업서트
 router.post("/feedback", authRequired, async (req, res) => {
   try {
-    // 1) 토큰에서 사용자
+    // 토큰에서 사용자
     const userId = Number(req.auth?.sub);
     if (!userId) return res.status(401).json({ error: "missing user" });
 
-    // 2) payload 검증
+    // payload 검증
     const {
       music_id,
       feedback,
@@ -34,7 +30,7 @@ router.post("/feedback", authRequired, async (req, res) => {
       return res.status(400).json({ error: "invalid payload" });
     }
 
-    // 3) 업서트 (타임스탬프 컬럼 업데이트 제거)
+    // 업서트 수행
     await pool.query(
       `INSERT INTO user_song_feedback
          (user_id, music_id, feedback, photo_id, context_main_mood, context_sub_mood)
@@ -57,7 +53,7 @@ router.post("/feedback", authRequired, async (req, res) => {
 
     return res.json({ ok: true });
   } catch (e) {
-    // 디버깅 도움: 서버 콘솔에 자세히 남기기
+    // 오류 처리
     console.error("[feedback] upsert error:", e && (e.stack || e.message || e));
     return res.status(500).json({ error: "feedback failed" });
   }

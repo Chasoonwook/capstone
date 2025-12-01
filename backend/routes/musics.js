@@ -48,7 +48,8 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// GET /api/musics/by-mood?label=희망적 분위기&limit=7
+// GET /api/musics/by-mood?label
+// 특정 분위기 라벨의 음악들 조회
 router.get("/by-mood", async (req, res) => {
   const label = String(req.query.label || "");
   const limit = Number(req.query.limit || 7);

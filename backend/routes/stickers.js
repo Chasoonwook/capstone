@@ -8,7 +8,7 @@ const router = express.Router();
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB
+    fileSize: 10 * 1024 * 1024, 
   },
 });
 
@@ -20,10 +20,8 @@ const IMAGE_MIME_WHITELIST = new Set([
   "image/gif",
 ]);
 
-/**
- * GET /api/stickers
- * - 스티커 목록 (id+name만)
- */
+// GET /api/stickers
+// 스티커 목록 반환
 router.get("/stickers", async (_req, res) => {
   try {
     const { rows } = await pool.query(
@@ -39,10 +37,8 @@ router.get("/stickers", async (_req, res) => {
   }
 });
 
-/**
- * GET /api/stickers/:id/binary
- * - 스티커 이미지 바이너리 반환
- */
+// GET /api/stickers/:id/binary
+// 스티커 바이너리 반환
 router.get("/stickers/:id/binary", async (req, res) => {
   const { id } = req.params;
   try {
@@ -64,11 +60,8 @@ router.get("/stickers/:id/binary", async (req, res) => {
   }
 });
 
-/**
- * POST /api/stickers
- * - 스티커 업로드 (form-data: file, name?)
- * - 반환: { sticker_id, name }
- */
+// POST /api/stickers
+// 스티커 업로드
 router.post("/stickers", upload.single("file"), async (req, res) => {
   try {
     const file = req.file;

@@ -12,7 +12,7 @@ const nn = (v) => {
 const toNumOrNull = (v) =>
   v === undefined || v === null || v === "" ? null : (Number(v) || null);
 
-// 공통 SELECT: 프론트에서 바로 쓰기 좋게 별칭
+// 공통 SELECT 절 별칭
 const SELECT_ALIAS = `
   id,
   user_id,
@@ -27,9 +27,8 @@ const SELECT_ALIAS = `
   updated_at
 `;
 
-// ------------------------------------------------------------------
-// 생성(업서트: user_id+photo_id 존재시 업데이트)
 // POST /api/diaries
+// 생성 또는 업데이트
 router.post("/", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -63,7 +62,7 @@ router.post("/", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // 업서트 기준 찾기
+    // 같은 user_id + photo_id 조합이 있으면 업데이트, 없으면 삽입
     let existing = null;
     if (photo_id != null) {
       const { rows } = await client.query(
@@ -118,9 +117,7 @@ router.post("/", async (req, res) => {
   }
 });
 
-// ------------------------------------------------------------------
-// 목록
-// GET /api/diaries?user_id=...&photo_id?=...&limit?=200
+// 목록 조회
 router.get("/", async (req, res) => {
   try {
     const user_id = toNumOrNull(req.query.user_id);
@@ -151,9 +148,7 @@ router.get("/", async (req, res) => {
   }
 });
 
-// ------------------------------------------------------------------
 // 포토 기준 단건 조회
-// GET /api/diaries/by-photo?user_id=...&photo_id=...
 router.get("/by-photo", async (req, res) => {
   try {
     const user_id = toNumOrNull(req.query.user_id);
@@ -181,9 +176,7 @@ router.get("/by-photo", async (req, res) => {
   }
 });
 
-// ------------------------------------------------------------------
 // 단건 조회
-// GET /api/diaries/:id
 router.get("/:id", async (req, res) => {
   try {
     const id = toNumOrNull(req.params.id);
@@ -197,9 +190,7 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-// ------------------------------------------------------------------
-// 수정
-// PUT /api/diaries/:id
+// 단건 수정
 router.put("/:id", async (req, res) => {
   try {
     const id = toNumOrNull(req.params.id);
@@ -244,9 +235,7 @@ router.put("/:id", async (req, res) => {
   }
 });
 
-// ------------------------------------------------------------------
 // 삭제
-// DELETE /api/diaries/:id
 router.delete("/:id", async (req, res) => {
   try {
     const id = toNumOrNull(req.params.id);
