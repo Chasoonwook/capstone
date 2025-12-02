@@ -52,16 +52,16 @@ export function PhotoPlayerView({
                 disabled={!saveEnabled}
                 onClick={onSaveAndEdit}
                 className="mt-4 w-full h-10 border text-white bg-pink-500/70 hover:bg-pink-500 border-white/25 rounded-lg disabled:opacity-60"
-                title="저장 및 편집"
+                title="Save & Edit"
               >
-                저장 및 편집
+                Save & Edit
               </Button>
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center text-slate-300">
               {/* 업로드 미존재 상태 표시 */}
               <div className="w-[20rem] h-[14rem] max-w-[90vw] rounded-2xl border border-dashed border-white/20 bg-black/20 flex items-center justify-center">
-                <span className="text-sm">이미지가 없습니다</span>
+                <span className="text-sm">No image</span>
               </div>
             </div>
           )}
@@ -92,7 +92,7 @@ export function InstagramView() {
   return (
     <div className="flex-1 flex items-center justify-center w-full h-full">
       {/* 준비 상태 표시 */}
-      <div className="text-slate-300">Instagram View (준비 중)</div>
+      <div className="text-slate-300">Instagram View (Coming soon)</div>
     </div>
   );
 }
@@ -101,7 +101,7 @@ export function DefaultView() {
   return (
     <div className="flex-1 flex justify-center items-center">
       {/* 준비 상태 표시 */}
-      <div className="text-slate-300">Default View (준비 중)</div>
+      <div className="text-slate-300">Default View (Coming soon)</div>
     </div>
   );
 }
