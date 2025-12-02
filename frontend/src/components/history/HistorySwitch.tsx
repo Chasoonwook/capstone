@@ -80,7 +80,7 @@ export default function HistorySwitch({
     default:
       return (
         <section className="px-4 py-6 text-center text-sm text-muted-foreground">
-          <p>아직 준비 중인 탭입니다.</p>
+          <p>This tab is not ready yet.</p>
         </section>
       );
   }

@@ -1,4 +1,4 @@
-// src/app/editor/edit/EditorClient.tsx
+// src/app/editor/edit/EditClient.tsx
 "use client"
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react"
@@ -10,7 +10,7 @@ import { Stage, Layer, Image as KImage, Line, Group, Transformer } from "react-k
 import useImage from "use-image"
 import Konva from "konva"
 import "konva/lib/filters/Brighten"
-import { fetchMe } from "@/app/recommend/hooks/useAuthMe" // ✅ history 저장용
+import { fetchMe } from "@/app/recommend/hooks/useAuthMe" // history 저장에 사용
 
 /* ---------- 타입 ---------- */
 type StickerMeta = { sticker_id: number; name?: string | null }
@@ -71,7 +71,7 @@ const fitRect = (nw: number, nh: number, maxW: number, maxH: number) => {
 }
 
 /* ================= 메인 컴포넌트 ================= */
-export default function EditorClient() {
+export default function EditClient() {
   const qs = useSearchParams()
   const router = useRouter()
 
@@ -165,7 +165,7 @@ export default function EditorClient() {
       if (Array.isArray(d.lines)) setLines(d.lines)
       if (Array.isArray(d.placed)) setPlaced(d.placed)
     } catch {}
-    // 저장된 드래프트는 편집이 끝나면(✔/✖) 지웁니다.
+    // 저장된 드래프트는 편집이 끝나면(확인/취소) 삭제
   }, [draftKey])
 
   /* ---------- 드래프트 저장 (변경시) ---------- */
@@ -245,8 +245,9 @@ export default function EditorClient() {
 
   /* ---------- 저장(원본 교체) + 반영 검증 + history 저장 ---------- */
   const stageToBlob = async (): Promise<Blob> => {
-    const stage = stageRef.current as any
-    const dataURL: string = stage.toDataURL({ pixelRatio: 1, mimeType: "image/png" })
+    // 원래 동작을 유지
+    const realStage = stageRef.current as any
+    const dataURL: string = realStage.toDataURL({ pixelRatio: 1, mimeType: "image/png" })
     const res = await fetch(dataURL)
     return res.blob()
   }
@@ -289,19 +290,19 @@ export default function EditorClient() {
     }
   }
 
-  // ✅ history 저장 (편집 후 스냅샷 기록)
+  // history 저장 (편집 후 스냅샷 기록)
   const saveHistoryAfterEdit = async (): Promise<number | null> => {
     try {
       const me = await fetchMe()
       if (!me?.id) {
-        setErr("로그인이 필요합니다.")
+        setErr("Login required.")
         return null
       }
       if (!photoId) {
-        setErr("photoId가 없습니다.")
+        setErr("photoId is missing.")
         return null
       }
-      // musicId가 없을 수도 있음 → 서버에서 NULL 허용 가정
+      // musicId는 없을 수도 있음 (서버에서 NULL 허용 가정)
       const res = await fetch(`${API_BASE}/api/history`, {
         method: "POST",
         credentials: "include",
@@ -312,19 +313,18 @@ export default function EditorClient() {
           music_id: musicId ? Number(musicId) : null,
           // 편집 화면에서도 selected_from을 그대로 넘겨 스냅샷에 표시(가능하면)
           selected_from: (selectedFromParam === "main" || selectedFromParam === "sub") ? selectedFromParam : null,
-          // 필요시 편집 플래그 등을 추가할 수 있음 e.g., edited: true
         }),
       })
       if (!res.ok) {
         const t = await res.text().catch(() => "")
-        throw new Error(t || "history 저장 실패")
+        throw new Error(t || "Failed to save history")
       }
       const json = await res.json().catch(() => ({}))
       const hid = json?.history_id ?? null
-      if (!hid) throw new Error("history_id가 없습니다.")
+      if (!hid) throw new Error("Missing history_id.")
       return hid
     } catch (e: any) {
-      setErr(e?.message || "history 저장 중 오류가 발생했습니다.")
+      setErr(e?.message || "An error occurred while saving history.")
       return null
     }
   }
@@ -339,23 +339,22 @@ export default function EditorClient() {
 
       // 2) 업로드(원본 교체 시도)
       const ok = await uploadEdited(blob)
-      if (!ok) throw new Error("편집본 업로드에 실패했습니다.")
+      if (!ok) throw new Error("Failed to upload edited image.")
 
       // 3) 반영 검증
       if (!photoId || !(await verifySaved(String(photoId)))) {
-        throw new Error("저장이 반영되지 않았습니다. 잠시 후 다시 시도해주세요.")
+        throw new Error("Save not reflected. Please try again shortly.")
       }
 
       // 4) history 스냅샷 저장
       const hid = await saveHistoryAfterEdit()
-      if (!hid) return // 실패 시 이동하지 않음
+      if (!hid) return
 
       // 5) 드래프트 삭제 후 메인 이동(캐시 무효화)
       clearDraft()
       router.push(`/?ts=${Date.now()}`)
-      // router.refresh() // 필요 시 사용
     } catch (e: any) {
-      setErr(e?.message || "저장 중 오류가 발생했습니다.")
+      setErr(e?.message || "An error occurred while saving.")
     } finally {
       setSaving(false)
     }
@@ -376,28 +375,28 @@ export default function EditorClient() {
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
-      {/* Top Bar */}
+      {/* 상단 바 */}
       <header className="flex items-center justify-between px-4 h-14 border-b border-border bg-background">
-        <Button variant="ghost" size="icon" onClick={handleCancel} className="hover:bg-accent" aria-label="취소">
+        <Button variant="ghost" size="icon" onClick={handleCancel} className="hover:bg-accent" aria-label="Cancel">
           <X className="h-6 w-6" />
         </Button>
-        <h1 className="text-base font-medium">편집</h1>
+        <h1 className="text-base font-medium">Edit</h1>
         <Button
           variant="ghost"
           size="icon"
           onClick={handleConfirm}
           disabled={saving || !imgUrl}
           className="text-primary hover:bg-accent disabled:opacity-50"
-          aria-label="저장하고 메인으로"
+          aria-label="Save and go to Home"
         >
           <Check className="h-6 w-6" />
         </Button>
       </header>
 
-      {/* Canvas */}
+      {/* 캔버스 */}
       <div ref={boxRef} className="flex-1 flex items-center justify-center p-2 sm:p-4 overflow-hidden bg-muted/30">
         {loading || !imgUrl || !natural ? (
-          <div className="text-muted-foreground">이미지 불러오는 중…</div>
+          <div className="text-muted-foreground">Loading image…</div>
         ) : (
           <Stage
             ref={stageRef}
@@ -465,21 +464,21 @@ export default function EditorClient() {
         )}
       </div>
 
-      {/* Tool panel */}
+      {/* 하단 도구 패널 */}
       <div className="border-t border-border bg-background">
         {tool && (
           <div className="px-4 py-4 border-b border-border">
             {tool === "rotate" && (
-              <SliderLabeled label="회전" value={rotation} min={-180} max={180} onChange={setRotation} suffix="°" />
+              <SliderLabeled label="Rotate" value={rotation} min={-180} max={180} onChange={setRotation} suffix="°" />
             )}
             {tool === "brightness" && (
-              <SliderLabeled label="밝기" value={brightness} min={50} max={150} onChange={setBrightness} suffix="%" />
+              <SliderLabeled label="Brightness" value={brightness} min={50} max={150} onChange={setBrightness} suffix="%" />
             )}
             {tool === "draw" && (
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <span className="text-sm text-muted-foreground">색상</span>
+                    <span className="text-sm text-muted-foreground">Color</span>
                     <input
                       type="color"
                       value={brushColor}
@@ -488,10 +487,10 @@ export default function EditorClient() {
                     />
                   </div>
                   <Button variant="ghost" size="sm" onClick={() => setLines([])} className="text-primary">
-                    지우기
+                    Clear
                   </Button>
                 </div>
-                <SliderLabeled label="두께" value={brushSize} min={2} max={24} onChange={setBrushSize} suffix="px" />
+                <SliderLabeled label="Thickness" value={brushSize} min={2} max={24} onChange={setBrushSize} suffix="px" />
               </div>
             )}
             {tool === "sticker" && (
@@ -507,7 +506,7 @@ export default function EditorClient() {
                     const list = await fetch(`${API_BASE}/api/stickers`, { credentials: "include" })
                     if (list.ok) setStickerList(await list.json())
                   } else {
-                    alert("스티커 업로드 실패")
+                    alert("Sticker upload failed")
                   }
                 }}
                 onDeleteSelected={() => {
@@ -521,13 +520,13 @@ export default function EditorClient() {
           </div>
         )}
 
-        {/* Tool icons */}
+        {/* 하단 도구 아이콘 */}
         <div className="flex items-center justify-around px-4 py-3">
-          <ToolBtn label="회전"    active={tool === "rotate"}     onClick={() => setTool(tool === "rotate" ? null : "rotate")}    icon={<RotateCw className="h-6 w-6" />} />
-          <ToolBtn label="밝기"    active={tool === "brightness"} onClick={() => setTool(tool === "brightness" ? null : "brightness")} icon={<Sun className="h-6 w-6" />} />
-          <ToolBtn label="그리기"  active={tool === "draw"}       onClick={() => setTool(tool === "draw" ? null : "draw")}        icon={<Pencil className="h-6 w-6" />} />
-          <ToolBtn label="스티커"  active={tool === "sticker"}    onClick={() => setTool(tool === "sticker" ? null : "sticker")}  icon={<Sticker className="h-6 w-6" />} />
-          <ToolBtn label="초기화"  onClick={resetAll} icon={<RefreshCw className="h-6 w-6" />} />
+          <ToolBtn label="Rotate"    active={tool === "rotate"}     onClick={() => setTool(tool === "rotate" ? null : "rotate")}    icon={<RotateCw className="h-6 w-6" />} />
+          <ToolBtn label="Brightness"    active={tool === "brightness"} onClick={() => setTool(tool === "brightness" ? null : "brightness")} icon={<Sun className="h-6 w-6" />} />
+          <ToolBtn label="Draw"  active={tool === "draw"}       onClick={() => setTool(tool === "draw" ? null : "draw")}        icon={<Pencil className="h-6 w-6" />} />
+          <ToolBtn label="Sticker"  active={tool === "sticker"}    onClick={() => setTool(tool === "sticker" ? null : "sticker")}  icon={<Sticker className="h-6 w-6" />} />
+          <ToolBtn label="Reset"  onClick={resetAll} icon={<RefreshCw className="h-6 w-6" />} />
         </div>
       </div>
 
@@ -588,16 +587,16 @@ function StickerPanel({
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <span className="text-sm text-muted-foreground">스티커</span>
+        <span className="text-sm text-muted-foreground">Stickers</span>
         <label className="cursor-pointer">
-          <Button variant="ghost" size="sm" asChild className="text-primary"><span>업로드</span></Button>
+          <Button variant="ghost" size="sm" asChild className="text-primary"><span>Upload</span></Button>
           <input type="file" accept="image/*" className="hidden"
                  onChange={(e) => { const f = e.target.files?.[0]; if (f) onUpload(f); e.currentTarget.value = "" }} />
         </label>
       </div>
       <div className="grid grid-cols-6 gap-2 max-h-[120px] overflow-y-auto">
         {stickers.length === 0 ? (
-          <div className="col-span-6 text-center py-4 text-sm text-muted-foreground">스티커가 없습니다</div>
+          <div className="col-span-6 text-center py-4 text-sm text-muted-foreground">No stickers</div>
         ) : (
           stickers.map((s) => (
             <button key={s.sticker_id} onClick={() => onPick(s)}
@@ -609,7 +608,7 @@ function StickerPanel({
       </div>
       {hasSelected && (
         <Button variant="ghost" size="sm" onClick={onDeleteSelected} className="w-full text-destructive">
-          선택한 스티커 삭제
+          Delete selected sticker
         </Button>
       )}
     </div>

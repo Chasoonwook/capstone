@@ -16,7 +16,7 @@ import {
 import { API_BASE, authHeaders } from "@/lib/api";
 import SpotifyConnectModal from "@/components/modals/SpotifyConnectModal";
 
-// ✅ 컨텍스트: 상태 구독 + 수동 새로고침 전용 (자동 호출 없음)
+//  컨텍스트: 상태 구독 + 수동 새로고침 전용 (자동 호출 없음)
 import { useSpotifyStatus } from "@/contexts/SpotifyStatusContext";
 
 interface UserHeaderProps {
@@ -231,7 +231,7 @@ export default function UserHeader({
           }
         >
           <LogIn className="w-4 h-4" />
-          <span className="text-sm font-medium">로그인</span>
+          <span className="text-sm font-medium">Log In</span>
         </button>
       );
     }
@@ -243,7 +243,7 @@ export default function UserHeader({
               type="button"
               variant="ghost"
               className={`h-auto px-3 py-1.5 gap-2 rounded-full ${
-                embedded ? "text-white hover:bg-white/20" : "text-primary hover:bg-primary/20"
+                embedded ? "text-white hover:bg_white/20" : "text-primary hover:bg-primary/20"
               }`}
               aria-haspopup="menu"
               aria-expanded={menuOpen}
@@ -261,7 +261,7 @@ export default function UserHeader({
 
           <DropdownMenuContent align="end" sideOffset={8} className="w-80">
             <DropdownMenuLabel className="text-xs text-muted-foreground font-normal">
-              로그인 계정
+              Signed-in Account
             </DropdownMenuLabel>
             <div className="px-2 pb-3">
               <div className="text-sm font-semibold leading-none">{displayName}</div>
@@ -275,19 +275,19 @@ export default function UserHeader({
                 {isSpotifyConnected ? (
                   <>
                     <CheckCircle2 className="h-4 w-4 text-green-600" />
-                    <span className="text-sm font-semibold">스포티파이 연동됨</span>
+                    <span className="text-sm font-semibold">Spotify Connected</span>
                   </>
                 ) : (
                   <>
                     <PlugZap className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm font-semibold">스포티파이 연동</span>
+                    <span className="text-sm font-semibold">Connect Spotify</span>
                   </>
                 )}
               </div>
               <p className="text-xs text-muted-foreground mb-3 leading-relaxed">
                 {isSpotifyConnected
-                  ? "전체 재생을 바로 이용할 수 있어요."
-                  : "계정을 연결하면 전체 듣기, 재생목록 연동이 가능해요."}
+                  ? "You can immediately play full tracks."
+                  : "Connect your account to enable full playback and playlist sync."}
               </p>
               {!isSpotifyConnected && (
                 <Button
@@ -298,7 +298,7 @@ export default function UserHeader({
                     setShowSpotifyModal(true);
                   }}
                 >
-                  스포티파이 연결하기
+                  Connect Spotify
                 </Button>
               )}
             </div>
@@ -308,7 +308,7 @@ export default function UserHeader({
             <div className="px-2 py-3">
               <div className="flex items-center gap-2 mb-2">
                 <Heart className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm font-semibold">관심 장르</span>
+                <span className="text-sm font-semibold">Favorite Genres</span>
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {genres.length ? (
@@ -327,7 +327,7 @@ export default function UserHeader({
                     onClick={() => router.push("/onboarding/genres?edit=1")}
                     className="text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-2"
                   >
-                    장르를 선택해주세요
+                    Please select your genres
                   </button>
                 )}
               </div>
@@ -337,11 +337,11 @@ export default function UserHeader({
 
             <DropdownMenuItem onClick={() => router.push("/history")} className="cursor-pointer">
               <History className="mr-2 h-4 w-4" />
-              <span>내 기록 보기</span>
+              <span>View History</span>
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => router.push("/account")} className="cursor-pointer">
               <Settings className="mr-2 h-4 w-4" />
-              <span>계정 설정</span>
+              <span>Account Settings</span>
             </DropdownMenuItem>
 
             <DropdownMenuSeparator />
@@ -351,7 +351,7 @@ export default function UserHeader({
               className="cursor-pointer text-red-600 focus:text-red-700"
             >
               <LogOut className="mr-2 h-4 w-4" />
-              <span>로그아웃</span>
+              <span>Log Out</span>
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -381,7 +381,7 @@ export default function UserHeader({
         </>
       )}
 
-      {/* 🔒 한 번만 뜨는 스포티파이 연결 모달 */}
+      {/*  한 번만 뜨는 스포티파이 연결 모달 */}
       <SpotifyConnectModal
         open={isLoggedIn && !isSpotifyConnected && showSpotifyModal}
         onClose={() => {

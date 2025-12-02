@@ -10,9 +10,7 @@ export type UseMusicsResult = {
 };
 
 /**
- * 앱 내부 DB의 음악 목록을 읽어오는 훅
- * - GET {API_BASE}/api/musics
- * - page.tsx는 이 훅의 반환값을 사용해 검색/필터링합니다.
+ * 앱 내부 DB 음악 목록 조회 훅
  */
 export function useMusics(): UseMusicsResult {
   const [musics, setMusics] = useState<MusicItem[]>([]);
@@ -29,12 +27,12 @@ export function useMusics(): UseMusicsResult {
         const r = await fetch(`${API_BASE}/api/musics`, { cache: "no-store" });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const data = await r.json();
-        // 응답 형태가 [{...}] 또는 { musics: [...] } 둘 다 안전 처리
+        // 다양한 응답 형태에 대한 예외 처리
         const list: unknown =
           Array.isArray(data) ? data : (data && data.musics) || [];
         if (alive) setMusics(Array.isArray(list) ? (list as MusicItem[]) : []);
       } catch (e: unknown) {
-        if (alive) setError(e instanceof Error ? e.message : "로드 실패");
+        if (alive) setError(e instanceof Error ? e.message : "Failed to load");
       } finally {
         if (alive) setLoading(false);
       }

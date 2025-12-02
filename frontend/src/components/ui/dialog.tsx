@@ -1,3 +1,4 @@
+// src/components/ui/dialog.tsx
 import * as React from "react"
 import { createPortal } from "react-dom"
 
@@ -8,6 +9,7 @@ type DialogRootProps = {
 }
 
 export function Dialog({ open, onOpenChange, children }: DialogRootProps) {
+  // ESC 키 처리 및 body 스크롤 잠금 로직
   React.useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {

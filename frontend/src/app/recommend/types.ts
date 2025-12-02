@@ -1,22 +1,22 @@
 // src/app/recommend/types.ts
 
-/** 추천 출처(메인/선호/서브) */
+// 추천 출처 타입 정의
 export type SelectedFrom = "main" | "preferred" | "sub" | "search" | "recommend" | "diary";
 
-/** 프론트에서 사용하는 노래 카드 모델 */
+// 프론트엔드 노래 카드 모델 정의
 export type Song = {
   id: number | string;
   title: string;
   artist: string;
   genre?: string;
-  duration?: string;              // "mm:ss"
+  duration?: string;
   image?: string | null;
-  spotify_uri?: string | null;    // 있으면 Spotify SDK로 전체 재생
-  preview_url?: string | null;    // 미리듣기 mp3
-  selected_from?: SelectedFrom | null; // 추천이 어디에서 왔는지 표시
+  spotify_uri?: string | null;
+  preview_url?: string | null;
+  selected_from?: SelectedFrom | null;
 };
 
-/** 백엔드/외부 API에서 내려오는 원천 모델(유연하게 수용) */
+// 백엔드 및 외부 API 원본 모델 정의
 export type BackendSong = {
   music_id?: number | string;
   id?: number | string;
@@ -24,14 +24,14 @@ export type BackendSong = {
   artist?: string;
   label?: string;
   genre?: string;
-  duration?: number;              // sec
-  duration_sec?: number;          // sec
-  duration_ms?: number;           // ms (혹시 모를 케이스 대비)
+  duration?: number;
+  duration_sec?: number;
+  duration_ms?: number;
   spotify_uri?: string | null;
   preview_url?: string | null;
 };
 
-/** 사진 기반 추천 응답 */
+// 사진 기반 추천 응답 데이터 정의
 export type ByPhotoResponse = {
   main_mood?: string | null;
   sub_mood?: string | null;
@@ -41,25 +41,24 @@ export type ByPhotoResponse = {
   preferred_genres?: string[];
 };
 
-/** /api/history POST 요청 바디 */
+// 히스토리 생성 요청 바디 정의
 export type HistoryCreateRequest = {
   user_id: number;
   photo_id: number;
   music_id: number;
-  /** 백엔드 스키마상 저장 가능한 값만 전송 (main | sub), 없으면 null */
   selected_from?: Extract<SelectedFrom, "main" | "sub"> | null;
 };
 
-/** /api/history POST 응답(업서트 결과) 및 GET 리스트 아이템 */
+// 히스토리 항목 응답 모델 정의
 export type HistoryItem = {
   history_id: number;
   user_id: number;
   photo_id: number;
   music_id: number;
-  title: string;                  // title_snapshot
-  artist: string;                 // artist_snapshot
-  genre: string | null;           // genre_snapshot
-  label: string | null;           // label_snapshot
+  title: string;
+  artist: string;
+  genre: string | null;
+  label: string | null;
   selected_from: Extract<SelectedFrom, "main" | "sub"> | null;
-  created_at: string;             // ISO datetime
+  created_at: string;
 };

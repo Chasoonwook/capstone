@@ -1,3 +1,4 @@
+// src/components/ui/GyroShine.tsx
 "use client";
 
 import { useEffect, useRef } from "react";
@@ -11,14 +12,14 @@ type Props = {
   radius?: number;
   /** 추적 부드러움(0~1, 클수록 관성 큼) */
   smooth?: number;
-  /** 데스크톱에서 마우스 추적 활성화 */
+  /** 데스크톱 마우스 추적 활성화 여부 */
   mouseFallback?: boolean;
 };
 
 export default function GyroShine({
   children,
   className = "",
-  intensity = 0.55,     // 더 선명하게
+  intensity = 0.55, // 더 선명한 강도 설정
   radius = 240,
   smooth = 0.22,
   mouseFallback = true,
@@ -32,7 +33,7 @@ export default function GyroShine({
 
     const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 
-    // iOS 권한 (터치 1회 후 요청)
+    // iOS 권한 요청
     const askIOS = async () => {
       try {
         // @ts-ignore
@@ -45,6 +46,7 @@ export default function GyroShine({
         else if (Mot?.requestPermission) await Mot.requestPermission();
       } catch {}
     };
+    // 터치/클릭 발생 시 권한 요청
     const onTapOnce = () => {
       askIOS();
       window.removeEventListener("click", onTapOnce);
@@ -53,13 +55,15 @@ export default function GyroShine({
     window.addEventListener("click", onTapOnce, { passive: true });
     window.addEventListener("touchend", onTapOnce, { passive: true });
 
+    // 장치 방향 감지 이벤트 핸들러
     const onOrient = (e: DeviceOrientationEvent) => {
-      const gamma = e.gamma ?? 0; // 좌/우
-      const beta = e.beta ?? 0;   // 상/하
+      const gamma = e.gamma ?? 0; // 좌/우 값
+      const beta = e.beta ?? 0;   // 상/하 값
       s.current.tx = 50 + clamp(gamma / 45, -1, 1) * 32;
-      s.current.ty = 50 - clamp(beta / 45, -1, 1) * 28; // 위쪽에서 비추는 느낌
+      s.current.ty = 50 - clamp(beta / 45, -1, 1) * 28; // 위에서 비추는 광원 느낌
     };
 
+    // 마우스 포인터 이동 이벤트 핸들러
     const onPointer = (ev: PointerEvent) => {
       if (!mouseFallback) return;
       const r = el.getBoundingClientRect();
@@ -67,6 +71,7 @@ export default function GyroShine({
       s.current.ty = clamp(((ev.clientY - r.top) / r.height) * 100, 0, 100);
     };
 
+    // 애니메이션 프레임 루프
     const loop = () => {
       const st = s.current;
       st.x += (st.tx - st.x) * smooth;
@@ -100,7 +105,7 @@ export default function GyroShine({
         } as React.CSSProperties
       }
     >
-      {/* 0) 버튼 바탕: 블루 계열(영상 톤) */}
+      {/* 0) 버튼 바탕: 블루 계열 배경 */}
       <div
         aria-hidden
         className="absolute inset-0 z-[1] rounded-[24px]"
@@ -110,7 +115,7 @@ export default function GyroShine({
         }}
       />
 
-      {/* 1) 외곽 네온 보더(보라 라인) */}
+      {/* 1) 외곽 네온 보더: 보라-파랑 그라디언트 라인 */}
       <div
         aria-hidden
         className="absolute inset-0 z-[20] rounded-[24px] pointer-events-none"
@@ -123,7 +128,7 @@ export default function GyroShine({
         }}
       />
 
-      {/* 2) 상/하 글로스(고정, 깜빡임 없음) */}
+      {/* 2) 상/하 글로스: 고정 하이라이트 */}
       <div
         aria-hidden
         className="absolute inset-0 z-[25] rounded-[24px] pointer-events-none"
@@ -134,7 +139,7 @@ export default function GyroShine({
         }}
       />
 
-      {/* 3) 자이로 하이라이트: 고채도 무지개 + 약간의 색 농도 보정 */}
+      {/* 3) 자이로 하이라이트: 무지개 색감 적용 */}
       <div
         aria-hidden
         className="absolute inset-0 z-[30] pointer-events-none"
@@ -158,11 +163,11 @@ export default function GyroShine({
             )
           `,
           mixBlendMode: "screen" as any,
-          filter: "saturate(1.65) contrast(1.12)", // ← 색감 더 쨍하게
+          filter: "saturate(1.65) contrast(1.12)", // 색감 보정
         }}
       />
 
-      {/* 4) 안쪽 유리감(입체) */}
+      {/* 4) 안쪽 유리감: 입체 효과를 위한 내부 박스 섀도우 */}
       <div
         aria-hidden
         className="absolute inset-0 z-[40] rounded-[24px] pointer-events-none"
@@ -172,7 +177,7 @@ export default function GyroShine({
         }}
       />
 
-      {/* 콘텐츠(텍스트/아이콘) — 투명 배경 유지 */}
+      {/* 콘텐츠: 텍스트/아이콘 영역 */}
       <div className="relative z-[60]">{children}</div>
     </div>
   );

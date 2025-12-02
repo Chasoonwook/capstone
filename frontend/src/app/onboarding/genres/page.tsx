@@ -7,16 +7,17 @@ import { API_BASE, authHeaders } from "@/lib/api"
 import { Check, Music2 } from "lucide-react"
 import Image from "next/image"
 
+// UI에 표시되는 텍스트는 영어로 통일, id 값은 기존 그대로 유지하여 서버 연동 안정성 보장
 const GENRES = [
-  { id: "BGM", name: "BGM", image: "/genres/BGM.png", description: "배경음악, 카페음악" },
-  { id: "클래식", name: "클래식", image: "/genres/Classical.png", description: "오케스트라, 피아노" },
-  { id: "밴드", name: "밴드", image: "/genres/Band.png", description: "록, 인디, 밴드음악" },
-  { id: "힙합", name: "힙합", image: "/genres/Hip-hop.png", description: "랩, 힙합, R&B" },
-  { id: "pop", name: "Pop", image: "/genres/POP.png", description: "팝송, 댄스팝" },
-  { id: "jpop", name: "J-Pop", image: "/genres/J-POP.png", description: "일본 팝, 애니송" },
-  { id: "트로트", name: "트로트", image: "/genres/Trot.png", description: "한국 전통가요" },
-  { id: "동요", name: "동요", image: "/genres/Children's song.png", description: "어린이 음악" },
-  { id: "kpop", name: "K-Pop", image: "/genres/K-POP.png", description: "한국 아이돌, 케이팝" },
+  { id: "BGM", name: "BGM", image: "/genres/BGM.png", description: "Background music, cafe music" },
+  { id: "클래식", name: "Classical", image: "/genres/Classical.png", description: "Orchestra, piano" },
+  { id: "밴드", name: "Band", image: "/genres/Band.png", description: "Rock, indie, band music" },
+  { id: "힙합", name: "Hip-hop", image: "/genres/Hip-hop.png", description: "Rap, hip-hop, R&B" },
+  { id: "pop", name: "Pop", image: "/genres/POP.png", description: "Pop, dance-pop" },
+  { id: "jpop", name: "J-Pop", image: "/genres/J-POP.png", description: "Japanese pop, anime songs" },
+  { id: "트로트", name: "Trot", image: "/genres/Trot.png", description: "Korean traditional pop" },
+  { id: "동요", name: "Children's Songs", image: "/genres/Children's song.png", description: "Children's music" },
+  { id: "kpop", name: "K-Pop", image: "/genres/K-POP.png", description: "Korean idols, K-pop" },
 ]
 
 // 내부 클라이언트 컴포넌트: useSearchParams 등 훅 사용
@@ -40,7 +41,7 @@ function Inner() {
     const localKey = `preferred_genres::${uid}`
     ;(async () => {
       try {
-        // 1) API로 시도 (쿠키 포함)
+        // 1) API 시도 (쿠키 포함)
         const r = await fetch(`${API_BASE}/api/users/me`, {
           headers: { "X-User-Id": uid, ...(authHeaders?.() as HeadersInit) },
           cache: "no-store",
@@ -80,8 +81,7 @@ function Inner() {
           } catch {}
         }
       } catch (e) {
-        console.error("load me error", e)
-        // 3) 에러여도 로컬 캐시 폴백
+        // 에러여도 로컬 캐시 폴백
         try {
           const cached = localStorage.getItem(localKey)
           if (cached) {
@@ -100,7 +100,7 @@ function Inner() {
 
   const save = async () => {
     if (selected.length < 2 || selected.length > 3) {
-      alert("선호 장르는 2~3개 선택해 주세요.")
+      alert("Please select 2 to 3 favorite genres.")
       return
     }
     setSaving(true)
@@ -124,7 +124,7 @@ function Inner() {
         return
       }
       if (!r1.ok) {
-        alert((await r1.text().catch(() => "")) || "장르 저장 실패")
+        alert((await r1.text().catch(() => "")) || "Failed to save genres")
         return
       }
 
@@ -141,7 +141,7 @@ function Inner() {
           credentials: "include",
         })
         if (!r2.ok) {
-          alert((await r2.text().catch(() => "")) || "온보딩 완료 처리 실패")
+          alert((await r2.text().catch(() => "")) || "Failed to complete onboarding")
           return
         }
         document.cookie = "onboardingDone=1; path=/; max-age=31536000"
@@ -152,15 +152,14 @@ function Inner() {
         localStorage.setItem(localKey, JSON.stringify(selected))
       } catch {}
 
-      alert(editMode ? "선호 장르가 업데이트되었습니다!" : "선호 장르가 저장되었습니다!")
+      alert(editMode ? "Favorite genres updated." : "Favorite genres saved.")
       if (editMode && window.history.length > 1) {
         router.back()
       } else {
         router.replace("/")
       }
     } catch (e) {
-      console.error(e)
-      alert("서버와 통신 중 오류가 발생했습니다.")
+      alert("An error occurred while communicating with the server.")
     } finally {
       setSaving(false)
     }
@@ -171,7 +170,7 @@ function Inner() {
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4">
           <div className="animate-spin rounded-full h-12 w-12 border-4 border-primary border-t-transparent" />
-          <p className="text-muted-foreground animate-pulse">불러오는 중…</p>
+          <p className="text-muted-foreground animate-pulse">Loading…</p>
         </div>
       </div>
     )
@@ -188,13 +187,13 @@ function Inner() {
               <Music2 className="w-10 h-10 text-primary" />
             </div>
             <h1 className="text-5xl font-bold text-foreground mb-4 tracking-tight">
-              {editMode ? "관심 장르 수정" : "음악 취향을 알려주세요"}
+              {editMode ? "Edit Favorite Genres" : "Tell Us Your Music Taste"}
             </h1>
             <p className="text-xl text-muted-foreground mb-3 max-w-2xl mx-auto leading-relaxed">
-              {editMode ? "선호 장르를 변경해 보세요" : "당신만의 음악 경험을 위해 선호하는 장르를 선택해주세요"}
+              {editMode ? "Update your favorite genres." : "Select your favorite genres to personalize your music experience."}
             </p>
             <div className="inline-flex items-center gap-2 px-6 py-3 bg-card rounded-full border border-border shadow-sm">
-              <span className="text-sm text-muted-foreground">선택된 장르:</span>
+              <span className="text-sm text-muted-foreground">Selected:</span>
               <span className="text-lg font-bold text-foreground">{selected.length}</span>
               <span className="text-sm text-muted-foreground">/ 3</span>
             </div>
@@ -222,7 +221,7 @@ function Inner() {
                       }
                     `}
                   >
-                    {/* Image container 크기 축소 */}
+                    {/* 이미지 컨테이너 */}
                     <div className="relative h-40 sm:h-44 md:h-48 overflow-hidden">
                       <Image
                         src={genre.image || "/placeholder.svg"}
@@ -248,7 +247,7 @@ function Inner() {
                       )}
                     </div>
 
-                    {/* 카드 콘텐츠 패딩/글자 크기 축소 */}
+                    {/* 카드 본문 */}
                     <div className="p-4 space-y-1.5">
                       <h3 className="font-bold text-lg text-card-foreground tracking-tight">{genre.name}</h3>
                       <p className="text-xs text-muted-foreground leading-relaxed">{genre.description}</p>
@@ -281,17 +280,17 @@ function Inner() {
               {saving ? (
                 <span className="flex items-center gap-3">
                   <div className="animate-spin rounded-full h-5 w-5 border-2 border-primary-foreground border-t-transparent" />
-                  저장 중...
+                  Saving...
                 </span>
               ) : editMode ? (
-                "변경 사항 저장"
+                "Save Changes"
               ) : (
-                "음악 여행 시작하기"
+                "Start Your Music Journey"
               )}
             </Button>
 
             {selected.length < 2 && (
-              <p className="text-sm text-muted-foreground mt-4 animate-pulse">최소 2개의 장르를 선택해주세요</p>
+              <p className="text-sm text-muted-foreground mt-4 animate-pulse">Please select at least 2 genres.</p>
             )}
           </div>
         </div>
@@ -299,21 +298,15 @@ function Inner() {
 
       <style jsx>{`
         @keyframes fadeInUp {
-          from {
-            opacity: 0;
-            transform: translateY(20px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
+          from { opacity: 0; transform: translateY(20px); }
+          to { opacity: 1; transform: translateY(0); }
         }
       `}</style>
     </div>
   )
 }
 
-// 페이지 컴포넌트: Suspense 경계로 감싸서 CSR bailout 오류 방지
+// 페이지 컴포넌트: Suspense 경계로 감싸서 CSR 오류 방지
 export default function OnboardingGenresPage() {
   return (
     <Suspense fallback={null}>

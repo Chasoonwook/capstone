@@ -58,13 +58,13 @@ export default function EditorClient() {
 
   // history 저장(없으면 생성) → diaries 업서트
   const saveHistoryAndDiary = useCallback(async (): Promise<number | null> => {
-    if (!photoId) { setErrorMsg("photoId가 없습니다."); return null }
-    if (!musicId) { setErrorMsg("musicId가 없습니다."); return null }
+    if (!photoId) { setErrorMsg("photoId is missing."); return null }
+    if (!musicId) { setErrorMsg("musicId is missing."); return null }
 
     setSaving(true); setErrorMsg(null)
     try {
       const me = await fetchMe()
-      if (!me?.id) { setErrorMsg("로그인이 필요합니다."); return null }
+      if (!me?.id) { setErrorMsg("Login required."); return null }
 
       // 1) history (스냅샷)
       const resHist = await fetch(`${API_BASE}/api/history`, {
@@ -78,10 +78,10 @@ export default function EditorClient() {
           selected_from: (selectedFromParam === "main" || selectedFromParam === "sub") ? selectedFromParam : null,
         }),
       })
-      if (!resHist.ok) throw new Error("history 저장 실패")
+      if (!resHist.ok) throw new Error("Failed to save history")
       const hist: HistoryRow = await resHist.json()
       const hid = hist?.history_id
-      if (!hid) throw new Error("history_id가 없습니다.")
+      if (!hid) throw new Error("Missing history_id.")
 
       // 2) diaries 업서트
       const resDia = await fetch(`${API_BASE}/api/diaries`, {
@@ -92,15 +92,15 @@ export default function EditorClient() {
           user_id: me.id,
           photo_id: Number(photoId),
           music_id: Number(musicId),
-          subject: "사진 저장",
-          content: "편집 없이 저장된 사진입니다.",
+          subject: "Save Photo",
+          content: "Saved without editing.",
         }),
       })
-      if (!resDia.ok) throw new Error("다이어리 저장 실패")
+      if (!resDia.ok) throw new Error("Failed to save diary")
 
       return hid
     } catch (e: any) {
-      setErrorMsg(e?.message || "저장 중 오류가 발생했습니다.")
+      setErrorMsg(e?.message || "An error occurred while saving.")
       return null
     } finally {
       setSaving(false)
@@ -133,17 +133,17 @@ export default function EditorClient() {
             onClick={handleCancel}
             disabled={saving}
             className="w-9 h-9 rounded-full hover:bg-muted flex items-center justify-center transition-colors disabled:opacity-50"
-            aria-label="뒤로가기"
+            aria-label="Back"
           >
             <ArrowLeft className="w-5 h-5 text-foreground" />
           </button>
-          <h1 className="text-lg font-semibold text-foreground">추억 저장하기</h1>
+          <h1 className="text-lg font-semibold text-foreground">Save Memory</h1>
         </div>
       </header>
 
       <main className="max-w-4xl mx-auto px-4 py-8">
         <div className="text-center mb-6">
-          <p className="text-muted-foreground text-sm">추억을 그대로 저장하거나 꾸며서 저장할 수 있어요</p>
+          <p className="text-muted-foreground text-sm">Save as-is or decorate before saving.</p>
         </div>
 
         <div className="bg-card rounded-2xl shadow-lg overflow-hidden mb-6 border border-border">
@@ -158,7 +158,7 @@ export default function EditorClient() {
                 priority
               />
             ) : (
-              <div className="p-12 text-muted-foreground text-sm">이미지를 불러오는 중…</div>
+              <div className="p-12 text-muted-foreground text-sm">Loading image…</div>
             )}
           </div>
         </div>
@@ -172,7 +172,7 @@ export default function EditorClient() {
         <div className="flex flex-col sm:flex-row gap-3 justify-center">
           <Button variant="outline" onClick={handleCancel} disabled={saving} className="sm:w-auto w-full bg-transparent">
             <ArrowLeft className="w-4 h-4 mr-2" />
-            돌아가기
+            Back
           </Button>
 
           <Button
@@ -182,12 +182,12 @@ export default function EditorClient() {
             className="sm:w-auto w-full border-primary/20 hover:bg-primary/5 bg-transparent"
           >
             <Save className="w-4 h-4 mr-2" />
-            {saving ? "저장 중…" : "바로 저장하기"}
+            {saving ? "Saving…" : "Save as is"}
           </Button>
 
           <Button onClick={handleGoEdit} disabled={saving} className="sm:w-auto w-full bg-primary hover:bg-primary/90">
             <Sparkles className="w-4 h-4 mr-2" />
-            꾸미기
+            Edit
           </Button>
         </div>
       </main>

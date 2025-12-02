@@ -29,7 +29,7 @@ export default function SignupPage() {
   const [isLoading, setIsLoading] = useState(false)
   const router = useRouter()
 
-  // 초기 로드 시 임시저장 복구 (비번은 저장/복구하지 않음)
+  // 초기 로드 시 임시저장 복구 처리
   useEffect(() => {
     try {
       const raw = localStorage.getItem(DRAFT_KEY)
@@ -47,7 +47,7 @@ export default function SignupPage() {
     } catch {}
   }, [])
 
-  // 입력 변경 시 임시저장 (300ms 디바운스)
+  // 입력 변경 시 임시저장 디바운스 처리
   const saveTimer = useRef<number | null>(null)
   const persistDraft = (nextState: {
     name: string
@@ -77,7 +77,7 @@ export default function SignupPage() {
     }, 300)
   }
 
-  // formData/동의 체크가 바뀔 때마다 임시저장
+  // formData 및 동의 체크 변경 시 임시저장 동기화 처리
   useEffect(() => {
     persistDraft({
       name: formData.name,
@@ -108,15 +108,15 @@ export default function SignupPage() {
     e.preventDefault()
 
     if (formData.password !== formData.confirmPassword) {
-      alert("비밀번호가 일치하지 않습니다.")
+      alert("Passwords do not match.")
       return
     }
     if (!agreeTerms || !agreePrivacy) {
-      alert("이용약관과 개인정보처리방침에 동의해주세요.")
+      alert("Please agree to the Terms of Service and Privacy Policy.")
       return
     }
     if (!/^010-\d{4}-\d{4}$/.test(formData.phone) || formData.phone.length !== 13) {
-      alert("올바른 전화번호를 입력하세요. (010-1234-5678)")
+      alert("Enter a valid phone number (010-1234-5678).")
       return
     }
 
@@ -129,7 +129,7 @@ export default function SignupPage() {
         body: JSON.stringify({
           name: formData.name.trim(),
           email: formData.email.trim(),
-          password: formData.password, // 비밀번호는 저장하지 않고 서버로만 전송
+          password: formData.password,
           gender: formData.gender || null,
           phone: formData.phone || null,
         }),
@@ -138,7 +138,7 @@ export default function SignupPage() {
       if (!res.ok) {
         const text = await res.text().catch(() => "")
         console.error("register failed:", res.status, text)
-        alert(text || `회원가입 실패 (status ${res.status})`)
+        alert(text || `Sign-up failed (status ${res.status}).`)
         return
       }
 
@@ -152,23 +152,23 @@ export default function SignupPage() {
       if (user?.email) localStorage.setItem("email", user.email)
       if (user?.name) localStorage.setItem("name", user.name)
 
-      // 성공 시 임시저장 삭제
+      // 성공 시 임시저장 삭제 처리
       localStorage.removeItem(DRAFT_KEY)
 
       document.cookie = `onboardingDone=0; path=/; max-age=31536000`
 
-      alert("회원가입이 완료되었습니다!")
+      alert("Sign-up completed!")
       router.replace("/onboarding/genres")
     } catch (err) {
       console.error("fetch error:", err)
-      alert("서버와 통신 중 오류가 발생했습니다.")
+      alert("An error occurred while communicating with the server.")
     } finally {
       setIsLoading(false)
     }
   }
 
   const handleSocialSignup = (provider: string) => {
-    console.log(`${provider} 회원가입`)
+    console.log(`${provider} sign up`)
   }
 
   return (
@@ -180,29 +180,29 @@ export default function SignupPage() {
             className="inline-flex items-center space-x-2 text-primary hover:opacity-80 transition-opacity"
           >
             <Music className="h-8 w-8" />
-            <span className="text-2xl font-bold text-balance">뮤직 추천 시스템</span>
+            <span className="text-2xl font-bold text-balance">Music Recommendation System</span>
           </Link>
         </div>
 
         <div className="bg-gradient-to-br from-primary/10 via-accent/5 to-primary/10 rounded-2xl p-8 shadow-lg border border-border/50">
           <div className="space-y-2 mb-6">
-            <h1 className="text-2xl font-bold text-center text-balance">회원가입</h1>
+            <h1 className="text-2xl font-bold text-center text-balance">Sign Up</h1>
             <p className="text-center text-muted-foreground text-pretty">
-              새 계정을 만들어 맞춤 음악 추천을 받아보세요
+              Create a new account to get personalized music recommendations.
             </p>
           </div>
 
           <div className="space-y-4">
             <form onSubmit={handleSignup} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="name">이름</Label>
+                <Label htmlFor="name">Name</Label>
                 <div className="relative">
                   <User className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
                   <Input
                     id="name"
                     name="name"
                     type="text"
-                    placeholder="이름을 입력하세요"
+                    placeholder="Enter your name"
                     value={formData.name}
                     onChange={handleInputChange}
                     className="pl-10"
@@ -212,7 +212,7 @@ export default function SignupPage() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="gender">성별</Label>
+                <Label htmlFor="gender">Gender</Label>
                 <select
                   id="gender"
                   name="gender"
@@ -221,21 +221,21 @@ export default function SignupPage() {
                   className="w-full px-3 py-2 border border-input bg-background rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-input"
                   required
                 >
-                  <option value="">성별을 선택하세요</option>
-                  <option value="남">남성</option>
-                  <option value="여">여성</option>
+                  <option value="">Select gender</option>
+                  <option value="남">Male</option>
+                  <option value="여">Female</option>
                 </select>
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="email">이메일</Label>
+                <Label htmlFor="email">Email</Label>
                 <div className="relative">
                   <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
                   <Input
                     id="email"
                     name="email"
                     type="email"
-                    placeholder="이메일을 입력하세요"
+                    placeholder="Enter your email"
                     value={formData.email}
                     onChange={handleInputChange}
                     className="pl-10"
@@ -245,7 +245,7 @@ export default function SignupPage() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="phone">전화번호</Label>
+                <Label htmlFor="phone">Phone Number</Label>
                 <div className="relative">
                   <svg
                     className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground h-4 w-4"
@@ -275,14 +275,14 @@ export default function SignupPage() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="password">비밀번호</Label>
+                <Label htmlFor="password">Password</Label>
                 <div className="relative">
                   <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
                   <Input
                     id="password"
                     name="password"
                     type={showPassword ? "text" : "password"}
-                    placeholder="비밀번호를 입력하세요"
+                    placeholder="Enter your password"
                     value={formData.password}
                     onChange={handleInputChange}
                     className="pl-10 pr-10"
@@ -299,14 +299,14 @@ export default function SignupPage() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="confirmPassword">비밀번호 확인</Label>
+                <Label htmlFor="confirmPassword">Confirm Password</Label>
                 <div className="relative">
                   <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
                   <Input
                     id="confirmPassword"
                     name="confirmPassword"
                     type={showConfirmPassword ? "text" : "password"}
-                    placeholder="비밀번호를 다시 입력하세요"
+                    placeholder="Re-enter your password"
                     value={formData.confirmPassword}
                     onChange={handleInputChange}
                     className="pl-10 pr-10"
@@ -336,9 +336,9 @@ export default function SignupPage() {
                       rel="noopener noreferrer"
                       className="text-primary hover:opacity-80 transition-opacity"
                     >
-                      이용약관
+                      Terms of Service
                     </Link>{" "}
-                    에 동의합니다 (필수)
+                    I agree (required)
                   </Label>
                 </div>
                 <div className="flex items-center space-x-2">
@@ -354,9 +354,9 @@ export default function SignupPage() {
                       rel="noopener noreferrer"
                       className="text-primary hover:opacity-80 transition-opacity"
                     >
-                      개인정보처리방침
+                      Privacy Policy
                     </Link>{" "}
-                    에 동의합니다 (필수)
+                    I agree (required)
                   </Label>
                 </div>
               </div>
@@ -366,11 +366,11 @@ export default function SignupPage() {
                 className="w-full bg-primary text-primary-foreground hover:opacity-90 transition-opacity rounded-lg"
                 disabled={isLoading}
               >
-                {isLoading ? "가입 중..." : "회원가입"}
+                {isLoading ? "Signing up..." : "Sign Up"}
               </Button>
 
               <Button variant="outline" className="w-full mt-2" asChild>
-                <Link href="/login">로그인으로 돌아가기</Link>
+                <Link href="/login">Back to Login</Link>
               </Button>
             </form>
           </div>

@@ -17,26 +17,26 @@ import { API_BASE } from "@/lib/api";
 /** 트랙 모델 */
 export type Track = {
   id: string | number;
-  db_music_id?: number | null; // 뮤직아이디
+  db_music_id?: number | null; // 뮤직 아이디
   title: string;
   artist: string;
-  audioUrl?: string | null;           // 30초 미리듣기 (Spotify preview / Deezer / iTunes)
-  spotify_uri?: string | null;        // spotify:track:<id>
+  audioUrl?: string | null;           // 30초 미리듣기 (Spotify / Deezer / iTunes)
+  spotify_uri?: string | null;        // Spotify URI
   coverUrl?: string | null;
-  duration?: number | null;           // 초 단위 (미리듣기일 때는 보통 null)
-  // ✅ "diary" 추가 (+ 검색/추천에서도 쓸 수 있게 search/recommend 확장)
+  duration?: number | null;           // 초 단위 길이
+  // 트랙 선택 출처
   selected_from?: "main" | "sub" | "preferred" | "search" | "recommend" | "diary" | null;
-  spotify_track_id?: string | null;   // 순수 ID만
+  spotify_track_id?: string | null;   // 순수 Spotify ID
 };
 
 export type PlayerState = {
   queue: Track[];
-  index: number;                      // 현재 인덱스
-  curMs: number;                      // 현재 재생 위치(ms)
-  durMs: number;                      // 전체 길이(ms)
+  index: number;                      // 현재 인덱스
+  curMs: number;                      // 현재 재생 위치(ms)
+  durMs: number;                      // 전체 길이(ms)
   currentTrack: Track | null;
   playbackSource: "preview" | "spotify" | null;
-  queueKey?: string | null;           // 큐 식별용 키 (선택적)
+  queueKey?: string | null;           // 큐 식별 키 (선택적)
 };
 
 type Ctx = {
@@ -58,7 +58,7 @@ type Ctx = {
 const PlayerCtx = createContext<Ctx | null>(null);
 
 /* =======================
-   공통 유틸 (검색 중복/실패 캐시/스로틀)
+   공통 유틸 (검색 중복 방지/실패 캐시/스로틀링)
    ======================= */
 const inflightMap = new Map<string, Promise<Track>>();
 const failCache = new Map<string, number>();
@@ -78,17 +78,16 @@ async function safeFetchJson(url: string, init?: RequestInit) {
 }
 
 /**
- * 주어진 Track을 기반으로 재생 가능한 소스를 해결한다.
+ * 주어진 Track을 기반으로 재생 가능한 소스 해결
  * 우선순위:
  * 1) Spotify: id/uri 보강 (전체 재생 가능)
  * 2) 미리듣기: Spotify preview → Deezer preview → iTunes preview
- * - 백엔드에 /api/spotify/search, /api/deezer/search, /api/itunes/search 가 있다면 활용.
- * - 없으면 가능한 것만 반영.
+ * - 백엔드 API 검색 활용
  */
 async function resolvePlayableSource(t: Track): Promise<Track> {
   if (!t || (!t.title && !t.spotify_track_id && !t.spotify_uri)) return t;
 
-  // 이미 결정된 정보가 풍부하면 그대로 반환
+  // 이미 결정된 정보가 풍부하면 반환
   if (t.spotify_uri || t.spotify_track_id || t.audioUrl) return t;
 
   const key = `${t.title}|${t.artist ?? ""}`.trim().toLowerCase();
@@ -114,7 +113,7 @@ async function resolvePlayableSource(t: Track): Promise<Track> {
 
     let out: Track = { ...t };
 
-    // 1) Spotify 검색: id/uri + preview_url + cover
+    // 1) Spotify 검색: ID/URI, 미리듣기 URL, 커버 획득
     {
       const data = await safeFetchJson(`${API_BASE}/api/spotify/search?${qs.toString()}`, {
         credentials: "include",
@@ -135,7 +134,7 @@ async function resolvePlayableSource(t: Track): Promise<Track> {
       }
     }
 
-    // 2) Deezer 검색: 30초 미리듣기 preview, cover
+    // 2) Deezer 검색: 30초 미리듣기, 커버 획득
     if (!out.audioUrl) {
       const data = await safeFetchJson(`${API_BASE}/api/deezer/search?${qs.toString()}`, {
         credentials: "include",
@@ -157,7 +156,7 @@ async function resolvePlayableSource(t: Track): Promise<Track> {
       }
     }
 
-    // 3) iTunes 검색: 30초 미리듣기 previewUrl, cover
+    // 3) iTunes 검색: 30초 미리듣기, 커버 획득
     if (!out.audioUrl) {
       const data = await safeFetchJson(`${API_BASE}/api/itunes/search?${qs.toString()}`, {
         credentials: "include",
@@ -219,6 +218,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const suppressAutoPlayRef = useRef(false);
 
+  // HTML Audio 엘리먼트 초기화 및 획득
   const ensureAudio = useCallback(() => {
     if (!audioRef.current) {
       const a = new Audio();
@@ -245,7 +245,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     return audioRef.current!;
   }, [volume, state.playbackSource]);
 
-  // Spotify SDK 상태 → PlayerState 반영
+  // Spotify SDK 상태를 PlayerState에 동기화
   useEffect(() => {
     if (isSpotifyConnected && state.playbackSource === "spotify") {
       setState((s) => ({
@@ -267,13 +267,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
+      // 같은 곡 재생 중이고, 처음부터 재생 요청이 아니라면 중단
       if (
-        state.currentTrack?.id === baseTrack.id && // 현재 재생 중인 트랙 ID와 같고
-        isPlaying && // 현재 '재생 중' 상태이며
-        !startFromBeginning // 처음부터 다시 재생하는 경우가 아니라면
+        state.currentTrack?.id === baseTrack.id &&
+        isPlaying &&
+        !startFromBeginning
       ) {
         console.log("[PlayerContext] Play cancelled: Already playing the same track.");
-        return; // 함수 실행을 여기서 중단하여 불필요한 API 호출 방지
+        return;
       }
 
       // 이전 소스 정지
@@ -289,10 +290,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         console.error("Error pausing previous track:", e);
       }
 
-      // 🔎 소스 해상(Spotify/Preview) 정보 보강
+      // 소스 해상(Spotify/Preview) 정보 보강
       const targetTrack = await resolvePlayableSource(baseTrack);
 
-      // ✅ 정책: Spotify 로그인 연결 시엔 가능하면 무조건 Spotify 전체듣기 우선
+      // 정책: Spotify 연결 시 Spotify 전체듣기 우선
       const hasSpotify = !!(targetTrack.spotify_uri || targetTrack.spotify_track_id);
       const preferSpotify = isSpotifyConnected && hasSpotify;
 
@@ -301,10 +302,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         preferSpotify
           ? "spotify"
           : targetTrack.audioUrl
-          ? "preview"
-          : null;
+            ? "preview"
+            : null;
 
-      // 상태 먼저 반영
+      // 상태 업데이트
       setState((s) => ({
         ...s,
         index: targetIndex,
@@ -379,6 +380,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       if (!playInitiated) {
         console.warn("No playable source initiated for track:", targetTrack.title);
         setIsPlaying(false);
+        // 재생 실패 시 다음 곡으로 자동 건너뛰기
         setState((s) => {
           const nextIndex = s.index + 1;
           if (nextIndex < s.queue.length) {
@@ -397,13 +399,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       state.queue,
       state.index,
       state.playbackSource,
-      //state.curMs,
       isSpotifyConnected,
       spotifyPlayer,
       ensureAudio,
       setIsPlaying,
       state.currentTrack,
       isPlaying,
+      state.curMs,
     ]
   );
 
@@ -451,7 +453,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         setIsPlaying(false);
       }
     } else if (state.currentTrack) {
-      // 안전 폴백
+      // 안전 폴백: 현재 곡 다시 재생
       suppressAutoPlayRef.current = true;
       await play(state.currentTrack, state.index, false);
       suppressAutoPlayRef.current = false;
@@ -461,7 +463,6 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     spotifyPlayer,
     state.currentTrack,
     state.index,
-    //state.curMs,
     play,
   ]);
 
@@ -496,7 +497,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     const currentIdx = state.index;
     const currentQueue = state.queue;
 
-    // 3초 이상 재생했거나 첫 곡이면 현재 곡 처음으로
+    // 3초 이상 재생했거나 첫 곡이면 현재 곡 처음으로 이동
     if (currentMs > 3000 || currentIdx === 0) {
       seek(0);
       if (!isPlaying) {
@@ -523,7 +524,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       if (typeof window !== "undefined") {
         try {
           localStorage.setItem("player_volume", String(vv));
-        } catch {}
+        } catch { }
       }
 
       if (audioRef.current) audioRef.current.volume = vv;
@@ -535,7 +536,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   );
 
   const setQueueAndPlay = useCallback(
-    //queueKey 파라미터를 받도록 수정
+    // 큐 설정 및 재생 시작
     (tracks: Track[], startIndex = 0, queueKey: string | null = null) => {
       const safeIndex = Math.max(0, Math.min(startIndex, tracks.length - 1));
       const firstTrack = tracks[safeIndex] || null;
@@ -562,7 +563,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     [isPlaying, pause, play]
   );
 
-  // 미리듣기 종료 → 다음 곡
+  // 미리듣기 종료 시 다음 곡 재생
   useEffect(() => {
     const a = ensureAudio();
     const handleEnded = () => {

@@ -16,7 +16,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="ko">
       <head>
-        {/* Spotify CDN preconnect 설정 유지 */}
+        {/* Spotify CDN에 대한 사전 연결: 초기 리소스 로딩 성능 개선 */}
         <link rel="preconnect" href="https://i.scdn.co" crossOrigin="" />
         <link rel="preconnect" href="https://p.scdn.co" crossOrigin="" />
         <link rel="preconnect" href="https://mosaic.scdn.co" crossOrigin="" />
@@ -26,8 +26,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
 
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
-        {/* ✅ SpotifyStatusProvider가 앱 전체를 감싸고,
-            내부에 ClientLayout이 children을 관리하도록 */}
+        {/* 전역 Spotify 재생 상태 관리 */}
         <SpotifyStatusProvider>
           <ClientLayout>{children}</ClientLayout>
         </SpotifyStatusProvider>

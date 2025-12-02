@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation"
 import { API_BASE } from "@/lib/api"
 import { BookOpen } from "lucide-react"
 
-/* 이미지 URL 빌더 + 폴백 (원본 그대로) */
+/* 이미지 URL 빌더 + 폴백 주석 유지 */
 const buildPhotoSrc = (photoId: string | number) => {
   const id = encodeURIComponent(String(photoId))
   return {
@@ -35,7 +35,7 @@ function extractDate(item: any): Date | null {
 const fmtDateBadge = (d: Date) =>
   d.toLocaleDateString("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" })
 
-/* ───────────────── HistoryStrip (원본 그대로) ───────────────── */
+/* ───────────────── HistoryStrip 컴포넌트 ───────────────── */
 export default function HistoryStrip({
   user,
   items,
@@ -221,8 +221,8 @@ export default function HistoryStrip({
   if (error) {
     return (
       <section className="mb-6">
-        <h2 className="text-sm font-semibold text-foreground mb-3 px-4">최근 감정 분석</h2>
-        <div className="text-destructive text-xs px-4">히스토리를 불러오지 못했습니다</div>
+        <h2 className="text-sm font-semibold text-foreground mb-3 px-4">Recent Emotion Analysis</h2>
+        <div className="text-destructive text-xs px-4">Failed to load history</div>
       </section>
     )
   }
@@ -231,8 +231,8 @@ export default function HistoryStrip({
   if (list.length === 0) {
     return (
       <section className="mb-6">
-        <h2 className="text-sm font-semibold text-foreground mb-3 px-4">최근 감정 분석</h2>
-        <div className="text-muted-foreground text-xs px-4">아직 분석된 사진이 없어요</div>
+        <h2 className="text-sm font-semibold text-foreground mb-3 px-4">Recent Emotion Analysis</h2>
+        <div className="text-muted-foreground text-xs px-4">No analyzed photos yet</div>
       </section>
     )
   }
@@ -240,7 +240,7 @@ export default function HistoryStrip({
   return (
     <section className="mb-8">
       <div className="flex items-center justify-between mb-4 px-4">
-        <h2 className="text-sm font-semibold text-foreground">최근 감정 분석</h2>
+        <h2 className="text-sm font-semibold text-foreground">Recent Emotion Analysis</h2>
       </div>
 
       <div
@@ -263,7 +263,7 @@ export default function HistoryStrip({
           {list.map((it, idx) => {
             const pid = it.photo_id ?? it.photoId ?? it.id
             const { primary, fallback } = buildPhotoSrc(pid)
-            const title = it.title_snapshot ?? it.title ?? "제목 없음"
+            const title = it.title_snapshot ?? it.title ?? "Untitled"
             const artist = it.artist_snapshot ?? it.artist ?? "Various"
             const dateObj = extractDate(it)
 
@@ -330,7 +330,7 @@ export default function HistoryStrip({
                         onClick={(e) => {
                           e.stopPropagation()
                           const pid = it.photo_id ?? it.photoId ?? it.id
-                          const title = encodeURIComponent(it.title_snapshot ?? it.title ?? "제목 없음")
+                          const title = encodeURIComponent(it.title_snapshot ?? it.title ?? "Untitled")
                           const artist = encodeURIComponent(it.artist_snapshot ?? it.artist ?? "Various")
                           const dateObj = extractDate(it)
                           const date = dateObj ? encodeURIComponent(dateObj.toISOString()) : ""
@@ -340,7 +340,7 @@ export default function HistoryStrip({
                         className="w-full h-11 rounded-xl bg-gradient-to-r from-primary to-primary/90 text-primary-foreground text-sm font-semibold hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-md"
                       >
                         <BookOpen className="w-4 h-4" />
-                        그림일기 쓰기
+                        Write Diary
                       </button>
                       <button
                         type="button"
@@ -350,7 +350,7 @@ export default function HistoryStrip({
                         }}
                         className="w-full h-9 rounded-lg bg-muted/50 hover:bg-muted text-muted-foreground text-xs font-medium transition-colors"
                       >
-                        취소
+                        Cancel
                       </button>
                     </div>
                   )}

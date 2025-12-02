@@ -14,7 +14,7 @@ type Props = {
   contextMainMood: string | null;
   contextSubMood: string | null;
 
-  // player
+  // 플레이어 상태/이벤트
   isPlaying: boolean;
   busy: boolean;
   currentTime: number;
@@ -25,22 +25,22 @@ type Props = {
   onNext: () => void;
   onPrev: () => void;
 
-  // list
+  // 추천 목록 관련
   uploadedImage: string | null;
   recommendationsCount: number;
   RecommendationList: React.ReactNode;
 
-  // refresh
+  // 새로고침 상태/이벤트
   isRefreshing: boolean;
   onRefresh: () => void;
 
-  // feedback
+  // 피드백
   feedback: Record<string | number, 1 | -1 | 0>;
   onFeedback: (val: 1 | -1) => void;
 
-  // save (버튼은 기본 숨김, 필요시 표시용)
+  // 저장 및 편집 (버튼은 기본 숨김)
   onSaveAndEdit: () => void;
-  showSaveButtonInPane?: boolean; // ← 기본 false
+  showSaveButtonInPane?: boolean; // 기본값 false
 };
 
 export default function NowPlayingPane({
@@ -111,7 +111,7 @@ export default function NowPlayingPane({
           onPrev={onPrev}
         />
 
-        {/* 액션: Like/Dislike (저장 버튼은 필요 시만 표시) */}
+        {/* 액션: 좋아요/싫어요 (저장 버튼은 필요 시만 표시) */}
         {currentSong && (
           <div className="mt-4 flex items-center gap-3">
             <Button
@@ -154,7 +154,7 @@ export default function NowPlayingPane({
       {/* 추천 목록 */}
       <div className="flex-1 bg-black/30 backdrop-blur-sm rounded-2xl p-4 max-h-80">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-white font-bold text-lg">추천 음악</h2>
+          <h2 className="text-white font-bold text-lg">Recommended</h2>
           <Button
             variant="ghost"
             size="sm"
@@ -164,7 +164,7 @@ export default function NowPlayingPane({
           >
             <RotateCcw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
             <span className="ml-2 text-xs">
-              {isRefreshing ? "새로고침 중…" : "새로고침"}
+              {isRefreshing ? "Refreshing…" : "Refresh"}
             </span>
           </Button>
         </div>
@@ -173,7 +173,7 @@ export default function NowPlayingPane({
           {recommendationsCount > 0 ? (
             RecommendationList
           ) : (
-            <div className="text-center text-slate-400 py-8">추천 음악이 없습니다.</div>
+            <div className="text-center text-slate-400 py-8">No recommendations yet.</div>
           )}
         </div>
       </div>

@@ -51,7 +51,7 @@ function getDayChange(it: RankingItem): number | null {
   return it.rank_change ?? null
 }
 
-/** compact=true 면 모바일용: 아이콘(+숫자만)으로 아주 짧게 표기 */
+/** compact 속성에 따른 모바일용 순위 변동 아이콘 표시 */
 function RankChange({
   change,
   isNew,
@@ -77,7 +77,7 @@ function RankChange({
     ) : (
       <div className="flex items-center gap-1 text-sm text-muted-foreground">
         <Minus className="w-4 h-4" />
-        <span>변동 없음</span>
+        <span>No change</span>
       </div>
     )
   }
@@ -94,7 +94,7 @@ function RankChange({
   return (
     <div className={`flex items-center gap-1 text-sm font-semibold ${up ? "text-blue-500" : "text-red-500"}`}>
       {up ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
-      <span className="tabular-nums">{abs}위 {up ? "상승" : "하락"}</span>
+      <span className="tabular-nums">{abs} {up ? "Up" : "Down"}</span>
     </div>
   )
 }
@@ -153,8 +153,8 @@ export default function RankingsList() {
     <section className="px-4 py-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="text-2xl font-bold mb-1">인기 차트</h2>
-          <p className="text-sm text-muted-foreground">함께 만들어가는 추억의 음악 TOP 100</p>
+          <h2 className="text-2xl font-bold mb-1">Popular Charts</h2>
+          <p className="text-sm text-muted-foreground">TOP 100 memorable songs we create together</p>
         </div>
 
         <div className="flex items-center gap-3">
@@ -167,7 +167,7 @@ export default function RankingsList() {
               }`}
               onClick={() => setPeriod("weekly")}
             >
-              주간
+              Weekly
             </button>
             <button
               className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${
@@ -177,17 +177,17 @@ export default function RankingsList() {
               }`}
               onClick={() => setPeriod("monthly")}
             >
-              월간
+              Monthly
             </button>
           </div>
         </div>
       </div>
 
-      {loading && <div className="text-sm text-muted-foreground px-1 py-12 text-center">차트를 불러오는 중…</div>}
-      {error && <div className="text-sm text-red-500 px-1 py-12 text-center">불러오기 실패: {error}</div>}
+      {loading && <div className="text-sm text-muted-foreground px-1 py-12 text-center">Loading charts…</div>}
+      {error && <div className="text-sm text-red-500 px-1 py-12 text-center">Failed to load: {error}</div>}
 
       {!loading && !error && allItems.length === 0 && (
-        <div className="text-sm text-muted-foreground px-1 py-12 text-center">집계된 차트가 없습니다.</div>
+        <div className="text-sm text-muted-foreground px-1 py-12 text-center">No charts compiled.</div>
       )}
 
       {!loading && !error && allItems.length > 0 && (
@@ -195,7 +195,7 @@ export default function RankingsList() {
           <div className="flex items-center justify-between mb-4">
             <div className="text-sm text-muted-foreground">
               {currentPage * ITEMS_PER_PAGE + 1} - {Math.min((currentPage + 1) * ITEMS_PER_PAGE, allItems.length)} /{" "}
-              {allItems.length}곡
+              {allItems.length} songs
             </div>
             <div className="flex items-center gap-2">
               <Button
@@ -215,7 +215,7 @@ export default function RankingsList() {
                     className={`w-2 h-2 rounded-full transition-all ${
                       idx === currentPage ? "bg-primary w-6" : "bg-muted-foreground/30 hover:bg-muted-foreground/50"
                     }`}
-                    aria-label={`${idx + 1}페이지로 이동`}
+                    aria-label={`Go to page ${idx + 1}`}
                   />
                 ))}
               </div>
@@ -253,9 +253,9 @@ export default function RankingsList() {
                   <li
                     key={`${period}-${it.rank}-${it.music_id}`}
                     className="group flex items-center gap-3 sm:gap-4 rounded-xl px-3 py-2 hover:bg-accent/50 transition-all"
-                    /* 중요: 한 줄 유지 */
+                    /* 중요: 리스트 아이템의 레이아웃 유지 */
                   >
-                    {/* 랭크 번호 (축소) */}
+                    {/* 순위 번호 표시 영역 */}
                     <div className="flex items-center justify-center w-8 sm:w-12 shrink-0">
                       <div
                         className={`text-base sm:text-xl tabular-nums font-bold ${
@@ -266,7 +266,7 @@ export default function RankingsList() {
                       </div>
                     </div>
 
-                    {/* 앨범 아트 (48/64) */}
+                    {/* 앨범 커버 이미지 및 크기 설정 */}
                     <div className="relative w-12 h-12 sm:w-16 sm:h-16 rounded-lg overflow-hidden bg-muted shrink-0 shadow-md">
                       {it.album_image_url ? (
                         <Image
@@ -286,26 +286,26 @@ export default function RankingsList() {
                           size="icon"
                           variant="ghost"
                           className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-white/90 hover:bg-white text-black hover:scale-110 transition-transform"
-                          aria-label="미리듣기"
+                          aria-label="Preview"
                         >
                           <Play className="w-4 h-4 sm:w-5 sm:h-5 fill-current" />
                         </Button>
                       </div>
                     </div>
 
-                    {/* 제목/가수 (가운데, 말줄임) */}
+                    {/* 곡 제목 및 아티스트 정보 표시 */}
                     <div className="flex-1 min-w-0">
                       <h3 className="text-sm sm:text-base font-semibold truncate group-hover:text-primary transition-colors">
-                        {it.music_title || "제목 없음"}
+                        {it.music_title || "No Title"}
                       </h3>
                       <div className="flex items-center gap-2 text-xs sm:text-sm text-muted-foreground">
-                        <span className="truncate">{it.music_artist || "아티스트"}</span>
+                        <span className="truncate">{it.music_artist || "Artist"}</span>
                       </div>
                     </div>
 
-                    {/* 오른쪽: 순위 변동 + 버튼 (항상 한 줄, 고정폭/축소) */}
+                    {/* 우측 영역: 순위 변동 정보와 액션 버튼 그룹 */}
                     <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-                      {/* 모바일: 초컴팩트 변동, 데스크톱: 일반 */}
+                      {/* 반응형 순위 변동 컴포넌트 출력 관리 */}
                       <div className="flex items-center justify-center w-[54px] sm:w-28">
                         <div className="sm:hidden">
                           <RankChange change={getDayChange(it)} isNew={it.day_is_new} compact />
@@ -320,7 +320,7 @@ export default function RankingsList() {
                           size="icon"
                           variant="ghost"
                           className="w-8 h-8 sm:w-9 sm:h-9 hover:text-red-500"
-                          aria-label="좋아요"
+                          aria-label="Like"
                         >
                           <Heart className="w-4 h-4" />
                         </Button>
@@ -328,7 +328,7 @@ export default function RankingsList() {
                           size="icon"
                           variant="ghost"
                           className="w-8 h-8 sm:w-9 sm:h-9"
-                          aria-label="더 보기"
+                          aria-label="More options"
                         >
                           <MoreVertical className="w-4 h-4" />
                         </Button>

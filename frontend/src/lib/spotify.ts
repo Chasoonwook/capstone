@@ -1,15 +1,10 @@
 // src/lib/spotify.ts
-// 이 파일은 "서버 전용 helpers(쿠키 읽기/쓰기)"와
-// "클라이언트 전용 helpers(/api/spotify/me 상태 조회)"를 함께 담습니다.
-// - 서버 전용: next/headers 의 cookies() 사용 (클라이언트에서 호출 금지)
-// - 클라이언트 전용: window/fetch 사용 (서버에서 호출 금지)
-
 import { cookies } from "next/headers"
 
 /* ------------------------------------------------------------------ */
-/* 서버 전용: 쿠키 헬퍼 (Next.js 14.2+/15)                            */
+/* 서버 전용: 쿠키 유틸리티                                          */
 /* ------------------------------------------------------------------ */
-/** cookies()가 비동기이므로 반드시 await */
+/** cookies() 비동기 처리 */
 export async function readCookie(name: string): Promise<string | null> {
   const store = await cookies()
   return store.get(name)?.value ?? null
@@ -74,6 +69,7 @@ export async function exchangeCodeForToken(code: string, verifier: string): Prom
     code_verifier: verifier,
   })
 
+  // 토큰 교환 요청
   const res = await fetch("https://accounts.spotify.com/api/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -95,7 +91,7 @@ export type ExchangeResponse = {
 
 export async function deleteCookie(name: string): Promise<void> {
   const store = await cookies()
-  // expires 과거로 설정하여 삭제
+  // 쿠키 만료일 과거 설정으로 삭제
   store.set({
     name,
     value: "",
@@ -108,7 +104,7 @@ export async function deleteCookie(name: string): Promise<void> {
 }
 
 /* ------------------------------------------------------------------ */
-/* 서버 전용: 도메인 로직 헬퍼                                         */
+/* 서버 전용: 도메인 로직 헬퍼                                         */
 /* ------------------------------------------------------------------ */
 const ACCESS_KEY = "sp_access"
 const REFRESH_KEY = "sp_refresh"
@@ -124,14 +120,14 @@ export async function getRefreshCookie(): Promise<string | null> {
 /** 액세스/리프레시 토큰 쓰기 */
 export async function setAccessCookie(
   token: string,
-  expiresInSec?: number, // Spotify가 주는 expires_in(sec)
+  expiresInSec?: number, // Spotify 토큰 만료 시간 (초)
 ) {
-  // 만료 60초 전에 재갱신 여유
+  // 만료 60초 전 재갱신 여유 시간 설정
   const maxAge = typeof expiresInSec === "number" ? Math.max(0, expiresInSec - 60) : undefined
   await writeCookie(ACCESS_KEY, token, { maxAge })
 }
 export async function setRefreshCookie(token: string) {
-  // 리프레시 토큰은 길게(예: 30일) — 필요에 맞게 조정
+  // 리프레시 토큰 장기 보존 (30일)
   await writeCookie(REFRESH_KEY, token, { maxAge: 60 * 60 * 24 * 30 })
 }
 export async function clearSpotifyCookies() {
@@ -139,7 +135,7 @@ export async function clearSpotifyCookies() {
   await deleteCookie(REFRESH_KEY)
 }
 
-/** ---------- Spotify 토큰 갱신 API 호출 (서버 전용) ---------- */
+/** Spotify 토큰 갱신 API 호출 (서버 전용) */
 type RefreshResponse = {
   access_token: string
   token_type: string
@@ -151,13 +147,14 @@ export async function refreshSpotifyToken(refreshToken: string) {
   const clientId = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID || process.env.SPOTIFY_CLIENT_ID
   const clientSecret = process.env.SPOTIFY_CLIENT_SECRET
 
-  if (!clientId || !clientSecret) throw new Error("Spotify client env vars are missing.")
+  if (!clientId || !clientSecret) throw new Error("Spotify client environment variables are missing.")
 
   const body = new URLSearchParams({
     grant_type: "refresh_token",
     refresh_token: refreshToken,
   })
 
+  // 토큰 갱신 요청
   const res = await fetch("https://accounts.spotify.com/api/token", {
     method: "POST",
     headers: {
@@ -175,31 +172,32 @@ export async function refreshSpotifyToken(refreshToken: string) {
 }
 
 /* ------------------------------------------------------------------ */
-/* 클라이언트 전용: /api/spotify/me 상태 조회 (60초 캐시 + 중복 합치기) */
+/* 클라이언트 전용: /api/spotify/me 상태 조회 (캐시 로직 포함)            */
 /* ------------------------------------------------------------------ */
-// 이 부분은 브라우저에서만 호출하세요. (서버 렌더링에서 호출 금지)
-let _spLast = 0
-let _spCache: any = null
-let _spInflight: Promise<any> | null = null
+let _spLast = 0 // 마지막 캐시 시간
+let _spCache: any = null // 캐시된 데이터
+let _spInflight: Promise<any> | null = null // 진행 중인 요청
 
 /**
- * 현재 사용자 Spotify 연결 상태를 조회합니다.
- * - 같은 탭에서 60초 동안 캐시됩니다.
- * - 동시에 여러 컴포넌트가 호출해도 한 번만 네트워크 요청이 나갑니다.
+ * 현재 사용자 Spotify 연결 상태 조회
+ * - 60초 캐시 및 중복 요청 통합 처리
  */
 export async function getSpotifyStatus() {
+  // SSR 환경에서 호출 방지
   if (typeof window === "undefined") {
-    // SSR 중에 이 함수를 잘못 호출하면 네트워크를 치지 않도록 방어
     return { connected: false }
   }
 
   const now = Date.now()
+  // 캐시 유효성 검사 (60초)
   if (_spCache && now - _spLast < 60_000) return _spCache
+  // 진행 중인 요청 반환
   if (_spInflight) return _spInflight
 
+  // 신규 요청 시작
   _spInflight = fetch("/api/spotify/me", { credentials: "include" })
     .then(async (r) => {
-      if (!r.ok) throw new Error("status " + r.status)
+      if (!r.ok) throw new Error("Status " + r.status)
       const j = await r.json()
       _spCache = j
       _spLast = Date.now()

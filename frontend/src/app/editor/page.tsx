@@ -6,7 +6,7 @@ export default function EditorPage() {
     <Suspense
       fallback={
         <div className="min-h-screen bg-background flex items-center justify-center">
-          <div className="text-muted-foreground">로딩 중...</div>
+          <div className="text-muted-foreground">Loading…</div>
         </div>
       }
     >

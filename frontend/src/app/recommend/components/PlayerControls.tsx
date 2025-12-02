@@ -26,7 +26,7 @@ export default function PlayerControls({
 }: Props) {
   return (
     <div className="w-full max-w-md">
-      {/* seek bar */}
+      {/* 탐색 막대 */}
       <input
         type="range"
         min={0}
@@ -35,7 +35,7 @@ export default function PlayerControls({
         onChange={(e) => onSeek(Number(e.target.value))}
         className="w-full accent-purple-500 mb-4"
       />
-      {/* buttons */}
+      {/* 버튼 영역 */}
       <div className="flex items-center justify-center space-x-6">
         <Button
           type="button"

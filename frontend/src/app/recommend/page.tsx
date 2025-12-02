@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 export default function RecommendPage() {
   return (
-    <Suspense fallback={<div className="p-6 text-white">로딩중…</div>}>
+    <Suspense fallback={<div className="p-6 text-white">Loading…</div>}>
       <RecommendClient />
     </Suspense>
   );

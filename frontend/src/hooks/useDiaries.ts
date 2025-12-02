@@ -6,14 +6,14 @@ import { API_BASE } from "@/lib/api";
 import type { Diary } from "@/types/diary";
 
 /**
- * Diaries 목록을 불러오는 훅
- * - 백엔드: GET /api/diaries?user_id=...&limit=...&offset?=...
- * - 응답: 배열([]) 또는 { rows: Diary[], count?, limit?, offset? }
+ * Diaries 목록 불러오기 훅
+ * 백엔드 API: GET /api/diaries?user_id=...&limit=...&offset?=...
+ * 응답 형태: 배열([]) 또는 { rows: Diary[], count?, limit?, offset? }
  */
 type UseDiariesOptions = {
   limit?: number;
   offset?: number;
-  enabled?: boolean; // 기본값 true. 로그인 전에는 false로 둘 수 있음.
+  enabled?: boolean; // 활성화 여부 (기본값 true)
 };
 
 type UseDiariesResult = {
@@ -21,7 +21,7 @@ type UseDiariesResult = {
   loading: boolean;
   error: string | null;
   meta: {
-    count: number;   // 서버가 count를 안 줄 때는 rows.length로 대체
+    count: number;   // 전체 항목 수
     limit: number;
     offset: number;
     page: number;
@@ -44,11 +44,11 @@ export function useDiaries(
   const [diaries, setDiaries] = useState<Diary[] | undefined>(undefined);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  const abortRef = useRef<AbortController | null>(null); // 진행 중인 요청 중단 컨트롤러
 
   const offset = useMemo(() => page * limit, [page, limit]);
 
-  // user_id를 숫자로 보정(문자열/NaN 방지)
+  // user_id를 숫자로 보정 (문자열/NaN 방지)
   const numericUserId = useMemo(() => {
     if (userId === null || userId === undefined) return null;
     const n = Number(userId);
@@ -56,6 +56,7 @@ export function useDiaries(
   }, [userId]);
 
   const fetchDiaries = useCallback(async () => {
+    // 비활성화 상태 또는 사용자 ID가 없을 경우 초기 상태로 복귀
     if (!enabled || numericUserId == null) {
       setDiaries([]);
       setLoading(false);
@@ -63,6 +64,7 @@ export function useDiaries(
       return;
     }
 
+    // 이전 요청 취소
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -71,7 +73,7 @@ export function useDiaries(
       setLoading(true);
       setError(null);
 
-      // 백엔드가 offset을 무시해도 무해하므로 같이 전달
+      // API URL 구성
       const url =
         `${API_BASE}/api/diaries` +
         `?user_id=${numericUserId}` +
@@ -92,17 +94,19 @@ export function useDiaries(
 
       const data = await resp.json();
 
-      // 배열 또는 {rows: []} 모두 지원
+      // 배열 또는 {rows: []} 형태 모두 지원
       const rows: Diary[] = Array.isArray(data)
         ? data
         : Array.isArray(data?.rows)
-        ? data.rows
-        : [];
+          ? data.rows
+          : [];
 
       setDiaries(rows);
     } catch (err: any) {
+      // 요청 취소는 에러로 간주하지 않음
       if (err?.name === "AbortError") return;
-      console.error("[useDiaries] Error:", err);
+
+      console.error("[useDiaries] Fetch Error:", err);
       setError(err instanceof Error ? err.message : "Failed to load diaries");
       setDiaries([]);
     } finally {
@@ -112,22 +116,22 @@ export function useDiaries(
 
   useEffect(() => {
     fetchDiaries();
-    return () => abortRef.current?.abort();
+    return () => abortRef.current?.abort(); // 언마운트 시 요청 취소
   }, [fetchDiaries]);
 
   const reload = useCallback(() => {
-    fetchDiaries();
+    fetchDiaries(); // 데이터 재로딩
   }, [fetchDiaries]);
 
   const meta = useMemo(() => {
     if (!enabled || numericUserId == null) return null;
     return {
-      count: diaries?.length ?? 0, // 서버가 count를 주더라도 길이와 큰 차이 없음
+      count: diaries?.length ?? 0, // 현재 로드된 다이어리 개수
       limit,
       offset,
       page,
     };
   }, [enabled, numericUserId, diaries, limit, offset, page]);
 
-  return { diaries, loading, error, meta, setPage, reload };
+  return { diaries, loading, error, meta, setPage, reload }; // 결과 반환
 }

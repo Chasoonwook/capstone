@@ -14,20 +14,20 @@ type SpotifyContextShape = {
 
 const Ctx = createContext<SpotifyContextShape>({
   status: { connected: false },
-  refresh: async () => {},
+  refresh: async () => { },
 });
 
 /**
- * Lazy Provider: 자동으로 /api/spotify/me를 호출하지 않습니다.
- * 필요한 컴포넌트(예: UserHeader)에서 `refresh()`를 호출하세요.
+ * 지연 Provider: 자동으로 /api/spotify/me를 호출하지 않음.
+ * 필요 시 컴포넌트에서 `refresh()` 호출 필요.
  */
 export function SpotifyStatusProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<SpotifyMe>({ connected: false });
-  const lastRef = useRef(0); // 하드 쿨다운(30초)
+  const lastRef = useRef(0); // 하드 쿨다운 시간 기록(30초)
 
   const refresh = async (force = false) => {
     const now = Date.now();
-    if (!force && now - lastRef.current < 30_000) return; // 30초 쿨다운
+    if (!force && now - lastRef.current < 30_000) return; // 30초 쿨다운 적용
 
     try {
       const s = await getSpotifyStatus(force);

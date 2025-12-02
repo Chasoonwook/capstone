@@ -35,6 +35,7 @@ export function GlobalNowPlayingBar() {
   const artist = currentTrack?.artist ?? "—";
   const coverUrl = currentTrack?.coverUrl ?? "/placeholder.svg";
 
+  // 현재 트랙 재생 가능 여부 확인 로직
   const isPlayable = useMemo(() => {
     if (!currentTrack) return false;
     return (
@@ -43,6 +44,7 @@ export function GlobalNowPlayingBar() {
     );
   }, [currentTrack, state.playbackSource]);
 
+  // 메인 플레이어 페이지로 이동하는 함수
   const goToPlayer = useCallback(() => {
     const last =
       typeof window !== "undefined"
@@ -52,22 +54,24 @@ export function GlobalNowPlayingBar() {
     router.push(last || "/");
   }, [router]);
 
+  // 이벤트 버블링 중단 함수
   const stop: React.MouseEventHandler = (e) => e.stopPropagation();
 
+  // 현재 재생 진행률 계산
   const progressPercent = state.durMs > 0 ? (state.curMs / state.durMs) * 100 : 0;
 
   return (
     <div
       className="fixed bottom-0 left-0 right-0 z-50 bg-black/90 text-white border-t border-white/10 backdrop-blur-md"
       role="button"
-      aria-label="플레이어로 이동"
+      aria-label="Go to Player"
       onClick={goToPlayer}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") goToPlayer();
       }}
       tabIndex={0}
     >
-      {/* 진행 바 */}
+      {/* 진행 바 영역 */}
       <div className="h-[3px] w-full bg-white/10 group" onClick={stop}>
         <Slider
           value={[progressPercent]}
@@ -87,12 +91,12 @@ export function GlobalNowPlayingBar() {
         />
       </div>
 
-      {/* 내부 컨텐츠 */}
+      {/* 내부 컨텐츠 영역 */}
       <div
         className="mx-auto max-w-5xl px-4 py-2 grid grid-cols-[1fr_auto_1fr] items-center gap-3"
         onClick={stop}
       >
-        {/* 좌측: 앨범 아트 + 곡 정보 */}
+        {/* 좌측: 앨범 아트 및 곡 정보 섹션 */}
         <div className="flex items-center gap-3 min-w-0">
           <button onClick={goToPlayer} className="flex-shrink-0">
             <img
@@ -109,10 +113,10 @@ export function GlobalNowPlayingBar() {
           </div>
         </div>
 
-        {/* 중앙: 재생 컨트롤 */}
+        {/* 중앙: 재생 컨트롤 버튼 섹션 */}
         <div className="flex items-center gap-4">
           <button
-            aria-label="이전 곡"
+            aria-label="Previous Track"
             onClick={(e) => {
               e.stopPropagation();
               prev();
@@ -124,7 +128,7 @@ export function GlobalNowPlayingBar() {
           </button>
 
           <button
-            aria-label={isPlaying ? "일시정지" : "재생"}
+            aria-label={isPlaying ? "Pause" : "Play"}
             onClick={(e) => {
               e.stopPropagation();
               togglePlayPause();
@@ -140,7 +144,7 @@ export function GlobalNowPlayingBar() {
           </button>
 
           <button
-            aria-label="다음 곡"
+            aria-label="Next Track"
             onClick={(e) => {
               e.stopPropagation();
               next();
@@ -152,10 +156,10 @@ export function GlobalNowPlayingBar() {
           </button>
         </div>
 
-        {/* 우측: 볼륨 및 목록 (데스크탑) */}
+        {/* 우측: 볼륨 및 목록 (데스크탑 뷰) */}
         <div className="hidden md:flex items-center gap-3 justify-end">
           <button
-            aria-label="재생목록"
+            aria-label="Playlist"
             onClick={(e) => {
               e.stopPropagation();
               goToPlayer();
@@ -171,7 +175,7 @@ export function GlobalNowPlayingBar() {
               setVolume(volume > 0 ? 0 : 0.8);
             }}
             className="p-1 hover:bg-white/10 rounded"
-            aria-label="음소거 토글"
+            aria-label="Toggle Mute"
           >
             {volume === 0 ? (
               <VolumeX className="w-4 h-4" />
@@ -190,14 +194,14 @@ export function GlobalNowPlayingBar() {
               setVolume(value[0] / 100);
             }}
             onClick={(e) => e.stopPropagation()}
-            aria-label="볼륨 조절"
+            aria-label="Volume Control"
           />
         </div>
 
-        {/* 우측: 목록 버튼 (모바일) */}
+        {/* 우측: 목록 버튼 (모바일 뷰) */}
         <div className="flex md:hidden items-center gap-3 justify-end">
           <button
-            aria-label="재생목록"
+            aria-label="Playlist"
             onClick={(e) => {
               e.stopPropagation();
               goToPlayer();

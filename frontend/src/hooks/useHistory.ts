@@ -1,3 +1,4 @@
+// src/hooks/useHistory.ts
 "use client"
 import { useEffect, useState } from "react"
 import type { HistoryItem } from "@/types/music"
@@ -37,6 +38,7 @@ export function useHistory(isLoggedIn: boolean) {
           created_at?: string
         }>
 
+        // 응답 데이터 매핑 변환
         const mapped: HistoryItem[] = rows.map((r) => ({
           id: r.history_id,
           musicId: r.music_id,
@@ -50,9 +52,9 @@ export function useHistory(isLoggedIn: boolean) {
           image: null,
         }))
         if (mounted) setHistory(mapped)
-      } catch { // ✅ 변수 미사용이면 이름도 생략
+      } catch {
         if (mounted) {
-          setError("히스토리를 불러오지 못했습니다.")
+          setError("Failed to load history.")
           setHistory([])
         }
       } finally {

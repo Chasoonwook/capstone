@@ -20,6 +20,7 @@ export default function RecommendationList({
       {items.map((song) => {
         const cover = song.image ?? "/placeholder.svg";
         const active = currentId === song.id;
+
         return (
           <div
             key={song.id}
@@ -30,6 +31,7 @@ export default function RecommendationList({
                 : ""
             }`}
           >
+            {/* 앨범 이미지 출력 */}
             {cover ? (
               <Image
                 src={cover}
@@ -39,12 +41,13 @@ export default function RecommendationList({
                 sizes="48px"
                 className="rounded-lg mr-3 border border-white/10 flex-shrink-0 !w-12 !h-12"
                 style={{ width: 48, height: 48 }}
-                // unoptimized={typeof cover === "string" && cover.startsWith("data:")}
                 priority={items.indexOf(song) < 5}
               />
             ) : (
               <div className="w-12 h-12 rounded-lg mr-3 bg-gray-300/40" />
             )}
+
+            {/* 곡명 및 아티스트 출력 */}
             <div className="flex-1 min-w-0">
               <p className="text-white font-medium truncate text-sm">
                 {song.title}
@@ -52,13 +55,7 @@ export default function RecommendationList({
               <p className="text-slate-300 text-xs truncate">{song.artist}</p>
             </div>
 
-            {/*
-             * * ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-             * * [수정된 부분]
-             * 'genre'가 선택적(optional)이 되면서 undefined일 수 있으므로,
-             * 'song.genre' 값이 존재할 때만 배지를 렌더링하도록 수정합니다.
-             * * ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-             */}
+            {/* 장르 뱃지 출력 */}
             <div className="flex-shrink-0 ml-2">
               {song.genre && (
                 <Badge
@@ -69,8 +66,6 @@ export default function RecommendationList({
                 </Badge>
               )}
             </div>
-            {/* ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲ */}
-            
           </div>
         );
       })}

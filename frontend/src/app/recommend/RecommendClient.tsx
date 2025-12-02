@@ -16,19 +16,19 @@ import { useSpotifyStatus } from "@/contexts/SpotifyStatusContext";
 import { formatTime } from "./utils/media";
 import RecommendationList from "./components/RecommendationList";
 
-// ✅ 경로 수정: 이 파일 기준으로는 "./types"
+// 경로 안내 주석 명시
 import type { Song } from "./types";
 
 /* ──────────────────────────────────────────────
-   Track 확장: genre를 이 파일에서만 옵션으로 사용
+   Track 확장 타입 정의: genre 옵션 필드 사용 명시
    ──────────────────────────────────────────────*/
 type TrackPlus = Track & { genre?: string | null };
 
-/** 사진 바이너리 URL */
+/** 사진 바이너리 URL 생성 함수 명시 */
 const buildPhotoSrc = (photoId?: string | null) =>
   photoId ? `${API_BASE}/api/photos/${encodeURIComponent(String(photoId))}/binary` : null;
 
-/** 서버 응답을 TrackPlus로 정규화 */
+/** 서버 응답 정규화 로직 명시 */
 const normalizeTrack = (raw: any, idx: number): TrackPlus | null => {
   const title = raw?.title ?? raw?.music_title ?? raw?.name ?? null;
   const artist = raw?.artist ?? raw?.music_artist ?? raw?.singer ?? "Unknown";
@@ -36,7 +36,7 @@ const normalizeTrack = (raw: any, idx: number): TrackPlus | null => {
 
   const db_music_id = Number.isFinite(Number(raw?.music_id))
     ? Number(raw.music_id)
-    : Number.isFinite(Number(raw?.id)) // raw.id가 music_id일 수도 있음
+    : Number.isFinite(Number(raw?.id))
     ? Number(raw.id)
     : null;
 
@@ -62,7 +62,7 @@ const normalizeTrack = (raw: any, idx: number): TrackPlus | null => {
     spotify_track_id = spotify_uri.split(":").pop() || null;
   }
 
-  // ▲ TrackPlus로 반환하므로 genre 포함 가능
+  // TrackPlus 반환 객체 구성 명시
   return {
     id: player_id,
     db_music_id: db_music_id,
@@ -78,7 +78,7 @@ const normalizeTrack = (raw: any, idx: number): TrackPlus | null => {
   };
 };
 
-/** 커버/미리듣기/Spotify URI 보강 */
+/** 커버 이미지 및 Spotify URI 보강 로직 명시 */
 async function prefetchCoversAndUris(list: TrackPlus[]): Promise<TrackPlus[]> {
   if (!list?.length) return list;
 
@@ -122,7 +122,7 @@ async function prefetchCoversAndUris(list: TrackPlus[]): Promise<TrackPlus[]> {
       const hitDurationSec = typeof hit.duration_ms === "number" ? hit.duration_ms / 1000 : null;
 
       return {
-        ...t,                     // ← genre 유지
+        ...t,
         coverUrl: hit.albumImage || t.coverUrl || null,
         audioUrl: t.audioUrl || hit.preview_url || null,
         duration: t.duration ?? hitDurationSec,
@@ -145,7 +145,7 @@ export default function RecommendClient() {
   const photoId = useMemo(() => {
     const id = searchParams.get("photoId") || searchParams.get("photoID") || searchParams.get("id");
     if (id) {
-      // URL이 바뀔 때마다 세션 스토리지도 갱신
+      // 세션 경로 동기화 로직 명시
       const route = `/recommend?photoId=${encodeURIComponent(id)}`;
       try { sessionStorage.setItem("lastPlayerRoute", route); } catch {}
     }
@@ -153,7 +153,7 @@ export default function RecommendClient() {
   }, [searchParams]);
   
   const analyzedPhotoUrl = useMemo(() => buildPhotoSrc(photoId), [photoId]);
-  const [playlist, setPlaylist] = useState<TrackPlus[]>([]);   // ✅ TrackPlus
+  const [playlist, setPlaylist] = useState<TrackPlus[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showPlaylist, setShowPlaylist] = useState(false);
@@ -165,7 +165,7 @@ export default function RecommendClient() {
     () => (typeof window !== "undefined" ? localStorage.getItem("user_name") || localStorage.getItem("name") : null),
     []
   );
-  const playlistTitle = `${userNameFallback || "내"} 플레이리스트`;
+  const playlistTitle = `${userNameFallback || "My"} Playlist`;
 
   const { setQueueAndPlay, state: playerState } = player;
 
@@ -176,18 +176,16 @@ export default function RecommendClient() {
       return;
     }
 
-    // 1. URL의 photoId와 현재 플레이어 큐의 소스(key)가 같은지 확인
+    // 플레이어 큐 소스 동등성 확인 로직 명시
     const isSameQueueSource = playerState.queueKey === photoId;
 
-    // 1. PlayerContext에 이미 큐가 있는지 확인합니다.
+    // 기존 큐 존재 시 재요청 생략 로직 명시
     if (isSameQueueSource && playerState.queue.length > 0) {
       console.log("RecommendClient: Player already has a queue. Skipping fetch & setQueue.");
-      // API 호출과 큐 리셋을 건너뜁니다.
-      // 현재 컨텍스트 큐를 이 컴포넌트의 UI 목록(playlist)에 동기화만 합니다.
-      setPlaylist(playerState.queue as TrackPlus[]); // UI 목록만 동기화
+      setPlaylist(playerState.queue as TrackPlus[]);
       setLoading(false);
-      initialLoadDoneRef.current = true; // 로드 완료로 처리
-      return; // 👈 여기서 useEffect 종료
+      initialLoadDoneRef.current = true;
+      return;
     }
 
     (async () => {
@@ -215,23 +213,23 @@ export default function RecommendClient() {
         const enhanced = await prefetchCoversAndUris(list);
 
         const playable = enhanced.filter(t => 
-          (isSpotifyConnected && (t.spotify_uri || t.spotify_track_id)) || // 스포티파이 재생 가능
-          (!isSpotifyConnected && t.audioUrl) // 또는 미리듣기 URL이 존재
+          (isSpotifyConnected && (t.spotify_uri || t.spotify_track_id)) ||
+          (!isSpotifyConnected && t.audioUrl)
         );
 
         if (enhanced.length > 0 && playable.length === 0) {
           console.warn("No playable tracks found (Spotify not connected and no preview_url).");
-          setError("추천된 곡들의 미리듣기를 찾을 수 없습니다. Spotify 연동이 필요할 수 있습니다.");
+          setError("Could not find previews for the recommended songs. Spotify connection may be required.");
         } else if (enhanced.length > 0 && playable.length < enhanced.length) {
           console.warn(`Filtered out ${enhanced.length - playable.length} unplayable tracks.`);
         }
 
         setPlaylist(playable);
-        setQueueAndPlay(playable, 0, photoId); // 2. photoId를 queueKey로 전달
+        setQueueAndPlay(playable, 0, photoId);
         initialLoadDoneRef.current = true;
       } catch (e: any) {
-        setError(e.message || "추천 목록을 불러오지 못했습니다.");
-        setQueueAndPlay([], 0, photoId); // 빈 큐 설정
+        setError(e.message || "Failed to load recommendations.");
+        setQueueAndPlay([], 0, photoId);
       } finally {
         setLoading(false);
       }
@@ -262,7 +260,7 @@ export default function RecommendClient() {
     [playlist, player]
   );
 
-  // TrackPlus[] → Song[] 변환
+  // TrackPlus → Song 변환 로직 명시
   const songPlaylist: Song[] = useMemo(() => {
     if (!playlist) return [];
     return playlist.map((track): Song => ({
@@ -278,34 +276,32 @@ export default function RecommendClient() {
     }));
   }, [playlist]);
 
-  // 백엔드로 피드백을 전송
+  // 피드백 송신 로직 명시
   const sendFeedback = async (feedbackValue: 1 | -1) => {
     
-    // parseInt는 null이나 ""를 NaN으로 변환합니다.
     const uid_str = typeof window !== "undefined" ? localStorage.getItem("uid") : null;
     const final_user_id = uid_str ? parseInt(uid_str, 10) : NaN;
     
     const final_photo_id = photoId ? parseInt(photoId, 10) : NaN;
     
-    // db_music_id는 이미 number | null 타입일 수 있으므로 Number()를 사용 (null -> 0)
     const final_music_id = (currentTrack && currentTrack.db_music_id) 
       ? Number(currentTrack.db_music_id) 
       : NaN;
 
-    // ✅ 2. 유효성 검사 강화 (NaN이거나 0 이하인 ID는 거부)
+    // 유효성 검사 강화 명시
     if (!final_user_id || final_user_id <= 0) {
       console.warn("Feedback aborted: Invalid User ID.", uid_str);
-      setError("피드백을 보내려면 로그인이 필요합니다.");
+      setError("Login is required to send feedback.");
       return;
     }
     if (!final_photo_id || final_photo_id <= 0) {
       console.warn("Feedback aborted: Invalid Photo ID.", photoId);
-      setError("유효하지 않은 사진 정보입니다.");
+      setError("Invalid photo information.");
       return;
     }
     if (!final_music_id || final_music_id <= 0) {
       console.warn("Feedback aborted: Invalid Music ID.", currentTrack?.db_music_id);
-      setError("피드백을 보낼 수 없는 곡입니다.");
+      setError("This track cannot receive feedback.");
       return;
     }
 
@@ -316,30 +312,30 @@ export default function RecommendClient() {
           "Content-Type": "application/json",
           ...authHeaders(),
         } as HeadersInit,
-        credentials: "include", // authRequired API는 이 옵션이 필수입니다.
+        credentials: "include",
         body: JSON.stringify({
           user_id: final_user_id,
           music_id: final_music_id,
-          feedback: feedbackValue, // 1 (좋아요) 또는 -1 (싫어요)
+          feedback: feedbackValue,
           photo_id: final_photo_id,
         }),
       });
 
       if (!res.ok) {
         console.warn("Failed to send feedback to server:", res.status);
-        setError(`피드백 전송에 실패했습니다. (코드: ${res.status})`);
+        setError(`Failed to send feedback. (Code: ${res.status})`);
       } else {
         console.log(`Feedback (value: ${feedbackValue}) successfully sent.`);
         setError(null);
       }
     } catch (e) {
       console.error("Error sending feedback:", e);
-      setError("피드백 전송 중 오류가 발생했습니다.");
+      setError("An error occurred while sending feedback.");
     }
   };
 
   const goEdit = () => {
-    if (!photoId) return alert("사진 정보가 없습니다.");
+    if (!photoId) return alert("No photo information.");
     const cur = currentTrack || playlist[0];
     const q = new URLSearchParams();
     q.set("photoId", String(photoId));
@@ -356,14 +352,14 @@ export default function RecommendClient() {
     if (isCurrentlyLiked) {
       next.delete(currentTrack.id);
     } else {
-      next.add(currentTrack.id); // 좋아요 추가
+      next.add(currentTrack.id);
 
       if (dislikedTracks.has(currentTrack.id)) {
         const d = new Set(dislikedTracks);
         d.delete(currentTrack.id);
         setDislikedTracks(d);
       }
-      sendFeedback(1); // 좋아요 피드백 전송
+      sendFeedback(1);
     }
     setLikedTracks(next);
   };
@@ -383,7 +379,7 @@ export default function RecommendClient() {
         l.delete(currentTrack.id);
         setLikedTracks(l);
       }
-      sendFeedback(-1); // 싫어요 피드백 전송
+      sendFeedback(-1);
     }
     setDislikedTracks(next);
   };
@@ -393,14 +389,14 @@ export default function RecommendClient() {
   return (
   <div className="min-h-screen bg-gradient-to-b from-black via-neutral-900 to-black flex items-center justify-center p-4">
     <div className="w-full max-w-md mx-auto">
-      {/* 헤더 */}
+      {/* 헤더 섹션 명시 */}
       <div className="relative flex items-center mb-6 text-white">
         <Button
           variant="ghost"
           size="icon"
           className="text-white hover:bg-white/10"
           onClick={() => router.push("/?from=player")}
-          title="메인으로"
+          title="Back to Home"
         >
           <ChevronDown className="w-6 h-6" />
         </Button>
@@ -414,37 +410,37 @@ export default function RecommendClient() {
             variant="ghost"
             size="icon"
             className="text-white hover:bg-white/10"
-            title="옵션"
+            title="Options"
           >
             <MoreVertical className="w-6 h-6" />
           </Button>
         </div>
       </div>
 
-      {/* 아트워크(업로드 이미지 우선) */}
+      {/* 아트워크 섹션 명시 */}
       <div className="mb-8">
         <div
           className="relative w-full aspect-square rounded-lg overflow-hidden shadow-2xl mb-6 bg-neutral-800"
           onClick={() => setShowPlaylist(true)}
           role="button"
-          aria-label="재생목록 열기"
+          aria-label="Open playlist"
         >
           <img src={artUrl} alt="artwork" className="w-full h-full object-cover" />
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-black/10" />
         </div>
 
-        {/* 제목/아티스트/출처 */}
+        {/* 메타 정보 섹션 명시 */}
         <div className="flex items-start justify-between text-white mb-6">
           <div className="flex-1 min-w-0">
             <h1 className="text-2xl font-bold mb-1 line-clamp-2">
-              {currentTrack?.title || (loading ? "불러오는 중..." : "—")}
+              {currentTrack?.title || (loading ? "Loading..." : "—")}
             </h1>
             <p className="text-base text-white/70 truncate">
               {currentTrack?.artist || "Unknown"}
             </p>
             {player.state.playbackSource && (
               <p className="text-xs text-white/50 mt-1">
-                재생: {player.state.playbackSource === "spotify" ? "Spotify" : "미리듣기"}
+                Source: {player.state.playbackSource === "spotify" ? "Spotify" : "Preview"}
               </p>
             )}
           </div>
@@ -459,7 +455,7 @@ export default function RecommendClient() {
                 "text-white hover:bg-white/10",
                 currentTrack && likedTracks.has(currentTrack.id) && "text-red-500"
               )}
-              title="좋아요"
+              title="Like"
             >
               <Heart
                 className={cn(
@@ -478,7 +474,7 @@ export default function RecommendClient() {
                 "text-white hover:bg-white/10",
                 currentTrack && dislikedTracks.has(currentTrack.id) && "text-blue-400"
               )}
-              title="별로예요"
+              title="Dislike"
             >
               <ThumbsDown
                 className={cn(
@@ -490,7 +486,7 @@ export default function RecommendClient() {
           </div>
         </div>
 
-        {/* 진행 바 */}
+        {/* 진행 바 섹션 명시 */}
         <div className="mb-6">
           <Slider
             value={[curSec]}
@@ -506,7 +502,7 @@ export default function RecommendClient() {
           </div>
         </div>
 
-        {/* 컨트롤 */}
+        {/* 컨트롤 섹션 명시 */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
             <Button
@@ -515,7 +511,7 @@ export default function RecommendClient() {
               onClick={goEdit}
               disabled={!photoId}
               className="text-white hover:bg-white/10 w-12 h-12"
-              title="편집/공유"
+              title="Edit/Share"
             >
               <Upload className="w-6 h-6" />
             </Button>
@@ -526,7 +522,7 @@ export default function RecommendClient() {
               onClick={handlePrev}
               disabled={!currentTrack}
               className="text-white hover:bg-white/10 w-12 h-12"
-              title="이전"
+              title="Previous"
             >
               <SkipBack className="w-7 h-7 fill-white" />
             </Button>
@@ -536,7 +532,7 @@ export default function RecommendClient() {
             size="lg"
             onClick={handlePlayPause}
             className="w-16 h-16 rounded-full bg-white hover:bg-white/90 text-black shadow-lg disabled:opacity-50"
-            title={isPlaying ? "일시정지" : "재생"}
+            title={isPlaying ? "Pause" : "Play"}
             disabled={!currentTrack || (!currentTrack.spotify_uri && !currentTrack.audioUrl)}
           >
             {isPlaying ? (
@@ -553,7 +549,7 @@ export default function RecommendClient() {
               onClick={handleNext}
               disabled={!currentTrack}
               className="text-white hover:bg-white/10 w-12 h-12"
-              title="다음"
+              title="Next"
             >
               <SkipForward className="w-7 h-7 fill-white" />
             </Button>
@@ -563,21 +559,21 @@ export default function RecommendClient() {
               size="icon"
               onClick={() => setShowPlaylist(true)}
               className="text-white hover:bg-white/10 w-12 h-12"
-              title="재생목록"
+              title="Playlist"
             >
               <ListMusic className="w-6 h-6" />
             </Button>
           </div>
         </div>
 
-        {/* 볼륨 */}
+        {/* 볼륨 섹션 명시 */}
         <div className="mt-2 mb-2">
           <div className="flex items-center gap-3 text-white">
             <button
               onClick={() => handleSetVolume(volume > 0 ? 0 : 0.8)}
               className="p-2 rounded-lg hover:bg-white/10 transition-colors"
-              title={volume === 0 ? "음소거 해제" : "음소거"}
-              aria-label="볼륨"
+              title={volume === 0 ? "Unmute" : "Mute"}
+              aria-label="Volume"
             >
               {volume === 0 ? (
                 <VolumeX className="w-6 h-6" />
@@ -606,7 +602,7 @@ export default function RecommendClient() {
       </div>
     </div>
 
-    {/* 재생목록 오버레이 */}
+    {/* 재생목록 오버레이 섹션 명시 */}
     {showPlaylist && (
       <div
         className="fixed inset-0 bg-black/50 z-40"
@@ -614,7 +610,7 @@ export default function RecommendClient() {
       />
     )}
 
-    {/* 재생목록 시트 */}
+    {/* 재생목록 시트 섹션 명시 */}
     <div
       className={cn(
         "fixed bottom-0 left-0 right-0 bg-neutral-900 rounded-t-3xl z-50 transition-transform duration-300 ease-out",
@@ -624,23 +620,23 @@ export default function RecommendClient() {
     >
       <div className="p-6 text-white">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-bold">추천 재생목록</h2>
+          <h2 className="text-xl font-bold">Recommended Playlist</h2>
           <Button
             variant="ghost"
             size="icon"
             onClick={() => setShowPlaylist(false)}
             className="text-white hover:bg-white/10"
-            title="닫기"
+            title="Close"
           >
-            ✕
+            ×
           </Button>
         </div>
 
         <div className="overflow-y-auto" style={{ maxHeight: "calc(70vh - 100px)" }}>
           {error && <p className="text-red-400 mb-3">{error}</p>}
-          {loading && <p className="text-white/70">불러오는 중...</p>}
+          {loading && <p className="text-white/70">Loading...</p>}
           {!loading && playlist.length === 0 && (
-            <p className="text-white/70 text-center py-4">추천 목록이 없습니다.</p>
+            <p className="text-white/70 text-center py-4">No recommendations.</p>
           )}
 
           {!loading && playlist.length > 0 && (

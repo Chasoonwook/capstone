@@ -36,16 +36,16 @@ export default function HistoryCarousel({ user, items, loading, error }: Props) 
             </AvatarFallback>
           </Avatar>
           <div>
-            <h3 className="text-2xl font-light text-gray-900">{(user.name || "사용자")}님의 추억</h3>
-            <p className="text-gray-500 font-light">최근에 들었던 음악들</p>
+            <h3 className="text-2xl font-light text-gray-900">{(user.name || "User")}'s Memories</h3>
+            <p className="text-gray-500 font-light">Recently played songs</p>
           </div>
         </div>
         <div className="ml-auto hidden sm:block">
           <div className="flex gap-2">
-            <Button variant="ghost" className="rounded-full" onClick={() => scrollHistory("left")} aria-label="왼쪽으로 이동">
+            <Button variant="ghost" className="rounded-full" onClick={() => scrollHistory("left")} aria-label="Move left">
               <ChevronLeft className="h-5 w-5" />
             </Button>
-            <Button variant="ghost" className="rounded-full" onClick={() => scrollHistory("right")} aria-label="오른쪽으로 이동">
+            <Button variant="ghost" className="rounded-full" onClick={() => scrollHistory("right")} aria-label="Move right">
               <ChevronRight className="h-5 w-5" />
             </Button>
           </div>
@@ -53,12 +53,12 @@ export default function HistoryCarousel({ user, items, loading, error }: Props) 
       </div>
 
       {loading ? (
-        <div className="text-center text-gray-500 py-16 border border-dashed rounded-lg bg-white/60">불러오는 중…</div>
+        <div className="text-center text-gray-500 py-16 border border-dashed rounded-lg bg-white/60">Loading…</div>
       ) : error ? (
         <div className="text-center text-red-500 py-16 border border-dashed rounded-lg bg-white/60">{error}</div>
       ) : items.length === 0 ? (
         <div className="text-center text-gray-500 py-16 border border-dashed rounded-lg bg-white/60">
-          아직 추억이 없습니다.
+          No memories yet.
         </div>
       ) : (
         <div className="relative">
@@ -67,7 +67,7 @@ export default function HistoryCarousel({ user, items, loading, error }: Props) 
               variant="ghost"
               className="absolute -left-3 top-1/2 -translate-y-1/2 z-10 rounded-full shadow"
               onClick={() => scrollHistory("left")}
-              aria-label="왼쪽으로 이동"
+              aria-label="Move left"
             >
               <ChevronLeft className="h-5 w-5" />
             </Button>
@@ -75,7 +75,7 @@ export default function HistoryCarousel({ user, items, loading, error }: Props) 
               variant="ghost"
               className="absolute -right-3 top-1/2 -translate-y-1/2 z-10 rounded-full shadow"
               onClick={() => scrollHistory("right")}
-              aria-label="오른쪽으로 이동"
+              aria-label="Move right"
             >
               <ChevronRight className="h-5 w-5" />
             </Button>
@@ -93,7 +93,7 @@ export default function HistoryCarousel({ user, items, loading, error }: Props) 
                            bg-white/80 backdrop-blur-sm rounded-2xl shadow-sm hover:shadow
                            transition-all p-3 text-left"
                 onClick={() => router.push(`/recommend?picked=${encodeURIComponent(String(item.musicId ?? item.id))}`)}
-                aria-label={`${item.title} 재생`}
+                aria-label={`Play ${item.title}`}
               >
                 <div className="relative w-full h-36 overflow-hidden rounded-xl">
                   <Image

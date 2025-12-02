@@ -134,7 +134,7 @@ export default function DiaryPage() {
   const [userId, setUserId] = useState<number | null>(null)
   const [userCheckDone, setUserCheckDone] = useState(false)
 
-  // 화면에 보여줄 곡(단일 소스)
+  // 화면 표기용 단일 곡 소스 관리
   const [musicTitle, setMusicTitle] = useState<string>(urlTitle)
   const [musicArtist, setMusicArtist] = useState<string>(urlArtist)
   const [dateISO, setDateISO] = useState<string>(urlDate || "")
@@ -149,7 +149,7 @@ export default function DiaryPage() {
   const [artTried, setArtTried] = useState(false)
   const autoPlayedRef = useRef(false)
 
-  // ✅ 캐시는 하나만 유지 (중복 선언 제거)
+  // 캐시 단일 유지 (중복 선언 제거)
   const [artCache, setArtCache] = useState<ArtCache>({})
 
   const storageKey = useMemo(
@@ -168,14 +168,14 @@ export default function DiaryPage() {
     setArtCache((prev) => ({ ...loadSessionArt(), ...prev }))
   }, [])
 
-  // 🔁 URL 쿼리 → 상태 동기화
+  // URL 쿼리 → 상태 동기화
   useEffect(() => {
     if (urlTitle) setMusicTitle(urlTitle)
     if (urlArtist) setMusicArtist(urlArtist)
     setDateISO(urlDate || "")
   }, [urlTitle, urlArtist, urlDate])
 
-  // URL 정규화(쿼리 없을 때 diary/history로 보강 후 replace)
+  // URL 정규화 (쿼리 부재 시 diary/history 기반 보강 후 replace)
   useEffect(() => {
     if (!Number.isFinite(photoId)) return
     const needNormalize = !(urlTitle && urlArtist)
@@ -214,7 +214,7 @@ export default function DiaryPage() {
         } catch {}
       }
 
-      if (!finalTitle) finalTitle = "제목 없음"
+      if (!finalTitle) finalTitle = "Untitled"
       if (!finalArtist) finalArtist = "Various"
 
       if (cancelled) return
@@ -256,7 +256,7 @@ export default function DiaryPage() {
     })()
   }, [photoId, userId, userCheckDone])
 
-  // 로컬 임시 저장 불러오기/저장
+  // 로컬 임시 저장 로드/저장
   useEffect(() => {
     try {
       const raw = localStorage.getItem(storageKey)
@@ -275,12 +275,12 @@ export default function DiaryPage() {
 
   const saveDiary = useCallback(async () => {
     if (!Number.isFinite(photoId)) {
-      setSaveError("잘못된 사진 ID입니다.")
+      setSaveError("Invalid photo ID.")
       return
     }
     if (!userCheckDone) return
     if (userId == null) {
-      setSaveError("로그인 정보가 올바르지 않습니다. 다시 로그인해 주세요.")
+      setSaveError("Invalid login information. Please sign in again.")
       return
     }
 
@@ -291,7 +291,7 @@ export default function DiaryPage() {
       const commonBody = {
         subject,
         content,
-        music_title: musicTitle || "제목 없음",
+        music_title: musicTitle || "Untitled",
         music_artist: musicArtist || "Various",
         diary_at: dateISO || null,
       }
@@ -315,7 +315,7 @@ export default function DiaryPage() {
 
       if (!res.ok) {
         const t = await res.text().catch(() => "")
-        throw new Error(t || "저장에 실패했습니다.")
+        throw new Error(t || "Failed to save.")
       }
 
       try {
@@ -326,7 +326,7 @@ export default function DiaryPage() {
       try { localStorage.removeItem(storageKey) } catch {}
       router.push("/")
     } catch (e: any) {
-      setSaveError(e?.message ?? "저장에 실패했습니다.")
+      setSaveError(e?.message ?? "Failed to save.")
     } finally {
       setSaving(false)
     }
@@ -334,7 +334,7 @@ export default function DiaryPage() {
 
   // 커버/프리뷰 확보 후 재생
   const fetchCoverAndPlay = useCallback(async (auto = false) => {
-    const title = (musicTitle || "제목 없음").trim()
+    const title = (musicTitle || "Untitled").trim()
     const artist = (musicArtist || "Various").trim()
     if (!title || !artist) return
 
@@ -425,7 +425,7 @@ export default function DiaryPage() {
     return () => window.removeEventListener("keydown", onKey)
   }, [saveDiary, saving])
 
-  // 떠날 때 경고
+  // 페이지 이탈 경고
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
       if (subject || content) {
@@ -451,12 +451,12 @@ export default function DiaryPage() {
             <button
               onClick={() => router.back()}
               className="w-10 h-10 rounded-full bg-muted hover:bg-muted/80 hover:scale-105 flex items-center justify-center transition-all"
-              aria-label="뒤로"
+              aria-label="Back"
               type="button"
             >
               <ArrowLeft className="w-5 h-5 text-foreground" />
             </button>
-            <h1 className="text-lg font-bold text-foreground">그림일기 작성</h1>
+            <h1 className="text-lg font-bold text-foreground">Photo Diary</h1>
           </div>
 
           <button
@@ -466,7 +466,7 @@ export default function DiaryPage() {
             className="h-10 px-4 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-semibold shadow-md transition-all disabled:opacity-60 flex items-center gap-2"
           >
             <Save className="w-4 h-4" />
-            {saving ? "저장 중..." : "저장"}
+            {saving ? "Saving..." : "Save"}
           </button>
         </div>
       </header>
@@ -477,7 +477,7 @@ export default function DiaryPage() {
             <div className="relative rounded-xl overflow-hidden bg-muted aspect-[4/3] border-2 border-background">
               <img
                 src={imgPrimary || "/placeholder.svg"}
-                alt="선택한 사진"
+                alt="Selected photo"
                 className="w-full h-full object-cover"
                 crossOrigin="anonymous"
                 onError={(e) => {
@@ -509,7 +509,7 @@ export default function DiaryPage() {
               {coverUrl ? (
                 <img
                   src={coverUrl}
-                  alt="앨범 커버"
+                  alt="Album cover"
                   className="w-12 h-12 rounded-xl object-cover border shrink-0"
                 />
               ) : (
@@ -520,7 +520,7 @@ export default function DiaryPage() {
 
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-semibold text-foreground truncate">
-                  {musicTitle || "제목 없음"}
+                  {musicTitle || "Untitled"}
                 </div>
                 <div className="text-xs text-muted-foreground truncate mt-1">
                   {musicArtist || "Various"}
@@ -530,33 +530,31 @@ export default function DiaryPage() {
               <button
                 onClick={() => fetchCoverAndPlay(false)}
                 className="px-3 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 flex items-center gap-2"
-                aria-label="재생"
-                title="재생"
+                aria-label="Play"
+                title="Play"
               >
-                <Play className="w-4 h-4" />
-                재생
-              </button>
+                <Play className="w-4 h-4" />Play</button>
             </div>
           </div>
         </section>
 
         <section className="space-y-6">
           <div>
-            <label className="block text-sm font-semibold text-foreground mb-2">제목</label>
+            <label className="block text-sm font-semibold text-foreground mb-2">Title</label>
             <input
               value={subject}
               onChange={(e) => setSubject(e.target.value)}
-              placeholder="오늘의 이야기..."
+              placeholder="Today's story..."
               className="w-full bg-card border border-border focus:border-primary rounded-xl px-4 py-3 text-base placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-semibold text-foreground mb-2">내용</label>
+            <label className="block text-sm font-semibold text-foreground mb-2">Content</label>
             <textarea
               value={content}
               onChange={(e) => setContent(e.target.value)}
-              placeholder="사진을 보며 떠오른 생각과 감정을 자유롭게 적어보세요..."
+              placeholder="Write your thoughts and feelings inspired by the photo..."
               rows={12}
               className="w-full bg-card border border-border focus:border-primary rounded-xl px-4 py-3 text-base leading-relaxed placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all resize-none"
             />

@@ -70,7 +70,7 @@ export default function LoginPage() {
       })
 
       if (!res.ok) {
-        let msg = "이메일 또는 비밀번호가 올바르지 않습니다."
+        let msg = "Invalid email or password."
         try {
           const j: unknown = await res.json()
           if (hasErrorMessage(j)) msg = j.error
@@ -80,7 +80,7 @@ export default function LoginPage() {
 
       const data = (await res.json()) as LoginResponse
       if (!data?.token || !data?.user) {
-        throw new Error("로그인 응답 형식이 올바르지 않습니다.")
+        throw new Error("Invalid login response format.")
       }
 
       const { token, user } = data
@@ -88,12 +88,12 @@ export default function LoginPage() {
       // 2) 숫자형 user_id 확정 및 필수 저장
       const numericUid = pickNumericId(user)
       if (numericUid == null) {
-        throw new Error("로그인 응답에 사용자 ID가 없습니다.")
+        throw new Error("User ID is missing in login response.")
       }
 
       // 필수 세션 저장 (일기 작성 페이지에서 사용)
       localStorage.setItem("token", token)
-      localStorage.setItem("account_id", String(numericUid)) // ✅ 핵심: 숫자 ID 저장
+      localStorage.setItem("account_id", String(numericUid)) // 핵심: 숫자 ID 저장
       localStorage.setItem("uid", String(numericUid)) // (기존 호환)
       localStorage.setItem("email", user.email)
       localStorage.setItem("name", user.name)
@@ -129,7 +129,7 @@ export default function LoginPage() {
       // 6) 라우팅
       router.replace(genreDone ? "/" : "/onboarding/genres")
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : typeof err === "string" ? err : "로그인 중 오류가 발생했습니다."
+      const msg = err instanceof Error ? err.message : typeof err === "string" ? err : "An error occurred while signing in."
       setError(msg)
     } finally {
       setIsLoading(false)
@@ -142,21 +142,21 @@ export default function LoginPage() {
         <div className="text-center mb-8">
           <Link href="/" className="inline-flex items-center gap-2 text-foreground hover:opacity-80 transition-opacity">
             <Music className="h-8 w-8" />
-            <span className="text-2xl font-bold text-balance">뮤직 추천 시스템</span>
+            <span className="text-2xl font-bold text-balance">Music Recommendation System</span>
           </Link>
         </div>
 
         <div className="bg-gradient-to-br from-primary/10 via-accent/5 to-primary/10 rounded-2xl p-6 shadow-sm">
           <div className="mb-6">
-            <h1 className="text-2xl font-bold text-foreground mb-2 text-balance">로그인</h1>
-            <p className="text-sm text-muted-foreground text-pretty">계정으로 로그인해 음악 추천을 받아보세요</p>
+            <h1 className="text-2xl font-bold text-foreground mb-2 text-balance">Log In</h1>
+            <p className="text-sm text-muted-foreground text-pretty">Sign in with your account to get music recommendations.</p>
           </div>
 
           <div className="space-y-4">
             <form onSubmit={handleLogin} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="email" className="text-sm font-medium">
-                  이메일
+                  Email
                 </Label>
                 <div className="relative">
                   <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground h-4 w-4" />
@@ -164,7 +164,7 @@ export default function LoginPage() {
                     id="email"
                     name="email"
                     type="email"
-                    placeholder="이메일을 입력하세요"
+                    placeholder="Enter your email"
                     value={formData.email}
                     onChange={handleInputChange}
                     className="pl-10 bg-background"
@@ -176,7 +176,7 @@ export default function LoginPage() {
 
               <div className="space-y-2">
                 <Label htmlFor="password" className="text-sm font-medium">
-                  비밀번호
+                  Password
                 </Label>
                 <div className="relative">
                   <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground h-4 w-4" />
@@ -184,7 +184,7 @@ export default function LoginPage() {
                     id="password"
                     name="password"
                     type={showPassword ? "text" : "password"}
-                    placeholder="비밀번호를 입력하세요"
+                    placeholder="Enter your password"
                     value={formData.password}
                     onChange={handleInputChange}
                     className="pl-10 pr-10 bg-background"
@@ -195,7 +195,7 @@ export default function LoginPage() {
                     type="button"
                     onClick={() => setShowPassword((v) => !v)}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                    aria-label={showPassword ? "비밀번호 숨기기" : "비밀번호 보이기"}
+                    aria-label={showPassword ? "Hide password" : "Show password"}
                   >
                     {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
@@ -209,14 +209,14 @@ export default function LoginPage() {
                 disabled={isLoading}
                 className="w-full bg-primary text-primary-foreground rounded-lg py-3 px-4 font-medium text-sm hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isLoading ? "로그인 중..." : "로그인"}
+                {isLoading ? "Signing in…" : "Log In"}
               </button>
             </form>
 
             <div className="text-center text-sm">
-              <span className="text-muted-foreground">아직 계정이 없으신가요? </span>
+              <span className="text-muted-foreground">Don't have an account? </span>
               <Link href="/register" className="text-foreground font-medium hover:opacity-80 transition-opacity">
-                회원가입
+                Sign Up
               </Link>
             </div>
           </div>

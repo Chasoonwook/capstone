@@ -33,7 +33,8 @@ function extractDate(item: any): Date | null {
   return isNaN(d.getTime()) ? null : d
 }
 
-const fmtDate = (d: Date) => d.toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric" })
+// 날짜 표시 포맷 영어화
+const fmtDate = (d: Date) => d.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })
 
 const fmtDateKey = (d: Date) => {
   const y = d.getFullYear()
@@ -115,9 +116,9 @@ export default function DiaryStrip({
   if (error) {
     return (
       <section className="mb-6 px-4">
-        <h2 className="text-sm font-semibold text-foreground mb-4">나의 그림일기</h2>
+        <h2 className="text-sm font-semibold text-foreground mb-4">My Photo Diary</h2>
         <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-4 text-center">
-          <p className="text-destructive text-sm">그림일기를 불러오지 못했습니다</p>
+          <p className="text-destructive text-sm">Failed to load photo diaries</p>
         </div>
       </section>
     )
@@ -127,11 +128,11 @@ export default function DiaryStrip({
   if (list.length === 0) {
     return (
       <section className="mb-6 px-4">
-        <h2 className="text-sm font-semibold text-foreground mb-4">나의 그림일기</h2>
+        <h2 className="text-sm font-semibold text-foreground mb-4">My Photo Diary</h2>
         <div className="bg-muted/30 border border-border rounded-xl p-8 text-center">
           <BookOpen className="w-12 h-12 text-muted-foreground mx-auto mb-3 opacity-50" />
-          <p className="text-muted-foreground text-sm mb-2">아직 작성한 그림일기가 없어요</p>
-          <p className="text-muted-foreground text-xs">사진을 분석한 후 그림일기를 작성해보세요</p>
+          <p className="text-muted-foreground text-sm mb-2">No diary entries yet</p>
+          <p className="text-muted-foreground text-xs">Analyze a photo and write a diary entry</p>
         </div>
       </section>
     )
@@ -140,8 +141,8 @@ export default function DiaryStrip({
   return (
     <section className="mb-8 px-4">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-sm font-semibold text-foreground">나의 그림일기</h2>
-        <span className="text-xs text-muted-foreground">{list.length}개</span>
+        <h2 className="text-sm font-semibold text-foreground">My Photo Diary</h2>
+        <span className="text-xs text-muted-foreground">{list.length} items</span>
       </div>
 
       {/* Calendar */}
@@ -151,17 +152,17 @@ export default function DiaryStrip({
           <button
             onClick={goToPrevMonth}
             className="w-9 h-9 rounded-lg hover:bg-muted/50 flex items-center justify-center transition-colors"
-            aria-label="이전 달"
+            aria-label="Previous month"
           >
             <ChevronLeft className="w-5 h-5 text-foreground" />
           </button>
           <h3 className="text-base font-bold text-foreground">
-            {year}년 {month + 1}월
+            {year} Year {month + 1} Month
           </h3>
           <button
             onClick={goToNextMonth}
             className="w-9 h-9 rounded-lg hover:bg-muted/50 flex items-center justify-center transition-colors"
-            aria-label="다음 달"
+            aria-label="Next month"
           >
             <ChevronRight className="w-5 h-5 text-foreground" />
           </button>
@@ -169,7 +170,7 @@ export default function DiaryStrip({
 
         {/* Day Labels */}
         <div className="grid grid-cols-7 gap-2 mb-3">
-          {["일", "월", "화", "수", "목", "금", "토"].map((day, i) => (
+          {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day, i) => (
             <div
               key={day}
               className={`text-center text-sm font-medium py-2 ${
@@ -218,7 +219,7 @@ export default function DiaryStrip({
                     {/* Diary Photo Background */}
                     <img
                       src={primary || "/placeholder.svg"}
-                      alt={`${day}일 일기`}
+                      alt={`${day} Diary`}
                       className="absolute inset-0 w-full h-full object-cover"
                       crossOrigin="anonymous"
                       onError={(e) => {
@@ -277,7 +278,7 @@ export default function DiaryStrip({
         <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
-                <span className="text-lg font-bold">그림일기</span>
+                <span className="text-lg font-bold">Photo Diary</span>
             </DialogTitle>
             </DialogHeader>
 
@@ -285,7 +286,7 @@ export default function DiaryStrip({
             {selectedDiaries.map((diary) => {
               const photoId = diary.photo_id ?? (diary as any).photoId ?? null
               const { primary, fallback } = buildPhotoSrc(photoId)
-              const title = diary.subject || diary.title || "제목 없음"
+              const title = diary.subject || diary.title || "Untitled"
               const content = diary.content || ""
               const emotion = diary.emotion || ""
               const dateObj = extractDate(diary)
@@ -338,7 +339,7 @@ export default function DiaryStrip({
                     {musicTitle && (
                       <div className="flex items-center gap-3 p-3 bg-primary/5 rounded-xl">
                         <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                          <span className="text-primary text-lg">♪</span>
+                          <span className="text-primary text-sm">Music</span>
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-semibold text-foreground truncate">{musicTitle}</p>
@@ -358,7 +359,7 @@ export default function DiaryStrip({
                         className="flex-1 h-11 rounded-xl bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 transition-colors flex items-center justify-center gap-2"
                       >
                         <BookOpen className="w-4 h-4" />
-                        보기
+                        Open
                       </button>
                     </div>
                   </div>
