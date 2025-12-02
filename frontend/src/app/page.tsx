@@ -154,7 +154,7 @@ export default function Page() {
               >
                 <button
                   onClick={() => setShowUploadModal(true)}
-                  className="relative w-full bg-transparent text-white rounded-[24px] py-4 px-6 font-semibold text-sm sm:text-base flex items-center justify-center gap-2 select-none"
+                  className="relative w-full bg-transparent text-white rounded-[24px] py-12 px-8 font-semibold text-base sm:text-lg flex items-center justify-center gap-2 select-none"
                   style={{ textShadow: "0 1px 2px rgba(0,0,0,.35)" }}
                 >
                   <Camera className="w-4 h-4" />
@@ -179,7 +179,7 @@ export default function Page() {
       </div>
 
       {showUploadModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center">
+        <div className="fixed inset-0 bg-black/50 z-[9999] flex items-end sm:items-center justify-center">
           <div className="bg-background w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl p-6 animate-in slide-in-from-bottom duration-300">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-foreground">Analyze Mood</h3>

@@ -20,10 +20,10 @@ export type Track = {
   db_music_id?: number | null; // 뮤직 아이디
   title: string;
   artist: string;
-  audioUrl?: string | null;           // 30초 미리듣기 (Spotify / Deezer / iTunes)
-  spotify_uri?: string | null;        // Spotify URI
+  audioUrl?: string | null; // 30초 미리듣기 (Spotify / Deezer / iTunes)
+  spotify_uri?: string | null; // Spotify URI
   coverUrl?: string | null;
-  duration?: number | null;           // 초 단위 길이
+  duration?: number | null; // 초 단위 길이
   // 트랙 선택 출처
   selected_from?: "main" | "sub" | "preferred" | "search" | "recommend" | "diary" | null;
   spotify_track_id?: string | null;   // 순수 Spotify ID
@@ -31,12 +31,12 @@ export type Track = {
 
 export type PlayerState = {
   queue: Track[];
-  index: number;                      // 현재 인덱스
-  curMs: number;                      // 현재 재생 위치(ms)
-  durMs: number;                      // 전체 길이(ms)
+  index: number; // 현재 인덱스
+  curMs: number; // 현재 재생 위치(ms)
+  durMs: number; // 전체 길이(ms)
   currentTrack: Track | null;
   playbackSource: "preview" | "spotify" | null;
-  queueKey?: string | null;           // 큐 식별 키 (선택적)
+  queueKey?: string | null; // 큐 식별 키 (선택적)
 };
 
 type Ctx = {
