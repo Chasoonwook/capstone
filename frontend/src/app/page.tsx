@@ -154,7 +154,7 @@ export default function Page() {
               >
                 <button
                   onClick={() => setShowUploadModal(true)}
-                  className="relative w-full bg-transparent text-white rounded-[24px] py-12 px-8 font-semibold text-base sm:text-lg flex items-center justify-center gap-2 select-none"
+                  className="relative z-[-10] w-full bg-transparent text-white rounded-[24px] py-12 px-8 font-semibold text-base sm:text-lg flex items-center justify-center gap-2 select-none"
                   style={{ textShadow: "0 1px 2px rgba(0,0,0,.35)" }}
                 >
                   <Camera className="w-4 h-4" />
