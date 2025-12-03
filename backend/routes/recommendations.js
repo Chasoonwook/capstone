@@ -344,7 +344,7 @@ router.get("/by-photo/:photoId", async (req, res) => {
 
     const mainPicked = weightedSampleK(mainPool, 5, makeScorer(songScoreMap, "main"), used);
 
-    const BG_SET = new Set(["mountain", "beach"]);
+    const BG_SET = new Set(["mountain", "beach", "city", "cafe", "bedroom", "classroom", "park", "gym", "nature", "street"]);
     let subPicked = [];
 
     if (background && BG_SET.has(background)) {
