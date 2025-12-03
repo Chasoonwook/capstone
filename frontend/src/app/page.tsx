@@ -63,7 +63,6 @@ export default function Page() {
     setShowSpotifyModal(isLoggedIn && !isSpotifyConnected && !alreadySeen)
 
     setTimeout(() => setIsPageLoaded(true), 100)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -263,12 +262,11 @@ export default function Page() {
                 </div>
 
                 <div className="relative z-10 text-center">
-
-                  <h1 className="text-2xl md:text-3xl lg:text-4xl font-bold text-foreground mb-3 md:mb-4 text-balance leading-tight">
+                  <h1 className="text-2xl md:text-3xl lg:text-4xl font-bold text-foreground mb-4 md:mb-6 text-balance leading-tight py-6 md:py-8 lg:py-10">
                     Turn your mood into music
                   </h1>
 
-                  <p className="text-sm md:text-base text-muted-foreground mb-6 md:mb-8 text-pretty leading-relaxed max-w-xl mx-auto">
+                  <p className="text-sm md:text-base text-muted-foreground mb-10 md:mb-12 text-pretty leading-relaxed max-w-xl mx-auto">
                     Upload a photo and let AI analyze your mood to recommend the perfect soundtrack for your moment.
                   </p>
 
@@ -282,7 +280,7 @@ export default function Page() {
                     >
                       <button
                         onClick={() => setShowUploadModal(true)}
-                        className="relative z-[-10] bg-transparent text-white rounded-xl md:rounded-2xl py-4 md:py-5 px-8 md:px-10 font-bold text-sm md:text-base flex items-center justify-center gap-2.5 md:gap-3 select-none transition-all duration-300 hover:scale-110 active:scale-95 hover:gap-4 group/button shadow-xl hover:shadow-2xl"
+                        className="relative z-[-10] bg-transparent text-white rounded-xl md:rounded-2xl py-7 md:py-9 px-10 md:px-12 font-bold text-sm md:text-base flex items-center justify-center gap-2.5 md:gap-3 select-none transition-all duration-300 hover:scale-110 active:scale-95 hover:gap-4 group/button shadow-xl hover:shadow-2xl"
                         style={{ textShadow: "0 2px 4px rgba(0,0,0,.5)" }}
                       >
                         <Camera className="w-5 h-5 md:w-6 md:h-6 transition-all duration-300 group-hover/button:rotate-[20deg] group-hover/button:scale-125" />
