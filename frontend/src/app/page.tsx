@@ -168,7 +168,7 @@ export default function Page() {
 
           <section className="py-6 md:py-8 lg:py-10">
             <div className="max-w-3xl mx-auto transition-all duration-700 delay-100">
-              <div className="group relative overflow-hidden bg-white/90 rounded-2xl md:rounded-3xl p-6 md:p-8 lg:p-10 border border-border/40 shadow-lg hover:shadow-xl transition-all duration-500 hover:scale-[1.01]">
+              <div className="group relative overflow-hidden bg-white/90 rounded-2xl md:rounded-3xl p-4 md:p-6 lg:p-8 border border-border/40 shadow-lg hover:shadow-xl transition-all duration-500 hover:scale-[1.01]">
                 <div
                   className="absolute top-4 right-6 w-48 h-48 bg-gradient-to-br from-pink-300/20 to-purple-300/20 dark:from-pink-400/10 dark:to-purple-400/10 rounded-full blur-2xl animate-pulse"
                   style={{ animationDuration: "4s" }}
@@ -301,7 +301,7 @@ export default function Page() {
         {!showNav && (
           <button
             onClick={() => setShowUploadModal(true)}
-            className="fixed bottom-6 right-4 md:bottom-8 md:right-8 w-14 h-14 md:w-16 md:h-16 bg-gradient-to-br from-primary to-primary/80 text-primary-foreground rounded-full shadow-xl hover:shadow-2xl flex items-center justify-center hover:scale-110 active:scale-90 transition-all duration-300 z-40 group animate-bounce-slow hover:rotate-12"
+            className="fixed bottom-10 right-4 md:bottom-8 md:right-8 w-14 h-14 md:w-16 md:h-16 bg-gradient-to-br from-primary to-primary/80 text-primary-foreground rounded-full shadow-xl hover:shadow-2xl flex items-center justify-center hover:scale-110 active:scale-90 transition-all duration-300 z-40 group animate-bounce-slow hover:rotate-12"
             aria-label="Upload photo to analyze mood"
             style={{ animationDuration: "3s" }}
           >
