@@ -20,13 +20,13 @@ function loadScriptOnce(src: string): Promise<void> {
     s.src = src;
     s.async = true;
     s.onload = () => resolve();
-    s.onerror = () => reject(new Error("Spotify SDK load failed")); // 에러 메시지 영문화
+    s.onerror = () => reject(new Error("Spotify SDK load failed")); // 에러 메시지
     document.head.appendChild(s);
   });
 }
 
 export async function createWebPlayer(opts: CreateWebPlayerOpts): Promise<{ player: any; deviceId: string }> {
-  if (typeof window === "undefined") throw new Error("createWebPlayer must run in browser"); // 에러 메시지 영문화
+  if (typeof window === "undefined") throw new Error("createWebPlayer must run in browser"); // 에러 메시지
 
   // 1) SDK 스크립트 로드
   await loadScriptOnce("https://sdk.scdn.co/spotify-player.js");
