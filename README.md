@@ -30,19 +30,25 @@
 ```mermaid
 flowchart LR
     U([사용자]) --> F["Frontend<br/>Next.js 15 · React 19"]
-    F -- REST API --> B["Backend API<br/>(별도 저장소)"]
+    F -- REST API --> B["Backend API<br/>Express · PostgreSQL"]
     B -- 사진 분석 요청 --> A["AI Server<br/>FastAPI"]
+    B -- 검색 · 토큰 --> SW["Spotify Web API"]
     F -- 재생 제어 --> S["Spotify<br/>Web Playback SDK"]
     F -- 미리듣기 --> P["Deezer / iTunes"]
 
     subgraph AI["AI 분석 파이프라인"]
-        A --> E["표정 감정 분류<br/>Keras CNN"]
+        A --> E["표정 감정 분류<br/>MobileNetV2"]
         A --> Y["장소 분류<br/>YOLOv8-cls"]
         A --> R["색감·밝기 분석<br/>규칙 기반"]
     end
 ```
 
-> 이 저장소에는 **Frontend**와 **AI Server**가 들어 있습니다. 회원·사진·추천 데이터를 다루는 Backend API는 별도 저장소에서 관리됩니다.
+**요청 흐름**
+
+1. 사용자가 사진을 올리면 Frontend가 Backend의 `POST /api/photos/analyze`로 보냅니다.
+2. Backend는 이미지를 AI Server의 `POST /analyze/`로 넘겨 감정·장소·색감 분석을 받습니다.
+3. Backend가 원본 이미지와 분석 결과를 PostgreSQL에 저장하고, `mood_mapping` 테이블로 메인·서브 무드를 정합니다.
+4. Frontend가 `GET /api/recommendations/by-photo/:photoId`로 추천 곡 10개를 받아 보여줍니다.
 
 <br>
 
@@ -52,7 +58,7 @@ flowchart LR
 
 | 단계 | 방법 | 출력 예 |
 | --- | --- | --- |
-| **표정 감정** | OpenCV Haar Cascade로 얼굴 검출 → 가장 큰 얼굴을 224×224로 잘라 Keras CNN으로 분류 | `happy` (7종: angry, disgust, fear, happy, neutral, sad, surprise) |
+| **표정 감정** | OpenCV Haar Cascade로 얼굴 검출 → 가장 큰 얼굴을 224×224로 잘라 MobileNetV2 기반 Keras 모델로 분류 | `happy` (7종: angry, disgust, fear, happy, neutral, sad, surprise) |
 | **장소 분류** | YOLOv8n 분류 모델을 직접 학습 | `cafe` (9종: beach, bedroom, cafe, classroom, gym, mountain, nature, park, street) |
 | **색감·밝기** | 평균 밝기와 RGB 분포로 시간대·색조를 판정하고, 색조를 분위기 태그로 매핑 | `day`, `green/nature`, `calm/peaceful` |
 
@@ -86,11 +92,32 @@ flowchart LR
 
 <br>
 
+## 추천 알고리즘
+
+분석 결과로 정한 무드와 사용자 정보를 섞어 **10곡**을 고릅니다.
+
+| 몫 | 곡 수 | 후보 |
+| --- | --- | --- |
+| 메인 무드 | 5 | 사진의 메인 무드에 맞는 곡 |
+| 서브 무드 · 장소 | 2 | 장소가 인식되면(beach, cafe, mountain 등) 그 장소에 어울리는 곡, 아니면 서브 무드 곡 |
+| 선호 장르 | 3 | 온보딩에서 고른 장르의 곡 |
+
+후보 중에서는 점수에 비례한 **가중 무작위 추출**로 뽑아, 같은 사진이라도 매번 조금씩 다른 목록이 나옵니다.
+
+```
+점수 = 무드 가중치(메인 1.0 / 서브 0.7) + 곡 피드백 점수 + 0.3 × 인기도 + 0.2 × 최신성
+```
+
+곡 피드백 점수는 사용자가 누른 좋아요·싫어요를 합산하되, 오래된 피드백일수록 영향이 줄도록 지수 감쇠(τ = 30일)를 적용합니다.
+
+<br>
+
 ## 기술 스택
 
 | 영역 | 사용 기술 |
 | --- | --- |
 | Frontend | Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS, Radix UI, Fabric.js, Konva |
+| Backend | Node.js, Express 5, PostgreSQL (pg), JWT (httpOnly 쿠키), bcrypt, Multer |
 | AI Server | Python, FastAPI, TensorFlow / Keras, Ultralytics YOLOv8, OpenCV |
 | 외부 연동 | Spotify Web API · Web Playback SDK, Deezer API, iTunes Search API |
 | 배포 | Docker, Hugging Face Spaces (AI Server), Render (Backend) |
@@ -109,6 +136,10 @@ capstone/
 │       ├── contexts/          # 재생 상태, Spotify 연결 상태
 │       ├── hooks/             # 데이터 조회 훅 (history, diaries, rankings …)
 │       └── lib/               # API 클라이언트, Spotify SDK 래퍼
+├── backend/                   # Express REST API 서버
+│   ├── server.js              # 미들웨어, CORS, 라우터 마운트
+│   ├── db.js                  # PostgreSQL 연결 풀
+│   └── routes/                # auth, photos, recommendations, spotify, rankings, diaries …
 └── ai-server/                 # FastAPI 사진 분석 서버
     ├── app.py                 # API 엔드포인트, 분석 파이프라인
     ├── services/              # 감정 · 장소 · 규칙 기반 분석
@@ -135,6 +166,27 @@ NEXT_PUBLIC_API_BASE=<Backend API 주소>
 NEXT_PUBLIC_SPOTIFY_CLIENT_ID=<Spotify 앱 Client ID>
 NEXT_PUBLIC_SPOTIFY_REDIRECT_URI=http://localhost:3000/spotify-callback
 SPOTIFY_CLIENT_SECRET=<Spotify 앱 Client Secret>   # 토큰 갱신용, 서버에서만 사용
+```
+
+### Backend
+
+```bash
+cd backend
+npm install
+node server.js         # http://localhost:5000
+```
+
+`backend/.env`에 다음 값을 설정합니다.
+
+```bash
+DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/DB
+JWT_SECRET=<임의의 긴 문자열>
+IMG_TOKEN_SECRET=<임의의 긴 문자열>
+AI_BASE_URL=<AI Server 주소>
+FRONT_BASE=http://localhost:3000
+SPOTIFY_CLIENT_ID=<Spotify 앱 Client ID>
+SPOTIFY_CLIENT_SECRET=<Spotify 앱 Client Secret>
+SPOTIFY_REDIRECT_URI=<Spotify 콜백 주소>
 ```
 
 ### AI Server
@@ -164,9 +216,9 @@ docker run -p 7860:7860 moodtune-ai
 
 | 이름 | 담당 |
 | --- | --- |
-| [@Chasoonwook](https://github.com/Chasoonwook) | AI Server 전체, Frontend |
-| [@Jinyoung0725](https://github.com/Jinyoung0725) | Frontend |
-| [@MinJ01](https://github.com/MinJ01) | Backend (별도 저장소) |
+| [@Chasoonwook](https://github.com/Chasoonwook) | AI Server 전체, Backend (Spotify 연동, 사진 업로드·이미지 처리), Frontend |
+| [@Jinyoung0725](https://github.com/Jinyoung0725) | Frontend, Backend (추천, 랭킹, 인증, 히스토리) |
+| [@MinJ01](https://github.com/MinJ01) | Backend (서버 초기 구조, DB 연동, 사진·스티커 API) |
 
 <br>
 
@@ -180,5 +232,6 @@ docker run -p 7860:7860 moodtune-ai
 | `capstone_full` | `frontend/` (기록) | 초기 통합본. 같은 기록에서 갈라진 사본이라 커밋 기록만 병합 |
 | `capstone_AI` | `ai-server/` | AI 서버 초기 버전 (CNN + DeepFace + 규칙 기반) |
 | `ai-photo-server` | `ai-server/` | AI 서버 정리 버전. `capstone_AI` 기록에 이어 붙임 |
+| `MinJ01/CAPSTONE_APP_BACK` | `backend/` | 백엔드 API 서버 |
 
-AI 서버의 이전 버전 코드는 커밋 기록에서 확인할 수 있습니다. 학습된 모델 가중치 파일은 용량 문제로 이 저장소에서 제외했습니다.
+AI 서버의 이전 버전 코드는 커밋 기록에서 확인할 수 있습니다. 학습된 모델 가중치 파일은 용량 문제로, 백엔드에 커밋돼 있던 `node_modules`와 환경 변수 파일은 보안과 용량 문제로 기록에서 제외했습니다.
